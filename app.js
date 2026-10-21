@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '3.1';
+const APP_VERSION = '4.0';
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
 const AUTOLOCK_MS = 2 * 60 * 1000;
@@ -95,6 +95,7 @@ function emptyDB() {
     prices: { gbpbrl: 0, usdbrl: 0, BTC: 0, ETH: 0, XRP: 0, SOL: 0, updatedAt: null, source: '' },
     draft: { month: ym(), divFII: null, divAcoes: null, divStocks: null, aporteGBP: null },
     crypto: { people: ['Eu'], pre: {}, fees: {}, log: [] },
+    assets: [],
     history: [],
   };
 }
@@ -103,6 +104,9 @@ function normalize(d) {
   d = Object.assign(e, d || {});
   for (const k of ['settings', 'balances', 'prices', 'draft', 'crypto']) d[k] = Object.assign(emptyDB()[k], d[k] || {});
   d.settings.targets = Object.assign(emptyDB().settings.targets, d.settings.targets || {});
+  d.settings.auto = Object.assign({ acoes: false, fiis: false, stocks: false }, d.settings.auto || {});
+  d.settings.keys = Object.assign({ brapi: '', finnhub: '' }, d.settings.keys || {});
+  d.assets = (d.assets || []).map((a) => ({ id: a.id || uid(), ...a }));
   d.history = (d.history || []).filter((h) => h && h.month).sort((a, b) => a.month.localeCompare(b.month));
   d.crypto.log = (d.crypto.log || []).map((x) => ({ id: x.id || uid(), ...x })).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   return d;
@@ -141,10 +145,11 @@ function cryptoSummary() {
 }
 function portfolio() {
   const b = DB.balances, p = DB.prices, cs = cryptoSummary();
+  const au = DB.settings.auto || {};
   const v = {
-    acoes: num(b.acoes), fiis: num(b.fiis),
+    acoes: au.acoes ? classTotal('acoes') : num(b.acoes), fiis: au.fiis ? classTotal('fiis') : num(b.fiis),
     rf: num(b.t212cash) * num(p.gbpbrl) + num(b.rfBrasil),
-    stocks: (num(b.pieStocks) + num(b.pieReits) + num(b.pieEtfs)) * num(p.gbpbrl),
+    stocks: au.stocks ? classTotal('stocks') : (num(b.pieStocks) + num(b.pieReits) + num(b.pieEtfs)) * num(p.gbpbrl),
     crypto: cs.totalBRL,
   };
   const invested = Object.values(v).reduce((a, c) => a + c, 0);
@@ -221,7 +226,8 @@ async function refreshPrices(silent) {
       if (j.rates?.BRL && j.rates?.USD) { p.gbpbrl = j.rates.BRL; p.usdbrl = j.rates.BRL / j.rates.USD; fx = true; }
     } catch (e) { console.warn('fx er-api', e); }
   }
-  if (ok || fx) {
+  let ar = null; try { ar = await refreshAssetPrices(!silent); } catch (e) { console.warn('assets', e); }
+  if (ok || fx || ar) {
     p.updatedAt = new Date().toISOString(); await save(); render();
     if (!silent) toast(ok === COINS.length && fx ? 'Preços atualizados' : 'Alguns preços não atualizaram — confira em Atualizar');
     return true;
@@ -331,7 +337,7 @@ function showLock(mode) {
       if (!confirming) { first = pin; pin = ''; confirming = true; setMsg(); draw(); return; }
       if (pin !== first) { confirming = false; first = ''; setMsg(); fail('Os PINs não batem — tente de novo'); return; }
       if (changing) {
-        const m = getMeta(); m.pin = await wrapWithSecret(pin); setMeta(m); toast('PIN alterado'); enterApp(); return;
+        const m = getMeta(); const was = !!m.open; m.pin = await wrapWithSecret(pin); delete m.open; setMeta(m); toast(was ? '🔒 O app agora pede PIN ao abrir' : 'PIN alterado'); enterApp(); return;
       }
       // first run: new data key + recovery code
       DKRAW = rnd(32); KEY = await rawToKey(DKRAW);
@@ -375,7 +381,7 @@ function forgotPin() {
 function lockNow() { DB = null; KEY = null; DKRAW = null; charts.forEach((c) => c.destroy()); charts = []; $('#view').innerHTML = ''; showLock.auto = true; showLock('unlock'); }
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { hiddenAt = Date.now(); return; }
-  if (DB && hiddenAt && Date.now() - hiddenAt > AUTOLOCK_MS) lockNow();
+  if (DB && hiddenAt && Date.now() - hiddenAt > AUTOLOCK_MS && !getMeta()?.open) lockNow();
   else if (DB) maybeRefreshPrices();
 });
 $('#w-empty').onclick = async () => { DB = emptyDB(); await save(); enterApp(); };
@@ -447,18 +453,190 @@ function pickImport(fromWelcome) {
   inp.click();
 }
 
+/* ---------------- Ativos: holdings with live prices ---------------- */
+const ACLS = [
+  { k: 'acoes', n: 'Ações', market: 'B3' },
+  { k: 'fiis', n: 'FIIs', market: 'B3' },
+  { k: 'stocks', n: 'Exterior', market: 'US' },
+];
+const FXOF = (cur) => (cur === 'BRL' ? 1 : cur === 'USD' ? num(DB.prices.usdbrl) : cur === 'GBP' ? num(DB.prices.gbpbrl) : cur === 'GBX' ? num(DB.prices.gbpbrl) / 100 : 1);
+const curOf = (a) => (a.market === 'B3' ? 'BRL' : a.market === 'US' ? 'USD' : a.currency || 'BRL');
+const priceOf = (a) => (a.market === 'MANUAL' ? num(a.manualPrice) : (typeof a.price === 'number' && a.price > 0 ? a.price : num(a.manualPrice)));
+const STALE_MS = 3 * 864e5;
+function assetRows(cls) {
+  return (DB.assets || []).filter((a) => !cls || a.cls === cls).map((a) => {
+    const cur = curOf(a), fx = FXOF(cur), pr = priceOf(a), value = num(a.qty) * pr * fx;
+    const cost = a.avg ? num(a.qty) * num(a.avg) * fx : null;
+    const auto = a.market !== 'MANUAL';
+    const stale = auto && (!a.priceAt || Date.now() - new Date(a.priceAt) > STALE_MS || !!a.priceErr);
+    return { a, cur, fx, pr, value, cost, pl: cost !== null ? value - cost : null, plPct: cost ? (value - cost) / cost : null, auto, stale };
+  });
+}
+const classTotal = (cls) => assetRows(cls).reduce((s, r) => s + r.value, 0);
+const curSym = (c) => ({ BRL: 'R$', USD: 'US$', GBP: '£', GBX: 'p' }[c] || c);
+const fmtPx = (c, v) => (c === 'GBX' ? nf2.format(v || 0) + 'p' : curSym(c) + ' ' + nf2.format(v || 0));
+
+async function fetchJSONo(url, opts = {}) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 9000);
+  try { const r = await fetch(url, { ...opts, signal: ctl.signal, cache: 'no-store' }); const j = await r.json().catch(() => ({})); if (!r.ok) { const e = new Error(j?.message || j?.error || r.status); e.status = r.status; throw e; } return j; }
+  finally { clearTimeout(t); }
+}
+function brapiParse(j) {
+  const out = {};
+  for (const r of j?.results || []) {
+    const sym = String(r.symbol || r.data?.symbol || r.stock || '').toUpperCase();
+    const px = r.data?.regularMarketPrice ?? r.regularMarketPrice;
+    if (sym && typeof px === 'number' && px > 0) out[sym] = px;
+  }
+  return out;
+}
+async function brapiQuotes(syms, key) {
+  const got = {}, list = syms.join(',');
+  const tries = [
+    () => fetchJSONo('https://brapi.dev/api/v2/stocks/quote?symbols=' + encodeURIComponent(list), key ? { headers: { Authorization: 'Bearer ' + key } } : {}),
+    () => fetchJSONo('https://brapi.dev/api/quote/' + encodeURIComponent(list) + (key ? '?token=' + encodeURIComponent(key) : '')),
+  ];
+  for (const t of tries) { try { Object.assign(got, brapiParse(await t())); if (syms.every((s) => got[s])) return got; } catch (e) { console.warn('brapi', e); } }
+  for (const s of syms.filter((x) => !got[x])) {   // free plans may allow only one ticker per request
+    try { Object.assign(got, brapiParse(await fetchJSONo('https://brapi.dev/api/quote/' + encodeURIComponent(s) + (key ? '?token=' + encodeURIComponent(key) : '')))); } catch (e) { console.warn('brapi one', s, e); }
+  }
+  return got;
+}
+async function finnhubQuotes(syms, key) {
+  const got = {}; if (!key) return got;
+  for (const s of syms) {
+    try { const j = await fetchJSONo('https://finnhub.io/api/v1/quote?symbol=' + encodeURIComponent(s) + '&token=' + encodeURIComponent(key)); if (j.c > 0) got[s] = j.c; } catch (e) { console.warn('finnhub', s, e); }
+  }
+  return got;
+}
+let assetBusy = false;
+async function refreshAssetPrices(force) {
+  const A = DB?.assets || []; if (!A.length || assetBusy || !navigator.onLine) return null;
+  if (!force && DB.prices.assetsAt && Date.now() - new Date(DB.prices.assetsAt) < 60 * 60 * 1000) return null;
+  assetBusy = true;
+  try {
+    const keys = DB.settings.keys || {};
+    const b3 = [...new Set(A.filter((a) => a.market === 'B3').map((a) => a.ticker))], us = [...new Set(A.filter((a) => a.market === 'US').map((a) => a.ticker))];
+    const [pb, pu] = await Promise.all([b3.length ? brapiQuotes(b3, keys.brapi) : {}, us.length ? finnhubQuotes(us, keys.finnhub) : {}]);
+    let ok = 0, fail = [];
+    for (const a of A) {
+      if (a.market === 'MANUAL') continue;
+      const px = (a.market === 'B3' ? pb : pu)[a.ticker];
+      if (px) { a.price = px; a.priceAt = new Date().toISOString(); a.priceErr = null; ok++; }
+      else { a.priceErr = 'não atualizou'; fail.push(a.ticker); }   // keeps the last good price
+    }
+    DB.prices.assetsAt = new Date().toISOString(); await save();
+    return { ok, fail };
+  } finally { assetBusy = false; }
+}
+
+let ATV = { seg: 'acoes' };
+function segBar(active) {
+  return `<div class="seg">${ACLS.map((c) => `<button class="${active === c.k ? 'on' : ''}" data-seg="${c.k}">${c.n}</button>`).join('')}<button class="${active === 'cripto' ? 'on' : ''}" data-seg="cripto">Cripto</button></div>`;
+}
+function wireSeg() {
+  $$('#view [data-seg]').forEach((b) => (b.onclick = () => { if (b.dataset.seg === 'cripto') location.hash = '#cripto'; else { ATV.seg = b.dataset.seg; if (route() !== 'ativos') location.hash = '#ativos'; else render(); } }));
+}
+function vAtivos() {
+  const cls = ATV.seg, info = ACLS.find((c) => c.k === cls), rows = assetRows(cls), keys = DB.settings.keys || {};
+  const total = rows.reduce((s, r) => s + r.value, 0), auto = !!DB.settings.auto?.[cls];
+  const cost = rows.filter((r) => r.cost !== null).reduce((s, r) => s + r.cost, 0), withCost = rows.filter((r) => r.cost !== null);
+  const pl = withCost.reduce((s, r) => s + r.pl, 0);
+  const needB3 = rows.some((r) => r.a.market === 'B3') && !keys.brapi, needUS = rows.some((r) => r.a.market === 'US') && !keys.finnhub;
+  const manualTotal = cls === 'stocks' ? (num(DB.balances.pieStocks) + num(DB.balances.pieReits) + num(DB.balances.pieEtfs)) * num(DB.prices.gbpbrl) : num(DB.balances[cls]);
+  $('#view').innerHTML = `${segBar(cls)}
+  <div class="grid split">
+   <div class="grid" style="align-content:start">
+    <div class="card hero kpi"><div class="lab">${info.n} — pelos ativos</div><div class="val">${brl(total)}</div>
+      <div class="sub">${rows.length} ${rows.length === 1 ? 'ativo' : 'ativos'}${withCost.length ? ` · ${signed(brl, pl)} (${signed(pct, cost ? pl / cost : 0)}) sobre o preço pago` : ''}</div></div>
+    <div class="card">
+      <label class="toggle"><input type="checkbox" id="at-auto" ${auto ? 'checked' : ''}><span><b>Usar estes ativos no patrimônio</b><br><span class="small muted">${auto ? 'Ligado: o total de ' + info.n + ' é calculado aqui (preços ao vivo).' : 'Desligado: vale o total digitado em Atualizar (' + brl(manualTotal) + ').'}</span></span></label>
+      <div class="small muted" style="margin-top:8px">Preços: ${DB.prices.assetsAt ? fmtDate(DB.prices.assetsAt) : 'ainda não buscados'} · atualizam sozinhos a cada hora</div>
+      <button class="btn block" id="at-refresh">⟳ Atualizar preços agora</button>
+      ${needB3 ? '<div class="banner" style="margin:10px 0 0">Para preços da B3, crie a chave grátis em <b>brapi.dev</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
+      ${needUS ? '<div class="banner" style="margin:10px 0 0">Para preços dos EUA, crie a chave grátis em <b>finnhub.io</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
+    </div>
+   </div>
+   <div class="card" style="align-content:start"><h2>${info.n}</h2>
+     <button class="btn primary block" id="at-add" style="margin:0 0 8px">＋ Adicionar ativo</button>
+     ${rows.sort((x, y) => y.value - x.value).map((r) => `<div class="item click" data-id="${r.a.id}">
+        <div><div class="t">${esc(r.a.ticker)} ${r.a.kind ? `<span class="small muted">${esc(r.a.kind)}</span>` : ''}</div>
+        <div class="s">${r.a.qty.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} × ${fmtPx(r.cur, r.pr)}${r.a.market === 'MANUAL' ? ' · manual' : ''}${r.stale ? ` · <span class="neg">⚠ ${r.a.priceAt ? 'preço de ' + new Date(r.a.priceAt).toLocaleDateString('pt-BR') : 'sem preço'}</span>` : ''}</div></div>
+        <div class="r"><div class="t">${brl(r.value)}</div>${r.pl !== null ? `<div class="s ${r.pl < 0 ? 'neg' : 'pos'}">${signed(pct, r.plPct)}</div>` : ''}</div></div>`).join('') || '<p class="muted">Nenhum ativo ainda. Toque em ＋ Adicionar ativo.</p>'}
+     <div class="small muted" style="margin-top:8px">⚠ = o preço não atualizou; o app continua usando o último preço bom. Você pode digitar um preço manual no ativo.</div>
+   </div>
+  </div>`;
+  wireSeg();
+  $('#at-auto').onchange = async (e) => {
+    if (e.target.checked && !rows.length) { e.target.checked = false; return toast('Adicione os ativos primeiro'); }
+    (DB.settings.auto ||= {})[cls] = e.target.checked; await save(); render();
+    toast(e.target.checked ? `Patrimônio agora usa os ativos de ${info.n}` : `Voltou para o total digitado em Atualizar`);
+  };
+  $('#at-refresh').onclick = async () => { toast('Buscando preços…'); const r = await refreshAssetPrices(true); render(); if (r) toast(r.fail.length ? `${r.ok} atualizados · não atualizaram: ${r.fail.join(', ')}` : `✓ ${r.ok} preços atualizados`, 4500); else toast('Sem internet ou sem ativos'); };
+  $('#at-add').onclick = () => editAsset(null, cls);
+  $$('#view .item').forEach((el) => (el.onclick = () => editAsset(el.dataset.id)));
+}
+function editAsset(id, cls) {
+  const a = id ? DB.assets.find((x) => x.id === id) : { id: uid(), cls, ticker: '', kind: cls === 'stocks' ? 'Stock' : '', market: ACLS.find((c) => c.k === cls).market, currency: 'BRL', qty: 0, avg: null, manualPrice: null, price: null, priceAt: null };
+  const inp = (id2, v, ph = '') => `<input id="${id2}" class="pt" inputmode="decimal" value="${v === null || v === undefined || v === 0 ? '' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 8 })}" placeholder="${ph || '0'}">`;
+  openSheet(`<h3>${id ? esc(a.ticker) : 'Novo ativo — ' + ACLS.find((c) => c.k === a.cls).n}</h3>
+    <div class="field"><label>Ticker<small>${a.cls === 'stocks' ? 'ex.: AAPL, O, VOO' : 'ex.: PETR4, HGLG11'}</small></label><input id="ea-t" value="${esc(a.ticker)}" autocapitalize="characters" style="text-align:left"></div>
+    ${a.cls === 'stocks' ? `<div class="field"><label>Tipo</label><select id="ea-kind">${['Stock', 'REIT', 'ETF'].map((k) => `<option ${a.kind === k ? 'selected' : ''}>${k}</option>`).join('')}</select></div>` : ''}
+    <div class="field"><label>Preço vem de</label><select id="ea-m">
+      ${[['B3', 'Automático — B3 (brapi)'], ['US', 'Automático — EUA (Finnhub)'], ['MANUAL', 'Manual — eu digito o preço']].map(([v, l]) => `<option value="${v}" ${a.market === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="field" id="ea-cur-row"><label>Moeda do preço manual</label><select id="ea-cur">${[['BRL', 'R$'], ['USD', 'US$'], ['GBP', '£'], ['GBX', 'pence (p)']].map(([v, l]) => `<option value="${v}" ${a.currency === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="field"><label>Quantidade</label>${inp('ea-qty', a.qty)}</div>
+    <div class="field"><label>Preço médio pago<small>opcional — mostra lucro/prejuízo</small></label>${inp('ea-avg', a.avg)}</div>
+    <div class="field"><label>Preço manual<small>usado se for "Manual" ou se o automático falhar</small></label>${inp('ea-man', a.manualPrice)}</div>
+    ${id ? `<div class="small muted">Último preço automático: ${a.price ? fmtPx(curOf(a), a.price) + ' em ' + fmtDate(a.priceAt) : '–'}${a.priceErr ? ' · ⚠ ' + esc(a.priceErr) : ''}</div>` : ''}
+    <button class="btn primary block" id="ea-save">Salvar</button>
+    ${id ? '<button class="btn block" id="ea-buy">＋ Comprei mais</button><button class="btn danger block" id="ea-del">Apagar</button>' : ''}
+    <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
+    $$('input.pt', el).forEach(liveFormat);
+    const curRow = () => $('#ea-cur-row', el).classList.toggle('hidden', $('#ea-m', el).value !== 'MANUAL');
+    $('#ea-m', el).onchange = curRow; curRow();
+    $('#ea-save', el).onclick = async () => {
+      const t = $('#ea-t', el).value.trim().toUpperCase().replace(/\s+/g, ''); if (!t) return toast('Digite o ticker');
+      const o = { ...a, ticker: t, kind: $('#ea-kind', el)?.value || a.kind, market: $('#ea-m', el).value, currency: $('#ea-cur', el).value,
+        qty: parsePT($('#ea-qty', el).value) ?? 0, avg: parsePT($('#ea-avg', el).value), manualPrice: parsePT($('#ea-man', el).value) };
+      if (o.ticker !== a.ticker || o.market !== a.market) { o.price = null; o.priceAt = null; }
+      if (o.market === 'MANUAL' && !o.manualPrice) return toast('Digite o preço manual');
+      if (!DB.assets.find((x) => x.id === o.id) && DB.assets.find((x) => x.ticker === o.ticker && x.cls === o.cls)) return toast(o.ticker + ' já está na lista — edite ele');
+      const i = DB.assets.findIndex((x) => x.id === o.id); if (i > -1) DB.assets[i] = o; else DB.assets.push(o);
+      await save(); closeSheet(); render();
+      if (o.market !== 'MANUAL' && !o.price) { const r = await refreshAssetPrices(true); render(); if (r?.fail.includes(o.ticker)) toast(`Não achei preço para ${o.ticker} — confira o ticker ou a chave`, 4500); }
+    };
+    if (id) {
+      $('#ea-buy', el).onclick = () => openSheet(`<h3>${esc(a.ticker)} — comprei mais</h3>
+        <div class="field"><label>Quantidade comprada</label><input id="b-q" class="pt" inputmode="decimal"></div>
+        <div class="field"><label>Preço pago por unidade<small>opcional — atualiza o preço médio</small></label><input id="b-p" class="pt" inputmode="decimal"></div>
+        <button class="btn primary block" id="b-go">Adicionar</button><button class="btn block" onclick="closeSheet()">Cancelar</button>`, (e2) => {
+        $$('input.pt', e2).forEach(liveFormat);
+        $('#b-go', e2).onclick = async () => {
+          const q = parsePT($('#b-q', e2).value), p = parsePT($('#b-p', e2).value); if (!q) return toast('Digite a quantidade');
+          if (p && (a.avg || !a.qty)) a.avg = (num(a.qty) * num(a.avg) + q * p) / (num(a.qty) + q);
+          a.qty = num(a.qty) + q; await save(); closeSheet(); render(); toast(`✓ ${a.ticker}: agora ${a.qty.toLocaleString('pt-BR', { maximumFractionDigits: 8 })}`);
+        };
+      });
+      $('#ea-del', el).onclick = async () => { if (!confirm('Apagar ' + a.ticker + '?')) return; DB.assets = DB.assets.filter((x) => x.id !== id); await save(); closeSheet(); render(); };
+    }
+  });
+}
+
 /* ---------------- rendering ---------------- */
-const TITLES = { painel: 'Painel', graficos: 'Gráficos', atualizar: 'Atualizar', historico: 'Histórico', dividendos: 'Dividendos', cripto: 'Cripto', ajustes: 'Ajustes' };
+const TITLES = { painel: 'Painel', graficos: 'Gráficos', atualizar: 'Atualizar', historico: 'Histórico', dividendos: 'Dividendos', cripto: 'Cripto', ativos: 'Ativos', ajustes: 'Ajustes' };
 function route() { return (location.hash || '#painel').slice(1); }
 window.addEventListener('hashchange', () => { if (DB) render(); window.scrollTo(0, 0); });
 function render() {
   if (!DB) return;
+  setTimeout(() => $$('#view input[data-k]').forEach(liveFormat), 0);
+  $('#btn-lock').classList.toggle('hidden', !!getMeta()?.open);
   charts.forEach((c) => c.destroy()); charts = [];
   const r = TITLES[route()] ? route() : 'painel';
   $('#top-title').textContent = TITLES[r];
   $('#top-sub').textContent = 'Preços: ' + (DB.prices.updatedAt ? fmtDate(DB.prices.updatedAt) : 'ainda não buscados') + (navigator.onLine ? '' : ' · offline');
-  $$('.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === r));
-  ({ painel: vPainel, graficos: vGraficos, atualizar: vAtualizar, historico: vHistorico, dividendos: vDividendos, cripto: vCripto, ajustes: vAjustes })[r]();
+  $$('.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === (r === 'cripto' ? 'ativos' : r)));
+  ({ painel: vPainel, graficos: vGraficos, atualizar: vAtualizar, historico: vHistorico, dividendos: vDividendos, cripto: vCripto, ativos: vAtivos, ajustes: vAjustes })[r]();
 }
 $('#btn-settings').onclick = () => { location.hash = '#ajustes'; };
 $('#btn-lock').onclick = lockNow;
@@ -610,13 +788,31 @@ function monthOptions(sel, onlyMissing) {
 }
 const DECS = { 'p.gbpbrl': 4, 'p.usdbrl': 4, 'p.XRP': 4 };
 const showNum = (key, v) => (v === null || v === undefined || v === '' ? '' :
-  Number(v).toLocaleString('pt-BR', { useGrouping: false, maximumFractionDigits: DECS[key] ?? (key.startsWith('pre.') || key.startsWith('fee.') ? 8 : 2) }));
+  Number(v).toLocaleString('pt-BR', { useGrouping: true, maximumFractionDigits: DECS[key] ?? (key.startsWith('pre.') || key.startsWith('fee.') ? 8 : 2) }));
+// pt-BR numbers: "." = thousands, "," = decimals. The keypad's "." or "," both start the decimals.
+function parsePT(s) {
+  s = String(s ?? '').replace(/\s|R\$|£|US\$/g, ''); if (!s) return null;
+  const v = Number(s.replace(/\./g, '').replace(',', '.')); return isFinite(v) ? v : null;
+}
+function liveFormat(inp) {
+  inp.addEventListener('input', (e) => {
+    let v = inp.value;
+    if (e.data === '.' || e.data === ',') { const pos = inp.selectionStart; v = v.slice(0, pos - 1).replace(/,/g, '') + ',' + v.slice(pos).replace(/,/g, ''); }
+    const neg = v.trim().startsWith('-'), parts = v.split(',');
+    let int = parts[0].replace(/\D/g, '').replace(/^0+(?=\d)/, ''); const dec = parts.slice(1).join('').replace(/\D/g, '');
+    if (!int && parts.length > 1) int = '0';
+    inp.value = (neg ? '-' : '') + int.replace(/\B(?=(\d{3})+(?!\d))/g, '.') + (parts.length > 1 ? ',' + dec : '');
+  });
+}
 function fieldRow(label, key, val, hint, calc) {
   return `<div class="field"><label>${label}${hint ? `<small>${hint}</small>` : ''}</label>
     <div><input inputmode="decimal" data-k="${key}" value="${showNum(key, val)}">${calc ? `<div class="small calc" data-calc="${key}">${calc}</div>` : ''}</div></div>`;
 }
+function calcRow(label, cls) {
+  return `<div class="field click" onclick="ATV.seg='${cls}';location.hash='#ativos'"><label>${label} <small>calculado em Ativos (preços ao vivo) ›</small></label><div class="calc">${brl(classTotal(cls))}</div></div>`;
+}
 function vAtualizar() {
-  const b = DB.balances, p = DB.prices, d = DB.draft, P = portfolio();
+  const b = DB.balances, p = DB.prices, d = DB.draft, P = portfolio(), au = DB.settings.auto || {};
   const exists = DB.history.find((h) => h.month === d.month);
   $('#view').innerHTML = `
   <div class="grid split">
@@ -631,11 +827,11 @@ function vAtualizar() {
      ${COINS.map((c) => fieldRow(c.k + ' (US$)', 'p.' + c.k, p[c.k])).join('')}
      <button class="btn primary block" id="f-prices">⟳ Buscar preços agora</button></div>
    <div class="card"><div class="step"><b>3</b><h2>Saldos de hoje</h2></div>
-     ${fieldRow('Ações (R$)', 'b.acoes', b.acoes, 'Corretora no Brasil')}
-     ${fieldRow('FIIs (R$)', 'b.fiis', b.fiis, 'Corretora no Brasil')}
-     ${fieldRow('Trading 212 — pie Stocks (£)', 'b.pieStocks', b.pieStocks, null, brl(b.pieStocks * p.gbpbrl))}
+     ${au.acoes ? calcRow('Ações', 'acoes') : fieldRow('Ações (R$)', 'b.acoes', b.acoes, 'Corretora no Brasil')}
+     ${au.fiis ? calcRow('FIIs', 'fiis') : fieldRow('FIIs (R$)', 'b.fiis', b.fiis, 'Corretora no Brasil')}
+     ${au.stocks ? calcRow('Exterior (Trading 212)', 'stocks') : `${fieldRow('Trading 212 — pie Stocks (£)', 'b.pieStocks', b.pieStocks, null, brl(b.pieStocks * p.gbpbrl))}
      ${fieldRow('Trading 212 — pie REITs (£)', 'b.pieReits', b.pieReits, null, brl(b.pieReits * p.gbpbrl))}
-     ${fieldRow("Trading 212 — pie ETF's (£)", 'b.pieEtfs', b.pieEtfs, null, brl(b.pieEtfs * p.gbpbrl))}
+     ${fieldRow("Trading 212 — pie ETF's (£)", 'b.pieEtfs', b.pieEtfs, null, brl(b.pieEtfs * p.gbpbrl))}`}
      ${fieldRow('Renda fixa — Trading 212 cash (£)', 'b.t212cash', b.t212cash, null, brl(b.t212cash * p.gbpbrl))}
      ${fieldRow('Renda fixa — Brasil (R$)', 'b.rfBrasil', b.rfBrasil)}
      ${fieldRow('Caixa (R$)', 'b.caixa', b.caixa, 'Conta no total, fora das metas')}
@@ -659,7 +855,7 @@ function vAtualizar() {
     await save(); render();
   };
   $$('#view input[data-k]').forEach((inp) => inp.addEventListener('change', async () => {
-    const [grp, key] = inp.dataset.k.split('.'); const v = parseNum(inp.value);
+    const [grp, key] = inp.dataset.k.split('.'); const v = parsePT(inp.value);
     const target = grp === 'p' ? DB.prices : grp === 'b' ? DB.balances : DB.draft;
     target[key] = grp === 'd' ? v : (v ?? 0);
     await save(); render();
@@ -761,7 +957,7 @@ function vDividendos() {
 function vCripto() {
   const cs = cryptoSummary(), P = portfolio(), c = DB.crypto, p = DB.prices;
   const log = [...c.log].reverse();
-  $('#view').innerHTML = `
+  $('#view').innerHTML = `${segBar('cripto')}
   <div class="grid split">
   <div class="grid" style="align-content:start">
    <div class="card hero kpi"><div class="lab">Total em cripto</div><div class="val">${brl(cs.totalBRL)}</div>
@@ -782,6 +978,7 @@ function vCripto() {
       return `<div class="item click" data-id="${x.id}"><div><div class="t">${x.op === 'Buy' ? 'Compra' : x.op === 'Sold' ? 'Venda' : 'Recebido'} · ${x.coin}</div><div class="s">${esc(x.name)} · ${x.date ? new Date(x.date + 'T12:00').toLocaleDateString('pt-BR') : ''}${bad ? ' · <span class="neg">⚠ confira os valores</span>' : ''}</div></div>
       <div class="r"><div class="t">${usd(x.value, 2)}</div><div class="s">${num(x.qty).toLocaleString('pt-BR', { maximumFractionDigits: 8 })} @ ${usd(x.price)}</div></div></div>`; }).join('') || '<p class="muted">Nenhuma operação.</p>'}
   </div></div>`;
+  wireSeg();
   $('#c-add').onclick = () => editOp(null);
   $$('#view .item').forEach((el) => (el.onclick = () => editOp(el.dataset.id)));
 }
@@ -823,6 +1020,11 @@ function vAjustes() {
    <div class="card"><h2>Metas de alocação (%)</h2>
      ${CLASSES.map((k) => fieldRow(k.n, 't.' + k.k, Math.round(num(s.targets[k.k]) * 1000) / 10)).join('')}
      <div class="small ${Math.abs(tsum - 1) > 1e-6 ? 'neg' : 'pos'}">Soma: ${pct(tsum)} ${Math.abs(tsum - 1) > 1e-6 ? '— precisa somar 100%' : '✓'}</div></div>
+   <div class="card"><h2>Chaves de preço (grátis)</h2>
+     <div class="small muted">Só precisa se usar a aba Ativos. Ficam guardadas criptografadas neste aparelho.</div>
+     <div class="field"><label>brapi.dev (B3)<small>brapi.dev → criar conta → copiar token</small></label><input id="k-brapi" value="${esc(s.keys?.brapi || '')}" autocomplete="off" style="text-align:left"></div>
+     <div class="field"><label>Finnhub (EUA)<small>finnhub.io → Get free API key</small></label><input id="k-finn" value="${esc(s.keys?.finnhub || '')}" autocomplete="off" style="text-align:left"></div>
+     <button class="btn block" id="k-test">Testar chaves</button></div>
    <div class="card"><h2>Cripto — saldos de antes do registro</h2>
      <div class="small">Pessoas (separe por vírgula):</div>
      <div class="field"><label>Pessoas</label><input id="a-people" value="${esc(c.people.join(', '))}" style="text-align:left"></div>
@@ -834,8 +1036,12 @@ function vAjustes() {
      <button class="btn primary block" id="a-export">💾 Exportar backup (criptografado)</button>
      <button class="btn block" id="a-excel">📄 Exportar para Excel</button>
      <button class="btn block" id="a-import">Importar backup</button>
-     <button class="btn block" id="a-pin">Trocar PIN</button>
-     <button class="btn block" id="a-face">${getMeta()?.face ? '✓ Face ID ativado — desativar' : '🙂 Ativar Face ID'}</button>
+     ${getMeta()?.open
+       ? `<div class="small" style="margin-top:10px">🔓 O app abre <b>sem PIN</b>. Os dados ficam protegidos só pelo bloqueio do iPhone.</div>
+          <button class="btn block" id="a-lockon">🔒 Pedir PIN (e Face ID) ao abrir</button>`
+       : `<button class="btn block" id="a-pin">Trocar PIN</button>
+          <button class="btn block" id="a-face">${getMeta()?.face ? '✓ Face ID ativado — desativar' : '🙂 Ativar Face ID'}</button>
+          <button class="btn block" id="a-lockoff">🔓 Abrir sem PIN</button>`}
      <button class="btn block" id="a-rec">Gerar novo código de recuperação</button>
      <button class="btn danger block" id="a-wipe">Apagar todos os dados deste aparelho</button></div>
    <div class="card"><h2>Versão do app</h2>
@@ -845,12 +1051,12 @@ function vAjustes() {
      <div class="field"><label>Tema</label><select id="a-theme">${[['auto', 'Automático (igual ao iPhone)'], ['light', 'Claro'], ['dark', 'Escuro']].map(([v, l]) => `<option value="${v}" ${getTheme() === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
    <div class="card"><h2>Privacidade</h2><div class="small">
      • Nenhum dado seu sai do aparelho. Ficam guardados criptografados com o seu PIN.<br>
-     • A internet só é usada para buscar preços (CoinGecko para cripto, Frankfurter/BCE para câmbio). Esses serviços recebem apenas os nomes das moedas, nunca quantidades ou valores.<br>
-     • O app trava sozinho após 2 minutos fora da tela.<br>
+     • A internet só é usada para buscar preços (CoinGecko para cripto, Frankfurter/BCE para câmbio, brapi e Finnhub para ações). Esses serviços recebem apenas os nomes (tickers), nunca quantidades ou valores.<br>
+     • ${getMeta()?.open ? 'O app está sem PIN (abre direto).' : 'O app trava sozinho após 2 minutos fora da tela.'}<br>
      • Face ID usa uma "chave de acesso" (passkey) do iPhone: o app só abre depois que o Face ID confirma que é você.</div></div>
   </div></div>`;
   $$('#view input[data-k]').forEach((inp) => inp.addEventListener('change', async () => {
-    const parts = inp.dataset.k.split('.'); const v = parseNum(inp.value) ?? 0;
+    const parts = inp.dataset.k.split('.'); const v = parsePT(inp.value) ?? 0;
     if (parts[0] === 's') DB.settings[parts[1]] = parts[1] === 'retornoAnual' ? v / 100 : v;
     else if (parts[0] === 't') DB.settings.targets[parts[1]] = v / 100;
     else if (parts[0] === 'pre') { (c.pre[parts[1]] ||= {})[parts.slice(2).join('.')] = v; }
@@ -858,13 +1064,26 @@ function vAjustes() {
     await save(); render();
   }));
   $('#a-people').onchange = async (e) => { const ps = e.target.value.split(',').map((x) => x.trim()).filter(Boolean); if (ps.length) { c.people = ps; await save(); render(); } };
+  $('#k-brapi').onchange = async (e) => { DB.settings.keys.brapi = e.target.value.trim(); await save(); toast('Chave brapi salva'); };
+  $('#k-finn').onchange = async (e) => { DB.settings.keys.finnhub = e.target.value.trim(); await save(); toast('Chave Finnhub salva'); };
+  $('#k-test').onclick = async () => {
+    DB.settings.keys.brapi = $('#k-brapi').value.trim(); DB.settings.keys.finnhub = $('#k-finn').value.trim(); await save();
+    toast('Testando…');
+    const [b, f] = await Promise.all([brapiQuotes(['PETR4'], DB.settings.keys.brapi), finnhubQuotes(['AAPL'], DB.settings.keys.finnhub)]);
+    toast(`brapi: ${b.PETR4 ? '✓ PETR4 R$ ' + nf2.format(b.PETR4) : '✗ sem resposta'} · Finnhub: ${f.AAPL ? '✓ AAPL US$ ' + nf2.format(f.AAPL) : DB.settings.keys.finnhub ? '✗ sem resposta' : '— sem chave'}`, 6000);
+  };
   $('#a-export').onclick = exportBackup;
   $('#a-excel').onclick = exportExcel;
   $('#a-update').onclick = forceUpdate;
   $('#a-theme').onchange = (e) => { try { localStorage.setItem('rumo.theme', e.target.value); } catch {} applyTheme(); render(); };
   $('#a-import').onclick = () => pickImport(false);
-  $('#a-pin').onclick = () => showLock('setup');
-  $('#a-face').onclick = async () => {
+  $('#a-lockoff') && ($('#a-lockoff').onclick = () => {
+    if (!confirm('Abrir o app sem PIN?\n\nQualquer pessoa com o seu iPhone desbloqueado poderá ver seus investimentos. Você pode voltar a pedir PIN aqui quando quiser.')) return;
+    const m = getMeta(); m.open = b64(DKRAW); m.face = null; setMeta(m); render(); toast('🔓 O app agora abre sem PIN');
+  });
+  $('#a-lockon') && ($('#a-lockon').onclick = () => showLock('setup'));
+  $('#a-pin') && ($('#a-pin').onclick = () => showLock('setup'));
+  $('#a-face') && ($('#a-face').onclick = async () => {
     const m = getMeta();
     if (m.face) { if (!confirm('Desativar o Face ID? O app volta a pedir só o PIN.')) return; m.face = null; setMeta(m); render(); return toast('Face ID desativado'); }
     try { await enableFaceID(); render(); toast('✓ Face ID ativado — o PIN continua valendo como reserva'); }
@@ -873,7 +1092,7 @@ function vAjustes() {
       if (e.name === 'NotAllowedError') return toast('Cancelado');
       toast(e.message === 'noprf' || e.message === 'unsupported' ? 'Este aparelho/navegador não suporta Face ID para apps web (precisa iOS 18 ou mais novo)' : 'Não foi possível ativar o Face ID', 4500);
     }
-  };
+  });
   $('#a-rec').onclick = async () => {
     if (!confirm('Gerar um novo código? O código antigo deixa de funcionar.')) return;
     const code = newRecoveryCode(), m = getMeta(); m.rec = await wrapWithSecret(code.replace(/-/g, '')); setMeta(m); showRecovery(code);
@@ -924,6 +1143,9 @@ async function exportExcel() {
   add('Cripto', [['Data', 'Nome', 'Operação', 'Cripto', 'Quantidade', 'Valor (US$)', 'Preço (US$)'], ...DB.crypto.log.map((x) => [x.date ? new Date(x.date + 'T12:00:00Z') : null, x.name, x.op, x.coin, x.qty, x.value, x.price]), [],
     ['Saldo atual', '', '', 'Moeda', 'Quantidade', 'Valor (US$)', 'Valor (R$)'], ...cs.coins.map((c) => ['', '', '', c.k, c.units, c.valUSD, c.valBRL])],
     [11, 10, 10, 8, 14, 13, 13], { 0: 'dd/mm/yyyy', 4: '0.00000000', 5: '#,##0.00', 6: '#,##0.00' });
+  if ((DB.assets || []).length) add('Ativos', [['Classe', 'Ticker', 'Tipo', 'Fonte do preço', 'Moeda', 'Quantidade', 'Preço', 'Preço médio', 'Valor (R$)', 'Lucro (R$)'],
+    ...ACLS.flatMap((c) => assetRows(c.k).map((r) => [c.n, r.a.ticker, r.a.kind || '', r.a.market, r.cur, r.a.qty, r.pr, r.a.avg ?? null, r.value, r.pl]))],
+    [10, 10, 8, 12, 7, 14, 12, 12, 14, 14], { 5: '0.########', 6: '#,##0.00', 7: '#,##0.00', 8: BR, 9: BR });
   const out = X.write(wb, { bookType: 'xlsx', type: 'array' });
   const name = `rumo-ao-milhao-${new Date().toISOString().slice(0, 10)}.xlsx`;
   const blob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -950,5 +1172,9 @@ async function forceUpdate() {
   } catch {}
   location.replace(location.pathname + '?u=' + Date.now());
 }
-if (localStorage.getItem(K_META) && localStorage.getItem(K_DATA)) showLock('unlock');
+if (localStorage.getItem(K_META) && localStorage.getItem(K_DATA)) {
+  const m0 = getMeta();
+  if (m0?.v === 2 && m0.open) openWithRaw(unb64(m0.open)).then(enterApp).catch(() => showLock('unlock'));
+  else showLock('unlock');
+}
 else { localStorage.removeItem(K_META); showLock('setup'); }
