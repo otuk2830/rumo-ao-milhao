@@ -4,7 +4,8 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.9';
+const APP_VERSION = '4.11';
+document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
 const AUTOLOCK_MS = 2 * 60 * 1000;
@@ -211,7 +212,12 @@ async function fetchJSON(url) {
   try { const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' }); if (!r.ok) throw new Error(r.status); return await r.json(); }
   finally { clearTimeout(t); }
 }
+// the ⟳ button spins while prices load, so a tap always shows something happening
 async function refreshPrices(silent) {
+  const b = document.getElementById('btn-refresh'); b?.classList.add('spin');
+  try { return await refreshPricesNow(silent); } finally { setTimeout(() => b?.classList.remove('spin'), 400); }
+}
+async function refreshPricesNow(silent) {
   if (!navigator.onLine) { if (!silent) toast('Sem internet — usando os últimos preços salvos'); return false; }
   const p = DB.prices; let ok = 0;
   try {
@@ -560,6 +566,8 @@ async function sheetQuotes(syms, link) {
     if (!r.ok || /<html/i.test(txt.slice(0, 200))) { LASTERR.sheet = 'sem acesso — no Google Sheets: Compartilhar → "Qualquer pessoa com o link" → Leitor'; return got; }
     const all = {}, cur = {};
     for (const row of csvRows(txt)) { const tk = String(row[0] || '').trim().toUpperCase().replace(/^BVMF:/, ''); const px = sheetNum(row[1]); if (tk && px) { all[tk] = px; const c = String(row[3] || '').trim().toUpperCase(); if (/^(BRL|USD|GBP|GBX|EUR)$/.test(c)) cur[tk] = c; } }
+    // also match without the exchange: "VWRP" finds "LON:VWRP" (an exact match always wins)
+    for (const tk of Object.keys(all)) { const sh = tk.includes(':') ? tk.split(':').pop() : null; if (sh && !(sh in all)) { all[sh] = all[tk]; if (cur[tk]) cur[sh] = cur[tk]; } }
     sheetQuotes.cur = cur;
     for (const s of syms) if (all[s]) got[s] = all[s];
     sheetQuotes.count = Object.keys(all).length;
@@ -646,7 +654,7 @@ function vAtivos() {
     (DB.settings.auto ||= {})[cls] = e.target.checked; await save(); render();
     toast(e.target.checked ? `Patrimônio agora usa os ativos de ${info.n}` : `Voltou para o total digitado em Atualizar`);
   };
-  $('#at-refresh').onclick = async () => { toast('Buscando preços…'); const r = await refreshAssetPrices(true); render(); if (r) toast(r.fail.length ? `${r.ok} atualizados · não atualizaram: ${r.fail.join(', ')}` : `✓ ${r.ok} preços atualizados`, 4500); else toast('Sem internet ou sem ativos'); };
+  $('#at-refresh').onclick = async () => { toast('Buscando preços…'); $('#btn-refresh').classList.add('spin'); setTimeout(() => $('#btn-refresh')?.classList.remove('spin'), 1200); const r = await refreshAssetPrices(true); render(); if (r) toast(r.fail.length ? `${r.ok} atualizados · não atualizaram: ${r.fail.join(', ')}` : `✓ ${r.ok} preços atualizados`, 4500); else toast('Sem internet ou sem ativos'); };
   $('#at-add').onclick = () => editAsset(null, cls);
   $$('#view .item').forEach((el) => (el.onclick = () => editAsset(el.dataset.id)));
 }
@@ -659,7 +667,7 @@ function editAsset(id, cls) {
     <div class="field"><label>Preço vem de</label><select id="ea-m">
       ${[['GS', 'Google Sheets (qualquer bolsa)'], ['B3', 'brapi (B3 ações)'], ['US', 'Finnhub (EUA)'], ['EU', 'Alpha Vantage (Londres/Europa)'], ['MANUAL', 'Manual (eu digito)']].map(([v, l]) => `<option value="${v}" ${a.market === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <div class="small muted hidden" id="ea-eu-hint" style="margin:-6px 0 10px">Use o sufixo da bolsa: <b>.LON</b> Londres (preço em pence), <b>.DEX</b> Alemanha, <b>.PAR</b> Paris, <b>.AMS</b> Amsterdã. Ex.: VUSA.LON. Preço de fechamento, atualiza 1× por dia.</div>
-    <div class="small muted hidden" id="ea-gs-hint" style="margin:-6px 0 10px">B3: só o ticker (HGLG11). Outras bolsas: <b>BOLSA:TICKER</b>, igual na planilha — ex.: <b>LON:VWRP</b>, NYSE:O, NASDAQ:AAPL. A moeda vem da coluna D da planilha.</div>
+    <div class="small muted hidden" id="ea-gs-hint" style="margin:-6px 0 10px">B3: só o ticker (HGLG11). Outras bolsas: na planilha escreva <b>BOLSA:TICKER</b> (ex.: LON:VWRP); aqui basta <b>VWRP</b>. A moeda vem da coluna D da planilha.</div>
     <div class="field" id="ea-cur-row"><label>Moeda do preço</label><select id="ea-cur">${[['BRL', 'R$'], ['USD', 'US$'], ['GBP', '£'], ['GBX', 'pence (p)'], ['EUR', '€']].map(([v, l]) => `<option value="${v}" ${a.currency === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <div class="field"><label>Quantidade</label>${inp('ea-qty', a.qty)}</div>
     <div class="field"><label>Preço médio pago<small>opcional — mostra lucro/prejuízo</small></label>${inp('ea-avg', a.avg)}</div>
@@ -673,7 +681,7 @@ function editAsset(id, cls) {
       const m = $('#ea-m', el).value; $('#ea-cur-row', el).classList.toggle('hidden', m !== 'MANUAL' && m !== 'EU' && m !== 'GS'); $('#ea-eu-hint', el).classList.toggle('hidden', m !== 'EU'); $('#ea-gs-hint', el).classList.toggle('hidden', m !== 'GS');
       const t = $('#ea-t', el).value.toUpperCase();
       if (changed && m === 'EU') $('#ea-cur', el).value = t.endsWith('.LON') ? 'GBX' : 'EUR';
-      if (changed && m === 'GS') $('#ea-cur', el).value = !t.includes(':') ? 'BRL' : t.startsWith('LON:') ? 'GBP' : /^(NYSE|NASDAQ|NYSEARCA|BATS):/.test(t) ? 'USD' : 'EUR';
+      if (changed && m === 'GS') $('#ea-cur', el).value = !t.includes(':') ? (a.cls === 'stocks' ? 'GBP' : 'BRL') : t.startsWith('LON:') ? 'GBP' : /^(NYSE|NASDAQ|NYSEARCA|BATS):/.test(t) ? 'USD' : 'EUR';
     };
     $('#ea-m', el).onchange = () => curRow(true); $('#ea-t', el).addEventListener('change', () => curRow(true)); curRow(false);
     $('#ea-save', el).onclick = async () => {

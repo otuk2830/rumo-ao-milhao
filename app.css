@@ -153,3 +153,15 @@ a.goto span:last-child{font-size:22px; color:var(--muted)}
 
 /* iPhone zooms into any text box under 16px and doesn't zoom back — keep all inputs at 16px */
 input, select, textarea{font-size:16px !important}
+
+/* v4.11 — readable messages and visible taps */
+.toast{background:#0B1F3A !important; color:#fff !important; font-size:15px !important; font-weight:600; padding:12px 18px !important; border-radius:14px; box-shadow:0 8px 28px rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.08); text-align:center}
+html.dark .toast{background:#F8FAFC !important; color:#0B1F3A !important; border-color:#CBD5E1; box-shadow:0 8px 28px rgba(0,0,0,.6)}
+*{-webkit-tap-highlight-color:transparent}
+.icon-btn, .btn, .seg button, .item.click, .tabs a, a.goto{transition:transform .12s ease, opacity .12s ease, background-color .12s ease}
+.icon-btn:active{transform:scale(.86); background:var(--blue) !important}
+.btn:active, .seg button:active{transform:scale(.97); opacity:.75}
+.item.click:active, a.goto:active{opacity:.6}
+.tabs a:active{transform:scale(.9)}
+@keyframes rumo-spin{to{transform:rotate(360deg)}}
+.icon-btn.spin{animation:rumo-spin .8s linear infinite}
