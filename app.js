@@ -447,7 +447,7 @@ function pickImport(fromWelcome) {
 }
 
 /* ---------------- rendering ---------------- */
-const TITLES = { painel: 'Painel', atualizar: 'Atualizar', historico: 'Histórico', dividendos: 'Dividendos', cripto: 'Cripto', ajustes: 'Ajustes' };
+const TITLES = { painel: 'Painel', graficos: 'Gráficos', atualizar: 'Atualizar', historico: 'Histórico', dividendos: 'Dividendos', cripto: 'Cripto', ajustes: 'Ajustes' };
 function route() { return (location.hash || '#painel').slice(1); }
 window.addEventListener('hashchange', () => { if (DB) render(); window.scrollTo(0, 0); });
 function render() {
@@ -457,7 +457,7 @@ function render() {
   $('#top-title').textContent = TITLES[r];
   $('#top-sub').textContent = 'Preços: ' + (DB.prices.updatedAt ? fmtDate(DB.prices.updatedAt) : 'ainda não buscados') + (navigator.onLine ? '' : ' · offline');
   $$('.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === r));
-  ({ painel: vPainel, atualizar: vAtualizar, historico: vHistorico, dividendos: vDividendos, cripto: vCripto, ajustes: vAjustes })[r]();
+  ({ painel: vPainel, graficos: vGraficos, atualizar: vAtualizar, historico: vHistorico, dividendos: vDividendos, cripto: vCripto, ajustes: vAjustes })[r]();
 }
 $('#btn-settings').onclick = () => { location.hash = '#ajustes'; };
 $('#btn-lock').onclick = lockNow;
@@ -473,73 +473,123 @@ function chart(id, cfg) {
     return;
   }
   Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
-  Chart.defaults.color = '#64748B';
+  Chart.defaults.color = cssVar('--muted');
   charts.push(new Chart(el, cfg));
 }
 const kTicks = { callback: (v) => (Math.abs(v) >= 1000 ? (v / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + 'k' : nf0.format(v)) };
-const gridOpts = { color: '#E2E8F0' };
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const gridOpts = () => ({ color: cssVar('--line') });
+
+/* time-weighted return: each month = (end − start − aporte) / (start + ½·aporte), months compounded */
+function returnsData() {
+  const H = DB.history, months = [];
+  for (let i = 1; i < H.length; i++) {
+    const a = H[i - 1], b = H[i];
+    if (typeof a.pat !== 'number' || typeof b.pat !== 'number' || ymDiff(a.month, b.month) !== 1) continue;
+    if (b.aporteGBP === null || b.aporteGBP === undefined || !b.fx) continue; // aporte unknown → month can't be measured
+    const C = num(b.aporteGBP) * b.fx, den = a.pat + 0.5 * C;
+    if (den <= 0) continue;
+    months.push({ month: b.month, gain: b.pat - a.pat - C, r: (b.pat - a.pat - C) / den, aporte: C });
+  }
+  const years = {};
+  for (const m of months) {
+    const y = m.month.slice(0, 4); const Y = (years[y] ||= { year: y, f: 1, gain: 0, aporte: 0, n: 0 });
+    Y.f *= 1 + m.r; Y.gain += m.gain; Y.aporte += m.aporte; Y.n++;
+  }
+  const list = Object.values(years).map((Y) => ({ ...Y, r: Y.f - 1 })).sort((a, b) => a.year.localeCompare(b.year));
+  const total = months.reduce((f, m) => f * (1 + m.r), 1) - 1;
+  return { months, years: list, total, since: months[0]?.month || null };
+}
 
 function vPainel() {
   const P = portfolio(), st = historyStats(), pr = projections(P.total), ms = milestones(), s = DB.settings, cs = P.cs;
   const meta = num(s.meta), prog = meta ? Math.min(1, P.total / meta) : 0;
   const backupOld = !s.lastBackup || Date.now() - new Date(s.lastBackup) > 30 * 864e5;
-  const H = DB.history;
+  const R = returnsData(), Ry = R.years.find((y) => y.year === st.year);
+  const aportesYear = DB.history.filter((h) => h.month.startsWith(st.year) && h.aporteGBP && h.fx).reduce((a, h) => a + h.aporteGBP * h.fx, 0);
   $('#view').innerHTML = `
   ${backupOld ? `<div class="banner" onclick="location.hash='#ajustes'">💾 Faça um backup — ${s.lastBackup ? 'o último foi há mais de 30 dias' : 'você ainda não fez nenhum'}. Toque aqui.</div>` : ''}
   <div class="grid split">
-   <div class="grid">
+   <div class="grid" style="align-content:start">
     <div class="card hero kpi click" onclick="location.hash='#atualizar'">
       <div class="lab">Patrimônio hoje</div><div class="val">${brl(P.total)}</div>
       <div class="sub">${gbp(P.total / (DB.prices.gbpbrl || 1))} · ${usd(P.total / (DB.prices.usdbrl || 1))}</div>
     </div>
     <div class="grid g2">
+      <div class="card kpi click" onclick="location.hash='#graficos'"><div class="lab">Rentabilidade ${st.year}</div>
+        <div class="val ${Ry ? (Ry.r < 0 ? 'neg' : 'pos') : ''}">${Ry ? signed(pct, Ry.r) : '–'}</div>
+        <div class="sub">${Ry ? `${Ry.n} ${Ry.n === 1 ? 'mês' : 'meses'} · ${signed(brl, Ry.gain)}` : 'começa com os aportes'}</div></div>
       <div class="card kpi click" onclick="location.hash='#historico'"><div class="lab">Crescimento/mês</div>
-        <div class="val pos">${st.cresc12 === null ? '–' : brl(st.cresc12)}</div><div class="sub">média 12 meses</div></div>
+        <div class="val pos">${st.cresc12 === null ? '–' : brl(st.cresc12)}</div><div class="sub">média 12m (com aportes)</div></div>
       <div class="card kpi click" onclick="location.hash='#dividendos'"><div class="lab">Dividendos ${st.year}</div>
         <div class="val">${brl(st.divYear)}</div><div class="sub">média ${brl(st.monthsWithDiv ? st.divYear / st.monthsWithDiv : 0)}/mês</div></div>
       <div class="card kpi click" onclick="location.hash='#dividendos'"><div class="lab">Dividendos na vida</div>
         <div class="val">${brl(st.divLife)}</div><div class="sub">próx. marco ${brl((Math.floor(st.divLife / 10000) + 1) * 10000)}</div></div>
+      <div class="card kpi click" onclick="location.hash='#historico'"><div class="lab">Aportes ${st.year}</div>
+        <div class="val">${brl(aportesYear)}</div><div class="sub">dinheiro novo no ano</div></div>
       <div class="card kpi click" onclick="location.hash='#cripto'"><div class="lab">Bitcoin lucro</div>
         <div class="val ${cs.btcPL.pl < 0 ? 'neg' : 'pos'}">${signed(usd, cs.btcPL.pl)}</div><div class="sub">${signed(pct, cs.btcPL.plPct)} · médio ${usd(cs.btcPL.avg)}</div></div>
     </div>
     <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:baseline"><div class="small"><b>META ${brl(meta)}</b></div><b style="font-size:20px;color:var(--navy)">${pct(prog)}</b></div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><div class="small"><b>META ${brl(meta)}</b></div><b style="font-size:20px;color:var(--title)">${pct(prog)}</b></div>
       <div class="bar"><div style="width:${(prog * 100).toFixed(1)}%"></div></div>
       <div><b>Faltam ${brl(pr.falta)}</b></div>
       <div class="small">No ritmo atual: <b>${pr.ritmo ? ymLabel(pr.ritmo) : '–'}</b> · Cenário (${gbp(s.aportePlanGBP)}/mês, ${pct(s.retornoAnual)} a.a.): <b>${pr.cenario ? ymLabel(pr.cenario) : '–'}</b></div>
     </div>
+   </div>
+   <div class="grid" style="align-content:start">
     <div class="card click" onclick="location.hash='#atualizar'">
       <h2>Próximo aporte → <span class="blue">${P.next.n}</span></h2>
       ${P.alloc.map((a) => `<div class="alloc-row"><b style="color:${a.c}">${a.n}</b>
         <div class="track"><div style="width:${Math.min(100, a.cur * 100 / .5)}%;background:${a.c}"></div><span style="left:${Math.min(100, a.tgt * 100 / .5)}%"></span></div>
         <span class="r">${pct(a.cur)}</span><span class="r" style="color:${a.gap > 0 ? 'var(--amber)' : 'var(--green)'};font-weight:700">${signed((v) => nf0.format(v), a.gap)}</span></div>`).join('')}
-      <div class="small" style="margin-top:6px">Barra = atual · traço = meta (${CLASSES.map((c) => pct(s.targets[c.k])).join(' / ')}) · laranja = falta para a meta · caixa ${brl(DB.balances.caixa)} fora das metas</div>
+      <div class="small" style="margin-top:6px">Barra = atual · traço = meta · laranja = falta para a meta · caixa ${brl(DB.balances.caixa)} fora das metas</div>
     </div>
     <div class="card"><h2>Marcos do patrimônio</h2>
       <div class="mile">${ms.map((m) => `<div class="${m.hit ? 'ok' : ''}">${m.v >= 1e6 ? nf0.format(m.v / 1e6) + ' mi' : nf0.format(m.v / 1000) + 'k'}<b>${m.hit ? ymLabel(m.hit) : '–'}</b></div>`).join('')}</div>
       <div class="small" style="margin-top:6px">Verde = atingido (2 meses seguidos acima). Os marcos seguem a sua meta.</div>
     </div>
+    <a class="card click goto" href="#graficos"><span>📈 Ver gráficos</span><span>›</span></a>
    </div>
-   <div class="grid">
-    <div class="card"><h2>Patrimônio</h2><div class="chart-box"><canvas id="ch-pat"></canvas></div></div>
-    <div class="card"><h2>Dividendos por mês</h2><div class="chart-box"><canvas id="ch-div"></canvas></div></div>
-    <div class="grid g2">
-      <div class="card"><h2>Alocação</h2><div class="chart-box" style="height:170px"><canvas id="ch-alloc"></canvas></div>
-        <div class="legend">${P.alloc.map((a) => `<span><i style="background:${a.hex}"></i>${a.n}</span>`).join('')}</div></div>
-      <div class="card"><h2>Dividendos por ano</h2><div class="chart-box" style="height:200px"><canvas id="ch-year"></canvas></div></div>
+  </div>`;
+}
+
+function vGraficos() {
+  const P = portfolio(), H = DB.history, R = returnsData();
+  const hp = H.filter((h) => typeof h.pat === 'number');
+  const yrs = yearsList(), byY = yrs.map((y) => H.filter((h) => h.month.startsWith(y)).reduce((s2, h) => s2 + divTotal(h), 0));
+  $('#view').innerHTML = `
+  <div class="grid split">
+   <div class="grid" style="align-content:start">
+    <div class="card"><h2>Patrimônio</h2><div class="chart-box" style="height:260px"><canvas id="ch-pat"></canvas></div></div>
+    <div class="card"><h2>Dividendos por mês</h2><div class="chart-box" style="height:240px"><canvas id="ch-div"></canvas></div></div>
+    <div class="card"><h2>Dividendos por ano</h2><div class="chart-box" style="height:220px"><canvas id="ch-year"></canvas></div></div>
+   </div>
+   <div class="grid" style="align-content:start">
+    <div class="card"><h2>Alocação</h2><div class="chart-box" style="height:220px"><canvas id="ch-alloc"></canvas></div>
+      <div class="legend">${P.alloc.map((a) => `<span><i style="background:${a.hex}"></i>${a.n} ${pct(a.cur)}</span>`).join('')}</div></div>
+    <div class="card"><h2>Rentabilidade (sem aportes)</h2>
+      ${R.years.length ? `
+      <div class="row"><span class="l small"><b>Ano</b></span><span class="r small">Meses · Ganho · <b>Retorno</b></span></div>
+      ${R.years.map((y) => `<div class="row"><span class="l"><b>${y.year}</b></span><span class="r">${y.n} · ${signed(brl, y.gain)} · <b class="${y.r < 0 ? 'neg' : 'pos'}">${signed(pct, y.r)}</b></span></div>`).join('')}
+      <div class="row"><span class="l">Desde ${ymLabel(R.since)}</span><span class="r"><b class="${R.total < 0 ? 'neg' : 'pos'}">${signed(pct, R.total)}</b></span></div>
+      <div class="chart-box" style="height:200px;margin-top:8px"><canvas id="ch-ret"></canvas></div>`
+      : '<p class="small">Ainda sem dados. A rentabilidade começa a ser calculada a partir do primeiro mês salvo com aporte (mesmo que seja £0).</p>'}
+      <div class="small" style="margin-top:8px">Método "time-weighted" (o mesmo de corretoras e fundos): cada mês = variação do patrimônio − aporte, dividido pelo que estava investido; os meses se multiplicam no ano. Dividendos contam como ganho. Em R$, então inclui o efeito do câmbio.</div>
     </div>
    </div>
   </div>`;
-  const hp = H.filter((h) => typeof h.pat === 'number');
-  chart('ch-pat', { type: 'line', data: { labels: hp.map((h) => ymLabel(h.month)), datasets: [{ data: hp.map((h) => h.pat), borderColor: '#2563EB', backgroundColor: 'rgba(37,99,235,.12)', fill: true, pointRadius: 0, tension: .2, borderWidth: 2 }] },
-    options: { maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => brl(c.raw) } } }, scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 7 } }, y: { grid: gridOpts, ticks: kTicks } } } });
-  chart('ch-div', { type: 'bar', data: { labels: H.map((h) => ymLabel(h.month)), datasets: [{ data: H.map(divTotal), backgroundColor: '#0EA5A4', borderRadius: 2 }] },
-    options: { maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => brl(c.raw) } } }, scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 7 } }, y: { grid: gridOpts, ticks: kTicks } } } });
-  chart('ch-alloc', { type: 'doughnut', data: { labels: P.alloc.map((a) => a.n), datasets: [{ data: P.alloc.map((a) => a.v), backgroundColor: P.alloc.map((a) => a.hex), borderColor: '#fff', borderWidth: 2 }] },
+  const opts = (fmt) => ({ maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => fmt(c.raw) } } }, scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 7 } }, y: { grid: gridOpts(), ticks: kTicks } } });
+  chart('ch-pat', { type: 'line', data: { labels: hp.map((h) => ymLabel(h.month)), datasets: [{ data: hp.map((h) => h.pat), borderColor: '#2563EB', backgroundColor: 'rgba(37,99,235,.15)', fill: true, pointRadius: 0, tension: .2, borderWidth: 2 }] }, options: opts(brl) });
+  chart('ch-div', { type: 'bar', data: { labels: H.map((h) => ymLabel(h.month)), datasets: [{ data: H.map(divTotal), backgroundColor: '#0EA5A4', borderRadius: 2 }] }, options: opts(brl) });
+  chart('ch-year', { type: 'bar', data: { labels: yrs.slice(-10), datasets: [{ data: byY.slice(-10), backgroundColor: cssVar('--bar-strong'), borderRadius: 4 }] }, options: opts(brl) });
+  chart('ch-alloc', { type: 'doughnut', data: { labels: P.alloc.map((a) => a.n), datasets: [{ data: P.alloc.map((a) => a.v), backgroundColor: P.alloc.map((a) => a.hex), borderColor: cssVar('--card'), borderWidth: 2 }] },
     options: { maintainAspectRatio: false, cutout: '60%', plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => c.label + ': ' + brl(c.raw) } } } } });
-  const yrs = yearsList(); const byY = yrs.map((y) => H.filter((h) => h.month.startsWith(y)).reduce((s2, h) => s2 + divTotal(h), 0));
-  chart('ch-year', { type: 'bar', data: { labels: yrs.slice(-10), datasets: [{ data: byY.slice(-10), backgroundColor: '#0B1F3A', borderRadius: 4 }] },
-    options: { maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => brl(c.raw) } } }, scales: { x: { grid: { display: false } }, y: { grid: gridOpts, ticks: kTicks } } } });
+  if (R.months.length) {
+    chart('ch-ret', { type: 'bar', data: { labels: R.months.map((m) => ymLabel(m.month)), datasets: [{ data: R.months.map((m) => m.r * 100), backgroundColor: R.months.map((m) => (m.r < 0 ? '#DC2626' : '#16A34A')), borderRadius: 2 }] },
+      options: { maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => c.raw.toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + '%' } } },
+        scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 7 } }, y: { grid: gridOpts(), ticks: { callback: (v) => v + '%' } } } } });
+  }
 }
 function yearsList() {
   const H = DB.history; if (!H.length) return [String(new Date().getFullYear())];
@@ -549,7 +599,8 @@ function yearsList() {
 
 /* ----- Atualizar ----- */
 function monthOptions(sel, onlyMissing) {
-  const first = DB.history[0]?.month || ymAdd(ym(), -12), last = ymAdd(ym(), 1), out = [];
+  const first = DB.history[0]?.month || ymAdd(ym(), -12), out = [];
+  let last = ymAdd(ym(), 1); if (sel && sel > last) last = sel;
   for (let m = last; m >= first; m = ymAdd(m, -1)) {
     if (onlyMissing && DB.history.find((h) => h.month === m)) continue;
     out.push(`<option value="${m}" ${m === sel ? 'selected' : ''}>${ymLong(m)}</option>`);
@@ -615,6 +666,10 @@ function vAtualizar() {
   $('#f-prices').onclick = () => refreshPrices(false);
   $('#f-save').onclick = async () => {
     const P2 = portfolio(), d2 = DB.draft;
+    if (d2.aporteGBP === null || d2.aporteGBP === undefined) {
+      if (!confirm('Você não preencheu o aporte. Salvar como £0 (nenhum dinheiro novo este mês)?')) return;
+      d2.aporteGBP = 0;
+    }
     const entry = { month: d2.month, pat: Math.round(P2.total * 100) / 100, aporteGBP: d2.aporteGBP, divFII: d2.divFII, divAcoes: d2.divAcoes, divStocks: d2.divStocks, fx: DB.prices.gbpbrl || null };
     const i = DB.history.findIndex((h) => h.month === d2.month);
     if (i > -1) { if (!confirm(`${ymLong(d2.month)} já existe. Substituir?`)) return; entry.note = DB.history[i].note; DB.history[i] = entry; }
@@ -776,11 +831,14 @@ function vAjustes() {
    <div class="card"><h2>Backup e segurança</h2>
      <div class="small">Último backup: <b>${s.lastBackup ? fmtDate(s.lastBackup) : 'nunca'}</b>. Seus dados existem só neste aparelho — faça backup todo mês e guarde o arquivo no iCloud Drive ou OneDrive.</div>
      <button class="btn primary block" id="a-export">💾 Exportar backup (criptografado)</button>
+     <button class="btn block" id="a-excel">📄 Exportar para Excel</button>
      <button class="btn block" id="a-import">Importar backup</button>
      <button class="btn block" id="a-pin">Trocar PIN</button>
      <button class="btn block" id="a-face">${getMeta()?.face ? '✓ Face ID ativado — desativar' : '🙂 Ativar Face ID'}</button>
      <button class="btn block" id="a-rec">Gerar novo código de recuperação</button>
      <button class="btn danger block" id="a-wipe">Apagar todos os dados deste aparelho</button></div>
+   <div class="card"><h2>Aparência</h2>
+     <div class="field"><label>Tema</label><select id="a-theme">${[['auto', 'Automático (igual ao iPhone)'], ['light', 'Claro'], ['dark', 'Escuro']].map(([v, l]) => `<option value="${v}" ${getTheme() === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
    <div class="card"><h2>Privacidade</h2><div class="small">
      • Nenhum dado seu sai do aparelho. Ficam guardados criptografados com o seu PIN.<br>
      • A internet só é usada para buscar preços (CoinGecko para cripto, Frankfurter/BCE para câmbio). Esses serviços recebem apenas os nomes das moedas, nunca quantidades ou valores.<br>
@@ -797,6 +855,8 @@ function vAjustes() {
   }));
   $('#a-people').onchange = async (e) => { const ps = e.target.value.split(',').map((x) => x.trim()).filter(Boolean); if (ps.length) { c.people = ps; await save(); render(); } };
   $('#a-export').onclick = exportBackup;
+  $('#a-excel').onclick = exportExcel;
+  $('#a-theme').onchange = (e) => { try { localStorage.setItem('rumo.theme', e.target.value); } catch {} applyTheme(); render(); };
   $('#a-import').onclick = () => pickImport(false);
   $('#a-pin').onclick = () => showLock('setup');
   $('#a-face').onclick = async () => {
@@ -820,7 +880,58 @@ function vAjustes() {
   };
 }
 
+/* ---------------- theme ---------------- */
+function getTheme() { try { return localStorage.getItem('rumo.theme') || 'auto'; } catch { return 'auto'; } }
+function applyTheme() {
+  const t = getTheme(), dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.classList.toggle('dark', dark);
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', '#0B1F3A');
+}
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { applyTheme(); if (DB) render(); });
+
+/* ---------------- Excel export (readable copy, NOT encrypted) ---------------- */
+function loadScript(src) { return new Promise((ok, bad) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = bad; document.head.appendChild(s); }); }
+async function exportExcel() {
+  if (!confirm('O arquivo Excel NÃO é criptografado — qualquer pessoa com o arquivo consegue ler. Continuar?')) return;
+  try { if (!window.XLSX) await loadScript('xlsx.mini.min.js'); } catch { return toast('Não consegui carregar o gerador de Excel — tente com internet'); }
+  const X = window.XLSX, wb = X.utils.book_new(), H = DB.history, R = returnsData(), P = portfolio(), cs = P.cs;
+  const md = (m) => { const [y, mo] = m.split('-').map(Number); return new Date(Date.UTC(y, mo - 1, 1)); };
+  const rByM = Object.fromEntries(R.months.map((m) => [m.month, m]));
+  const add = (name, rows, widths, fmts = {}) => {
+    const ws = X.utils.aoa_to_sheet(rows, { cellDates: true });
+    ws['!cols'] = widths.map((w) => ({ wch: w }));
+    const rg = X.utils.decode_range(ws['!ref']);
+    for (let r = 1; r <= rg.e.r; r++) for (const [c, z] of Object.entries(fmts)) { const ref = X.utils.encode_cell({ r, c: Number(c) }); if (ws[ref]) ws[ref].z = z; }
+    X.utils.book_append_sheet(wb, ws, name);
+  };
+  const BR = '"R$" #,##0.00', GB = '"£" #,##0.00', PC = '0.00%';
+  add('Histórico', [['Mês', 'Patrimônio (R$)', 'Aporte (£)', 'GBP/BRL', 'Aporte (R$)', 'Div FIIs (R$)', 'Div Ações (R$)', 'Div Stocks (£)', 'Div total (R$)', 'Variação (R$)', 'Rendimento sem aporte (R$)', 'Retorno do mês', 'Observação'],
+    ...H.map((h, i) => { const prev = H[i - 1], v = prev && typeof prev.pat === 'number' && typeof h.pat === 'number' && ymDiff(prev.month, h.month) === 1 ? h.pat - prev.pat : null, rm = rByM[h.month];
+      return [md(h.month), h.pat ?? null, h.aporteGBP ?? null, h.fx ?? null, h.aporteGBP != null && h.fx ? h.aporteGBP * h.fx : null, h.divFII ?? null, h.divAcoes ?? null, h.divStocks ?? null, divTotal(h), v, rm ? rm.gain : null, rm ? rm.r : null, h.note || null]; })],
+    [10, 16, 11, 9, 13, 13, 13, 12, 13, 14, 18, 12, 30], { 0: 'mmm/yyyy', 1: BR, 2: GB, 3: '0.0000', 4: BR, 5: BR, 6: BR, 7: GB, 8: BR, 9: BR, 10: BR, 11: PC });
+  const yrs = yearsList(), cell = (y, i) => { const h = H.find((x) => x.month === `${y}-${String(i + 1).padStart(2, '0')}`); return h ? divTotal(h) : null; };
+  const dRows = [['Mês', ...yrs.map(Number)], ...MONTHS.map((m, i) => [m, ...yrs.map((y) => cell(y, i))]), ['Total', ...yrs.map((y) => MONTHS.reduce((a, _, i) => a + (cell(y, i) || 0), 0))]];
+  add('Dividendos', dRows, [12, ...yrs.map(() => 11)], Object.fromEntries(yrs.map((_, i) => [i + 1, '#,##0.00'])));
+  add('Rentabilidade', [['Ano', 'Meses medidos', 'Aportes (R$)', 'Ganho sem aportes (R$)', 'Retorno (time-weighted)'], ...R.years.map((y) => [Number(y.year), y.n, y.aporte, y.gain, y.r])], [8, 14, 14, 22, 22], { 2: BR, 3: BR, 4: PC });
+  add('Carteira hoje', [['Classe', 'Valor (R$)', '% atual', 'Meta %'], ...P.alloc.map((a) => [a.n, a.v, a.cur, a.tgt]), ['Caixa', DB.balances.caixa, null, null], ['Total', P.total, null, null], [],
+    ['Preços usados', 'Valor'], ['GBP/BRL', DB.prices.gbpbrl], ['USD/BRL', DB.prices.usdbrl], ...COINS.map((c) => [c.k + ' (US$)', DB.prices[c.k]]), ['Atualizados em', DB.prices.updatedAt ? new Date(DB.prices.updatedAt) : null]],
+    [16, 16, 10, 10], { 1: '#,##0.00', 2: PC, 3: PC });
+  add('Cripto', [['Data', 'Nome', 'Operação', 'Cripto', 'Quantidade', 'Valor (US$)', 'Preço (US$)'], ...DB.crypto.log.map((x) => [x.date ? new Date(x.date + 'T12:00:00Z') : null, x.name, x.op, x.coin, x.qty, x.value, x.price]), [],
+    ['Saldo atual', '', '', 'Moeda', 'Quantidade', 'Valor (US$)', 'Valor (R$)'], ...cs.coins.map((c) => ['', '', '', c.k, c.units, c.valUSD, c.valBRL])],
+    [11, 10, 10, 8, 14, 13, 13], { 0: 'dd/mm/yyyy', 4: '0.00000000', 5: '#,##0.00', 6: '#,##0.00' });
+  const out = X.write(wb, { bookType: 'xlsx', type: 'array' });
+  const name = `rumo-ao-milhao-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  const blob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const f = new File([blob], name, { type: blob.type });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [f] })) await navigator.share({ files: [f], title: name });
+    else { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); }
+    toast('Excel criado');
+  } catch (e) { if (e.name !== 'AbortError') toast('Não foi possível salvar o arquivo'); }
+}
+
 /* ---------------- boot ---------------- */
+applyTheme();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 if (localStorage.getItem(K_META) && localStorage.getItem(K_DATA)) showLock('unlock');
 else { localStorage.removeItem(K_META); showLock('setup'); }

@@ -14,6 +14,9 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="icon-192.png">
 <link rel="stylesheet" href="app.css">
+<script>/* theme before paint (not sensitive, kept outside the encrypted data) */
+(function(){var t='auto';try{t=localStorage.getItem('rumo.theme')||'auto'}catch(e){}
+var d=t==='dark'||(t==='auto'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);})();</script>
 </head>
 <body>
 <!-- Lock / setup screen -->
@@ -55,6 +58,7 @@
   <main id="view"></main>
   <nav class="tabs">
     <a href="#painel" data-tab="painel"><span>◉</span>Painel</a>
+    <a href="#graficos" data-tab="graficos"><span>▲</span>Gráficos</a>
     <a href="#atualizar" data-tab="atualizar"><span>✎</span>Atualizar</a>
     <a href="#historico" data-tab="historico"><span>☰</span>Histórico</a>
     <a href="#dividendos" data-tab="dividendos"><span>❖</span>Dividendos</a>
