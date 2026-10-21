@@ -150,3 +150,6 @@ a.goto span:last-child{font-size:22px; color:var(--muted)}
 .kst.ok{color:var(--green); background:var(--green-l)}
 .kst.bad{color:var(--red); background:var(--danger-bg)}
 .kst.none{color:var(--muted); background:var(--soft)}
+
+/* iPhone zooms into any text box under 16px and doesn't zoom back — keep all inputs at 16px */
+input, select, textarea{font-size:16px !important}
