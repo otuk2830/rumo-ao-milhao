@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.4';
+const APP_VERSION = '4.5';
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
 const AUTOLOCK_MS = 2 * 60 * 1000;
@@ -105,7 +105,9 @@ function normalize(d) {
   for (const k of ['settings', 'balances', 'prices', 'draft', 'crypto']) d[k] = Object.assign(emptyDB()[k], d[k] || {});
   d.settings.targets = Object.assign(emptyDB().settings.targets, d.settings.targets || {});
   d.settings.auto = Object.assign({ acoes: false, fiis: false, stocks: false }, d.settings.auto || {});
-  d.settings.keys = Object.assign({ brapi: '', finnhub: '', alpha: '', hg: '', sheet: '' }, d.settings.keys || {});
+  d.settings.keys = Object.assign({ brapi: '', finnhub: '', alpha: '', sheet: '' }, d.settings.keys || {});
+  delete d.settings.keys.hg; if (d.settings.keyStatus) delete d.settings.keyStatus.hg;
+  for (const a of d.assets || []) if (a.market === 'HG') a.market = 'GS'; // HG Brasil removed (free plan has no quotes)
   d.settings.keyStatus = d.settings.keyStatus || {};
   d.assets = (d.assets || []).map((a) => ({ id: a.id || uid(), ...a }));
   d.history = (d.history || []).filter((h) => h && h.month).sort((a, b) => a.month.localeCompare(b.month));
@@ -461,7 +463,7 @@ const ACLS = [
   { k: 'stocks', n: 'Exterior', market: 'US' },
 ];
 const FXOF = (cur) => (cur === 'BRL' ? 1 : cur === 'USD' ? num(DB.prices.usdbrl) : cur === 'GBP' ? num(DB.prices.gbpbrl) : cur === 'GBX' ? num(DB.prices.gbpbrl) / 100 : cur === 'EUR' ? num(DB.prices.eurbrl) : 1);
-const curOf = (a) => (a.market === 'B3' || a.market === 'HG' || a.market === 'GS' ? 'BRL' : a.market === 'US' ? 'USD' : a.currency || 'BRL');
+const curOf = (a) => (a.market === 'B3' || a.market === 'GS' ? 'BRL' : a.market === 'US' ? 'USD' : a.currency || 'BRL');
 const priceOf = (a) => (a.market === 'MANUAL' ? num(a.manualPrice) : (typeof a.price === 'number' && a.price > 0 ? a.price : num(a.manualPrice)));
 const STALE_MS = 4 * 864e5;
 function assetRows(cls) {
@@ -523,52 +525,6 @@ async function alphaQuotes(syms, key) {
   }
   return got;
 }
-// HG Brasil: B3 shares AND FIIs on the free plan (400 requests/day). Needs a key of type "uso exposto" with your site's domain authorised.
-// Their reply format differs between endpoints/plans, so the price is searched for anywhere in the reply.
-const PRICE_KEYS = ['price', 'value', 'last', 'close', 'regularMarketPrice', 'last_price', 'preco'];
-function findPrice(node, depth = 0) {
-  if (!node || typeof node !== 'object' || depth > 4) return null;
-  for (const k of PRICE_KEYS) { const v = node[k]; if (typeof v === 'number' && v > 0) return v; if (typeof v === 'string' && /^\d+([.,]\d+)?$/.test(v) && Number(v.replace(',', '.')) > 0) return Number(v.replace(',', '.')); }
-  for (const k of ['quote', 'quotes', 'price', 'data', 'market']) { const r = node[k] && typeof node[k] === 'object' ? findPrice(node[k], depth + 1) : null; if (r) return r; }
-  return null;
-}
-function hgExtract(j, syms) {
-  const got = {}, want = new Set(syms.map((x) => x.toUpperCase()));
-  const walk = (node, depth) => {
-    if (!node || typeof node !== 'object' || depth > 6) return;
-    if (Array.isArray(node)) { node.forEach((n) => walk(n, depth + 1)); return; }
-    const ids = Object.values(node).filter((v) => typeof v === 'string').map((v) => v.toUpperCase().split(':').pop());
-    const hit = ids.find((v) => want.has(v));
-    if (hit && !got[hit]) { const px = findPrice(node); if (px) got[hit] = px; }
-    for (const [k, v] of Object.entries(node)) {
-      const kk = k.toUpperCase().split(':').pop();
-      if (want.has(kk) && v && typeof v === 'object' && !got[kk]) { const px = findPrice(v); if (px) got[kk] = px; }
-      if (v && typeof v === 'object') walk(v, depth + 1);
-    }
-  };
-  walk(j, 0);
-  return got;
-}
-const hgSnippet = (j) => { const m = j?.message || j?.error || j?.results?.message || j?.results?.error; return m ? String(m) : 'resposta: ' + JSON.stringify(j).slice(0, 160); };
-async function hgQuotes(syms, key) {
-  const got = {}; if (!key || !syms.length) return got;
-  const k = encodeURIComponent(key);
-  let lastReply = null;
-  try {
-    const j = await fetchJSONo('https://api.hgbrasil.com/v2/finance/quotes?format=json-cors&key=' + k + '&tickers=' + syms.map((s) => 'B3:' + s).join(','));
-    lastReply = j; Object.assign(got, hgExtract(j, syms));
-    if (j?.valid_key === false) LASTERR.hg = 'chave inválida';
-  } catch (e) { console.warn('hg v2', e); LASTERR.hg = e.message; }
-  for (const s of syms.filter((x) => !got[x])) {   // older endpoint, one ticker at a time
-    try {
-      const j = await fetchJSONo('https://api.hgbrasil.com/finance/stock_price?format=json-cors&key=' + k + '&symbol=' + encodeURIComponent(s.toLowerCase()));
-      lastReply = j; Object.assign(got, hgExtract(j, [s]));
-      if (!got[s]) LASTERR.hg = j?.valid_key === false ? 'chave inválida (' + hgSnippet(j) + ')' : hgSnippet(j);
-    } catch (e) { console.warn('hg v1', s, e); LASTERR.hg = e.message; }
-  }
-  if (Object.keys(got).length === 0 && lastReply && !LASTERR.hg) LASTERR.hg = hgSnippet(lastReply);
-  return got;
-}
 // Google Sheets: a sheet in YOUR Google Drive with =GOOGLEFINANCE("BVMF:"&A2) next to each ticker.
 // Share it as "anyone with the link can view"; the app reads it as CSV. No key, no daily limit.
 function sheetCsvUrl(link) {
@@ -624,17 +580,16 @@ async function refreshAssetPrices(force) {
     const b3 = [...new Set(A.filter((a) => a.market === 'B3').map((a) => a.ticker))], us = [...new Set(A.filter((a) => a.market === 'US').map((a) => a.ticker))];
     const euDue = force || !DB.prices.euAt || Date.now() - new Date(DB.prices.euAt) > 20 * 3600 * 1000;   // saves the small daily allowance
     const eu = euDue ? [...new Set(A.filter((a) => a.market === 'EU').map((a) => a.ticker))] : [];
-    const hg = [...new Set(A.filter((a) => a.market === 'HG').map((a) => a.ticker))], gs = [...new Set(A.filter((a) => a.market === 'GS').map((a) => a.ticker))];
-    const [pb, pu, pe, ph, pg] = await Promise.all([b3.length ? brapiQuotes(b3, keys.brapi) : {}, us.length ? finnhubQuotes(us, keys.finnhub) : {}, eu.length ? alphaQuotes(eu, keys.alpha) : {}, hg.length ? hgQuotes(hg, keys.hg) : {}, gs.length ? sheetQuotes(gs, keys.sheet) : {}]);
+    const gs = [...new Set(A.filter((a) => a.market === 'GS').map((a) => a.ticker))];
+    const [pb, pu, pe, pg] = await Promise.all([b3.length ? brapiQuotes(b3, keys.brapi) : {}, us.length ? finnhubQuotes(us, keys.finnhub) : {}, eu.length ? alphaQuotes(eu, keys.alpha) : {}, gs.length ? sheetQuotes(gs, keys.sheet) : {}]);
     if (gs.length && keys.sheet) await setKeyStatus('sheet', Object.keys(pg).length > 0, `${Object.keys(pg).length}/${gs.length} preços`);
-    if (hg.length && keys.hg) await setKeyStatus('hg', Object.keys(ph).length > 0, `${Object.keys(ph).length}/${hg.length} preços`);
     if (b3.length) await setKeyStatus('brapi', Object.keys(pb).length > 0, `${Object.keys(pb).length}/${b3.length} preços`);
     if (us.length && keys.finnhub) await setKeyStatus('finnhub', Object.keys(pu).length > 0, `${Object.keys(pu).length}/${us.length} preços`);
     if (eu.length && keys.alpha) { await setKeyStatus('alpha', Object.keys(pe).length > 0, `${Object.keys(pe).length}/${eu.length} preços`); DB.prices.euAt = new Date().toISOString(); }
     let ok = 0, fail = [];
     for (const a of A) {
       if (a.market === 'MANUAL' || (a.market === 'EU' && !euDue)) continue;
-      const px = (a.market === 'B3' ? pb : a.market === 'US' ? pu : a.market === 'HG' ? ph : a.market === 'GS' ? pg : pe)[a.ticker];
+      const px = (a.market === 'B3' ? pb : a.market === 'US' ? pu : a.market === 'GS' ? pg : pe)[a.ticker];
       if (px) { a.price = px; a.priceAt = new Date().toISOString(); a.priceErr = null; ok++; }
       else { a.priceErr = 'não atualizou'; fail.push(a.ticker); }   // keeps the last good price
     }
@@ -655,7 +610,7 @@ function vAtivos() {
   const total = rows.reduce((s, r) => s + r.value, 0), auto = !!DB.settings.auto?.[cls];
   const cost = rows.filter((r) => r.cost !== null).reduce((s, r) => s + r.cost, 0), withCost = rows.filter((r) => r.cost !== null);
   const pl = withCost.reduce((s, r) => s + r.pl, 0);
-  const needGS = rows.some((r) => r.a.market === 'GS') && !keys.sheet, needHG = rows.some((r) => r.a.market === 'HG') && !keys.hg, needB3 = rows.some((r) => r.a.market === 'B3') && !keys.brapi, needUS = rows.some((r) => r.a.market === 'US') && !keys.finnhub, needEU = rows.some((r) => r.a.market === 'EU') && !keys.alpha;
+  const needGS = rows.some((r) => r.a.market === 'GS') && !keys.sheet, needB3 = rows.some((r) => r.a.market === 'B3') && !keys.brapi, needUS = rows.some((r) => r.a.market === 'US') && !keys.finnhub, needEU = rows.some((r) => r.a.market === 'EU') && !keys.alpha;
   const manualTotal = cls === 'stocks' ? (num(DB.balances.pieStocks) + num(DB.balances.pieReits) + num(DB.balances.pieEtfs)) * num(DB.prices.gbpbrl) : num(DB.balances[cls]);
   $('#view').innerHTML = `${segBar(cls)}
   <div class="grid split">
@@ -667,7 +622,6 @@ function vAtivos() {
       <div class="small muted" style="margin-top:8px">Preços: ${DB.prices.assetsAt ? fmtDate(DB.prices.assetsAt) : 'ainda não buscados'} · atualizam sozinhos a cada hora</div>
       <button class="btn block" id="at-refresh">⟳ Atualizar preços agora</button>
       ${needGS ? '<div class="banner" style="margin:10px 0 0">Para preços de FIIs, cole o link da sua planilha do Google em ⚙︎ Ajustes → Chaves de preço → Google Sheets.</div>' : ''}
-      ${needHG ? '<div class="banner" style="margin:10px 0 0">HG Brasil: o plano grátis não traz cotações. Prefira Google Sheets.</div>' : ''}
       ${needB3 ? '<div class="banner" style="margin:10px 0 0">Para preços da B3, crie a chave grátis em <b>brapi.dev</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
       ${needUS ? '<div class="banner" style="margin:10px 0 0">Para preços dos EUA, crie a chave grátis em <b>finnhub.io</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
       ${needEU ? '<div class="banner" style="margin:10px 0 0">Para Londres/Europa, crie a chave grátis em <b>alphavantage.co</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
@@ -699,7 +653,7 @@ function editAsset(id, cls) {
     <div class="field"><label>Ticker<small>${a.cls === 'stocks' ? 'ex.: AAPL, O, VOO' : 'ex.: PETR4, HGLG11'}</small></label><input id="ea-t" value="${esc(a.ticker)}" autocapitalize="characters" style="text-align:left"></div>
     ${a.cls === 'stocks' ? `<div class="field"><label>Tipo</label><select id="ea-kind">${['Stock', 'REIT', 'ETF'].map((k) => `<option ${a.kind === k ? 'selected' : ''}>${k}</option>`).join('')}</select></div>` : ''}
     <div class="field"><label>Preço vem de</label><select id="ea-m">
-      ${[['GS', 'Automático — B3 via Google Sheets (FIIs e ações)'], ['B3', 'Automático — B3 só ações (brapi)'], ['HG', 'Automático — HG Brasil (plano pago)'], ['US', 'Automático — EUA (Finnhub)'], ['EU', 'Automático — Londres/Europa (Alpha Vantage)'], ['MANUAL', 'Manual — eu digito o preço']].map(([v, l]) => `<option value="${v}" ${a.market === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      ${[['GS', 'Automático — B3 via Google Sheets (FIIs e ações)'], ['B3', 'Automático — B3 só ações (brapi)'], ['US', 'Automático — EUA (Finnhub)'], ['EU', 'Automático — Londres/Europa (Alpha Vantage)'], ['MANUAL', 'Manual — eu digito o preço']].map(([v, l]) => `<option value="${v}" ${a.market === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <div class="small muted hidden" id="ea-eu-hint" style="margin:-6px 0 10px">Use o sufixo da bolsa: <b>.LON</b> Londres (preço em pence), <b>.DEX</b> Alemanha, <b>.PAR</b> Paris, <b>.AMS</b> Amsterdã. Ex.: VUSA.LON. Preço de fechamento, atualiza 1× por dia.</div>
     <div class="field" id="ea-cur-row"><label>Moeda do preço</label><select id="ea-cur">${[['BRL', 'R$'], ['USD', 'US$'], ['GBP', '£'], ['GBX', 'pence (p)'], ['EUR', '€']].map(([v, l]) => `<option value="${v}" ${a.currency === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <div class="field"><label>Quantidade</label>${inp('ea-qty', a.qty)}</div>
@@ -1150,7 +1104,6 @@ function vAjustes() {
      <div class="small muted">Só precisa se usar a aba Ativos. Ficam guardadas criptografadas neste aparelho.</div>
      <div class="field"><label>Google Sheets (FIIs e ações B3)<small>link da planilha "Rumo – Preços B3" (Compartilhar → qualquer pessoa com o link)</small></label><input id="k-sheet" value="${esc(s.keys?.sheet || '')}" autocomplete="off" style="text-align:left" placeholder="https://docs.google.com/spreadsheets/d/…"></div>
      ${keyBadge('sheet')}
-     ${s.keys?.hg ? `<div class="field"><label>HG Brasil<small>o plano grátis não inclui cotações (pede Member Premium)</small></label><input id="k-hg" value="${esc(s.keys?.hg || '')}" autocomplete="off" style="text-align:left"></div>${keyBadge('hg')}` : ''}
      <div class="field"><label>brapi.dev (B3 só ações)<small>brapi.dev → criar conta → copiar token</small></label><input id="k-brapi" value="${esc(s.keys?.brapi || '')}" autocomplete="off" style="text-align:left"></div>
      ${keyBadge('brapi')}
      <div class="field"><label>Finnhub (EUA)<small>finnhub.io → Get free API key</small></label><input id="k-finn" value="${esc(s.keys?.finnhub || '')}" autocomplete="off" style="text-align:left"></div>
@@ -1201,15 +1154,13 @@ function vAjustes() {
   $('#k-brapi').onchange = async (e) => { DB.settings.keys.brapi = e.target.value.trim(); delete DB.settings.keyStatus.brapi; await save(); render(); };
   $('#k-finn').onchange = async (e) => { DB.settings.keys.finnhub = e.target.value.trim(); delete DB.settings.keyStatus.finnhub; await save(); render(); };
   $('#k-sheet').onchange = async (e) => { DB.settings.keys.sheet = e.target.value.trim(); delete DB.settings.keyStatus.sheet; await save(); render(); };
-  $('#k-hg') && ($('#k-hg').onchange = async (e) => { DB.settings.keys.hg = e.target.value.trim(); delete DB.settings.keyStatus.hg; await save(); render(); });
   $('#k-alpha').onchange = async (e) => { DB.settings.keys.alpha = e.target.value.trim(); delete DB.settings.keyStatus.alpha; await save(); render(); };
   $('#k-test').onclick = async () => {
-    const K = DB.settings.keys; K.brapi = $('#k-brapi').value.trim(); K.finnhub = $('#k-finn').value.trim(); K.alpha = $('#k-alpha').value.trim(); K.hg = $('#k-hg')?.value.trim() || ''; K.sheet = $('#k-sheet').value.trim();
+    const K = DB.settings.keys; K.brapi = $('#k-brapi').value.trim(); K.finnhub = $('#k-finn').value.trim(); K.alpha = $('#k-alpha').value.trim(); K.sheet = $('#k-sheet').value.trim();
     toast('Testando…'); for (const k in LASTERR) delete LASTERR[k];
     const sh = K.sheet ? await sheetQuotes(['HGLG11'], K.sheet) : null;
     if (sh) await setKeyStatus('sheet', (sheetQuotes.count || 0) > 0, `${sheetQuotes.count} tickers com preço${sh.HGLG11 ? ' · HGLG11 R$ ' + nf2.format(sh.HGLG11) : ''}`);
-    const [b, f, a, g] = await Promise.all([K.brapi ? brapiQuotes(['PETR4'], K.brapi) : null, K.finnhub ? finnhubQuotes(['AAPL'], K.finnhub) : null, K.alpha ? alphaQuotes(['TSCO.LON'], K.alpha) : null, K.hg ? hgQuotes(['HGLG11'], K.hg) : null]);
-    if (g) await setKeyStatus('hg', !!g.HGLG11, 'HGLG11 R$ ' + nf2.format(g.HGLG11 || 0));
+    const [b, f, a] = await Promise.all([K.brapi ? brapiQuotes(['PETR4'], K.brapi) : null, K.finnhub ? finnhubQuotes(['AAPL'], K.finnhub) : null, K.alpha ? alphaQuotes(['TSCO.LON'], K.alpha) : null]);
     if (b) await setKeyStatus('brapi', !!b.PETR4, 'PETR4 R$ ' + nf2.format(b.PETR4 || 0));
     if (f) await setKeyStatus('finnhub', !!f.AAPL, 'AAPL US$ ' + nf2.format(f.AAPL || 0));
     if (a) await setKeyStatus('alpha', !!a['TSCO.LON'], 'TSCO.LON ' + nf2.format(a['TSCO.LON'] || 0) + 'p');
