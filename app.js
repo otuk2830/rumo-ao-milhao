@@ -1,0 +1,680 @@
+/* Rumo ao Milhão — personal investment tracker (web app).
+   All data lives only on this device, encrypted with your PIN (AES-GCM, key from PBKDF2).
+   The only network calls are price lookups (ticker names only, never amounts). */
+'use strict';
+
+const APP_ID = 'rumo-ao-milhao';
+const K_META = 'rumo.meta.v1';   // { salt }
+const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
+const AUTOLOCK_MS = 2 * 60 * 1000;
+const COINS = [
+  { k: 'BTC', id: 'bitcoin', dec: 8 },
+  { k: 'ETH', id: 'ethereum', dec: 6 },
+  { k: 'XRP', id: 'ripple', dec: 4 },
+  { k: 'SOL', id: 'solana', dec: 4 },
+];
+const CLASSES = [
+  { k: 'acoes', n: 'Ações', c: 'var(--c1)', hex: '#2563EB' },
+  { k: 'fiis', n: 'FIIs', c: 'var(--c2)', hex: '#0EA5A4' },
+  { k: 'rf', n: 'Renda fixa', c: 'var(--c3)', hex: '#F59E0B' },
+  { k: 'stocks', n: 'Stocks', c: 'var(--c4)', hex: '#8B5CF6' },
+  { k: 'crypto', n: 'Crypto', c: 'var(--c5)', hex: '#EC4899' },
+];
+const MONTHS = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+const MON3 = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+
+let DB = null, KEY = null, hiddenAt = 0, charts = [];
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+
+/* ---------------- helpers ---------------- */
+const nf0 = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 });
+const nf2 = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const brl = (v, d = 0) => 'R$ ' + (d ? nf2 : nf0).format(v || 0);
+const gbp = (v, d = 0) => '£ ' + (d ? nf2 : nf0).format(v || 0);
+const usd = (v, d = 0) => 'US$ ' + (d ? nf2 : nf0).format(v || 0);
+const pct = (v) => (v * 100).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '%';
+const signed = (s, v) => (v > 0 ? '+' : v < 0 ? '−' : '') + s(Math.abs(v));
+const num = (x) => (typeof x === 'number' && isFinite(x) ? x : 0);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function parseNum(s) {
+  if (s === null || s === undefined) return null;
+  s = String(s).trim().replace(/\s|R\$|£|US\$|\$/g, '');
+  if (!s) return null;
+  const lc = s.lastIndexOf(','), ld = s.lastIndexOf('.');
+  if (lc > -1 && ld > -1) s = lc > ld ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '');
+  else if (lc > -1) s = s.replace(',', '.');
+  const v = Number(s);
+  return isFinite(v) ? v : null;
+}
+const ym = (d = new Date()) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+const ymLabel = (m) => { const [y, mo] = m.split('-').map(Number); return MON3[mo - 1] + '/' + String(y).slice(2); };
+const ymLong = (m) => { const [y, mo] = m.split('-').map(Number); return MONTHS[mo - 1] + ' ' + y; };
+const ymAdd = (m, n) => { const [y, mo] = m.split('-').map(Number); const d = new Date(y, mo - 1 + n, 1); return ym(d); };
+const ymDiff = (a, b) => { const [y1, m1] = a.split('-').map(Number), [y2, m2] = b.split('-').map(Number); return (y2 - y1) * 12 + (m2 - m1); };
+const fmtDate = (iso) => { if (!iso) return '–'; const d = new Date(iso); return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); };
+const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+
+function toast(msg, ms = 2600) {
+  const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add('hidden'), ms);
+}
+function openSheet(html, onMount) {
+  $('#sheet').innerHTML = html; $('#modal').classList.remove('hidden');
+  if (onMount) onMount($('#sheet'));
+}
+function closeSheet() { $('#modal').classList.add('hidden'); $('#sheet').innerHTML = ''; }
+$('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeSheet(); });
+
+/* ---------------- crypto (encryption) ---------------- */
+const enc = new TextEncoder(), dec = new TextDecoder();
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+async function deriveKey(secret, salt) {
+  const base = await crypto.subtle.importKey('raw', enc.encode(secret), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 250000, hash: 'SHA-256' }, base,
+    { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+async function encryptObj(obj, key) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(obj)));
+  return { iv: b64(iv), ct: b64(ct) };
+}
+async function decryptObj(box, key) {
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(box.iv) }, key, unb64(box.ct));
+  return JSON.parse(dec.decode(pt));
+}
+
+/* ---------------- data model ---------------- */
+function emptyDB() {
+  return {
+    app: APP_ID, version: 1,
+    settings: { meta: 1000000, targets: { acoes: .2, fiis: .2, rf: .2, stocks: .2, crypto: .2 }, aportePlanGBP: 0, retornoAnual: .07, lastBackup: null },
+    balances: { acoes: 0, fiis: 0, pieStocks: 0, pieReits: 0, pieEtfs: 0, t212cash: 0, rfBrasil: 0, caixa: 0 },
+    prices: { gbpbrl: 0, usdbrl: 0, BTC: 0, ETH: 0, XRP: 0, SOL: 0, updatedAt: null, source: '' },
+    draft: { month: ym(), divFII: null, divAcoes: null, divStocks: null, aporteGBP: null },
+    crypto: { people: ['Eu'], pre: {}, fees: {}, log: [] },
+    history: [],
+  };
+}
+function normalize(d) {
+  const e = emptyDB();
+  d = Object.assign(e, d || {});
+  for (const k of ['settings', 'balances', 'prices', 'draft', 'crypto']) d[k] = Object.assign(emptyDB()[k], d[k] || {});
+  d.settings.targets = Object.assign(emptyDB().settings.targets, d.settings.targets || {});
+  d.history = (d.history || []).filter((h) => h && h.month).sort((a, b) => a.month.localeCompare(b.month));
+  d.crypto.log = (d.crypto.log || []).map((x) => ({ id: x.id || uid(), ...x })).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  return d;
+}
+async function save() {
+  if (!DB || !KEY) return;
+  localStorage.setItem(K_DATA, JSON.stringify(await encryptObj(DB, KEY)));
+}
+
+/* ---------------- calculations ---------------- */
+function cryptoSummary() {
+  const c = DB.crypto, p = DB.prices, people = c.people;
+  const coins = COINS.map((co) => {
+    const per = {};
+    for (const who of people) {
+      const pre = num(c.pre?.[co.k]?.[who]);
+      const net = c.log.filter((x) => x.coin === co.k && x.name === who)
+        .reduce((s, x) => s + (x.op === 'Sold' ? -1 : 1) * num(x.qty), 0);
+      per[who] = pre + net;
+    }
+    const fee = num(c.fees?.[co.k]);
+    const units = Object.values(per).reduce((a, b) => a + b, 0) - fee;
+    const valUSD = units * num(p[co.k]);
+    return { ...co, per, fee, units, valUSD, valBRL: valUSD * num(p.usdbrl) };
+  });
+  const totalUSD = coins.reduce((s, x) => s + x.valUSD, 0);
+  // BTC profit: only Buy rows of the log
+  const buys = c.log.filter((x) => x.coin === 'BTC' && x.op === 'Buy');
+  const pl = (who) => {
+    const b = who ? buys.filter((x) => x.name === who) : buys;
+    const qty = b.reduce((s, x) => s + num(x.qty), 0), cost = b.reduce((s, x) => s + num(x.value), 0);
+    const now = qty * num(p.BTC);
+    return { qty, cost, avg: qty ? cost / qty : 0, now, pl: now - cost, plPct: cost ? (now - cost) / cost : 0 };
+  };
+  return { coins, totalUSD, totalBRL: totalUSD * num(p.usdbrl), btcPL: pl(null), btcPLby: Object.fromEntries(people.map((w) => [w, pl(w)])) };
+}
+function portfolio() {
+  const b = DB.balances, p = DB.prices, cs = cryptoSummary();
+  const v = {
+    acoes: num(b.acoes), fiis: num(b.fiis),
+    rf: num(b.t212cash) * num(p.gbpbrl) + num(b.rfBrasil),
+    stocks: (num(b.pieStocks) + num(b.pieReits) + num(b.pieEtfs)) * num(p.gbpbrl),
+    crypto: cs.totalBRL,
+  };
+  const invested = Object.values(v).reduce((a, c) => a + c, 0);
+  const total = invested + num(b.caixa);
+  const t = DB.settings.targets;
+  const alloc = CLASSES.map((c) => ({ ...c, v: v[c.k], cur: invested ? v[c.k] / invested : 0, tgt: num(t[c.k]), gap: invested * num(t[c.k]) - v[c.k] }));
+  const next = alloc.reduce((a, c) => (c.gap > a.gap ? c : a), alloc[0]);
+  return { v, invested, total, alloc, next, cs };
+}
+const divTotal = (h) => num(h.divFII) + num(h.divAcoes) + (h.fx ? num(h.divStocks) * h.fx : 0);
+function historyStats() {
+  const H = DB.history, withPat = H.filter((h) => typeof h.pat === 'number');
+  const last = withPat[withPat.length - 1] || null;
+  let cresc12 = null;
+  if (last) {
+    const prev = withPat.find((h) => h.month === ymAdd(last.month, -12));
+    if (prev) cresc12 = (last.pat - prev.pat) / 12;
+  }
+  const year = last ? last.month.slice(0, 4) : String(new Date().getFullYear());
+  const inYear = H.filter((h) => h.month.startsWith(year));
+  const divYear = inYear.reduce((s, h) => s + divTotal(h), 0);
+  const monthsWithDiv = inYear.filter((h) => divTotal(h) > 0).length;
+  const divLife = H.reduce((s, h) => s + divTotal(h), 0);
+  return { last, cresc12, year, divYear, monthsWithDiv, divLife };
+}
+function milestones() {
+  const meta = num(DB.settings.meta), step = meta / 10, H = DB.history.filter((h) => typeof h.pat === 'number');
+  return Array.from({ length: 10 }, (_, i) => {
+    const v = step * (i + 1);
+    let hit = null;
+    for (let j = 0; j < H.length - 1; j++) {
+      if (H[j].pat >= v && H[j + 1].pat >= v && ymDiff(H[j].month, H[j + 1].month) === 1) { hit = H[j].month; break; }
+    }
+    return { v, hit };
+  });
+}
+function projections(total) {
+  const st = historyStats(), s = DB.settings, meta = num(s.meta), base = st.last ? st.last.month : ym();
+  const falta = Math.max(0, meta - total);
+  let ritmo = null, cenario = null;
+  if (falta === 0) ritmo = cenario = base;
+  else {
+    if (st.cresc12 > 0) ritmo = ymAdd(base, Math.ceil(falta / st.cresc12));
+    const r = Math.pow(1 + num(s.retornoAnual), 1 / 12) - 1, pmt = num(s.aportePlanGBP) * num(DB.prices.gbpbrl);
+    let n = null;
+    if (r > 0) { const a = (meta * r + pmt) / (total * r + pmt); if (a > 0) n = Math.log(a) / Math.log(1 + r); }
+    else if (pmt > 0) n = falta / pmt;
+    if (n !== null && isFinite(n) && n < 1200) cenario = ymAdd(base, Math.ceil(n));
+  }
+  return { falta, ritmo, cenario };
+}
+
+/* ---------------- prices ---------------- */
+async function fetchJSON(url) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 8000);
+  try { const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' }); if (!r.ok) throw new Error(r.status); return await r.json(); }
+  finally { clearTimeout(t); }
+}
+async function refreshPrices(silent) {
+  if (!navigator.onLine) { if (!silent) toast('Sem internet — usando os últimos preços salvos'); return false; }
+  const p = DB.prices; let ok = 0;
+  try {
+    const j = await fetchJSON('https://api.coingecko.com/api/v3/simple/price?ids=' + COINS.map((c) => c.id).join(',') + '&vs_currencies=usd');
+    for (const c of COINS) if (j[c.id]?.usd) { p[c.k] = j[c.id].usd; ok++; }
+  } catch (e) { console.warn('crypto price', e); }
+  let fx = false;
+  try {
+    const j = await fetchJSON('https://api.frankfurter.app/latest?from=GBP&to=BRL,USD');
+    if (j.rates?.BRL && j.rates?.USD) { p.gbpbrl = j.rates.BRL; p.usdbrl = j.rates.BRL / j.rates.USD; fx = true; }
+  } catch (e) { console.warn('fx frankfurter', e); }
+  if (!fx) {
+    try {
+      const j = await fetchJSON('https://open.er-api.com/v6/latest/GBP');
+      if (j.rates?.BRL && j.rates?.USD) { p.gbpbrl = j.rates.BRL; p.usdbrl = j.rates.BRL / j.rates.USD; fx = true; }
+    } catch (e) { console.warn('fx er-api', e); }
+  }
+  if (ok || fx) {
+    p.updatedAt = new Date().toISOString(); await save(); render();
+    if (!silent) toast(ok === COINS.length && fx ? 'Preços atualizados' : 'Alguns preços não atualizaram — confira em Atualizar');
+    return true;
+  }
+  if (!silent) toast('Não consegui buscar preços agora — usando os últimos salvos');
+  return false;
+}
+
+/* ---------------- lock screen ---------------- */
+function showLock(mode) {
+  // mode: 'unlock' | 'setup' | 'confirm'
+  $('#app').classList.add('hidden'); $('#welcome').classList.add('hidden'); $('#lock').classList.remove('hidden');
+  let pin = '', first = '';
+  const msg = $('#lock-msg'), dots = $('#dots'), foot = $('#lock-foot');
+  const setMsg = () => {
+    msg.textContent = mode === 'unlock' ? 'Digite seu PIN' : mode === 'setup' ? 'Crie um PIN de 6 dígitos' : 'Confirme o PIN';
+    foot.textContent = mode === 'unlock' ? 'Esqueceu o PIN? Só é possível recuperar importando um backup.' : 'O PIN protege seus dados neste aparelho. Não há como recuperá-lo — guarde bem.';
+  };
+  const draw = () => $$('#dots i').forEach((d, i) => d.classList.toggle('on', i < pin.length));
+  const fail = (m) => { msg.textContent = m; dots.classList.add('shake'); setTimeout(() => dots.classList.remove('shake'), 400); pin = ''; draw(); };
+  setMsg(); draw();
+  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'];
+  $('#pad').innerHTML = keys.map((k) => `<button class="${k === '' ? 'blank' : ''}" data-k="${k}">${k}</button>`).join('');
+  $('#pad').onclick = async (e) => {
+    const k = e.target.dataset?.k; if (k === undefined || k === '') return;
+    if (k === '⌫') { pin = pin.slice(0, -1); draw(); return; }
+    if (pin.length >= 6) return;
+    pin += k; draw();
+    if (pin.length < 6) return;
+    if (mode === 'setup') { first = pin; pin = ''; mode = 'confirm'; setMsg(); draw(); return; }
+    if (mode === 'confirm') {
+      if (pin !== first) { mode = 'setup'; first = ''; setMsg(); fail('Os PINs não batem — tente de novo'); return; }
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      KEY = await deriveKey(pin, salt);
+      localStorage.setItem(K_META, JSON.stringify({ salt: b64(salt) }));
+      if (DB) { await save(); enterApp(); } else { $('#lock').classList.add('hidden'); $('#welcome').classList.remove('hidden'); }
+      return;
+    }
+    msg.textContent = 'Abrindo…';
+    try {
+      const meta = JSON.parse(localStorage.getItem(K_META));
+      const key = await deriveKey(pin, unb64(meta.salt));
+      const box = JSON.parse(localStorage.getItem(K_DATA));
+      DB = normalize(await decryptObj(box, key)); KEY = key; enterApp();
+    } catch (err) { fail('PIN incorreto'); }
+  };
+}
+function lockNow() { DB = null; KEY = null; charts.forEach((c) => c.destroy()); charts = []; $('#view').innerHTML = ''; showLock('unlock'); }
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) hiddenAt = Date.now();
+  else if (DB && hiddenAt && Date.now() - hiddenAt > AUTOLOCK_MS) lockNow();
+});
+$('#w-empty').onclick = async () => { DB = emptyDB(); await save(); enterApp(); };
+$('#w-import').onclick = () => pickImport(true);
+
+async function enterApp() {
+  $('#lock').classList.add('hidden'); $('#welcome').classList.add('hidden'); $('#app').classList.remove('hidden');
+  if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
+  render();
+  const age = DB.prices.updatedAt ? Date.now() - new Date(DB.prices.updatedAt) : Infinity;
+  if (age > 30 * 60 * 1000) refreshPrices(true);
+}
+
+/* ---------------- backup ---------------- */
+async function exportBackup() {
+  openSheet(`<h3>Exportar backup</h3>
+    <p class="small">Crie uma senha para o arquivo (mínimo 6 caracteres). Sem ela o arquivo não pode ser aberto — nem por você.</p>
+    <div class="field"><label>Senha do backup</label><input id="bk-p1" type="password" autocomplete="new-password"></div>
+    <div class="field"><label>Repita a senha</label><input id="bk-p2" type="password" autocomplete="new-password"></div>
+    <button class="btn primary block" id="bk-go">Criar arquivo</button>
+    <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
+    $('#bk-go', el).onclick = async () => {
+      const p1 = $('#bk-p1', el).value, p2 = $('#bk-p2', el).value;
+      if (p1.length < 6) return toast('A senha precisa ter pelo menos 6 caracteres');
+      if (p1 !== p2) return toast('As senhas não batem');
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const box = await encryptObj(DB, await deriveKey(p1, salt));
+      const file = JSON.stringify({ app: APP_ID, format: 1, encrypted: true, salt: b64(salt), ...box, createdAt: new Date().toISOString() });
+      const name = `rumo-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      const blob = new Blob([file], { type: 'application/json' });
+      const f = new File([blob], name, { type: 'application/json' });
+      try {
+        if (navigator.canShare && navigator.canShare({ files: [f] })) await navigator.share({ files: [f], title: name });
+        else { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); }
+        DB.settings.lastBackup = new Date().toISOString(); await save(); closeSheet(); render(); toast('Backup criado — salve em Arquivos (iCloud Drive ou OneDrive)');
+      } catch (e) { if (e.name !== 'AbortError') toast('Não foi possível salvar o arquivo'); }
+    };
+  });
+}
+function pickImport(fromWelcome) {
+  const inp = $('#file-in'); inp.value = '';
+  inp.onchange = async () => {
+    const file = inp.files[0]; if (!file) return;
+    let obj; try { obj = JSON.parse(await file.text()); } catch { return toast('Arquivo inválido'); }
+    if (obj.app !== APP_ID) return toast('Este arquivo não é um backup do Rumo ao Milhão');
+    const finish = async (data) => {
+      DB = normalize(data); await save(); closeSheet();
+      if (fromWelcome) enterApp(); else render();
+      toast(`Importado: ${DB.history.length} meses, ${DB.crypto.log.length} operações de cripto`);
+    };
+    if (!obj.encrypted) return finish(obj.data);
+    openSheet(`<h3>Senha do backup</h3><div class="field"><label>Senha</label><input id="im-p" type="password"></div>
+      <button class="btn primary block" id="im-go">Importar</button><button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
+      $('#im-go', el).onclick = async () => {
+        try { const data = await decryptObj(obj, await deriveKey($('#im-p', el).value, unb64(obj.salt))); await finish(data); }
+        catch { toast('Senha incorreta'); }
+      };
+    });
+  };
+  if (!fromWelcome && !confirm('Importar um backup substitui TODOS os dados atuais deste aparelho. Continuar?')) return;
+  inp.click();
+}
+
+/* ---------------- rendering ---------------- */
+const TITLES = { painel: 'Painel', atualizar: 'Atualizar', historico: 'Histórico', dividendos: 'Dividendos', cripto: 'Cripto', ajustes: 'Ajustes' };
+function route() { return (location.hash || '#painel').slice(1); }
+window.addEventListener('hashchange', () => { if (DB) render(); window.scrollTo(0, 0); });
+function render() {
+  if (!DB) return;
+  charts.forEach((c) => c.destroy()); charts = [];
+  const r = TITLES[route()] ? route() : 'painel';
+  $('#top-title').textContent = TITLES[r];
+  $('#top-sub').textContent = 'Preços: ' + (DB.prices.updatedAt ? fmtDate(DB.prices.updatedAt) : 'ainda não buscados') + (navigator.onLine ? '' : ' · offline');
+  $$('.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === r));
+  ({ painel: vPainel, atualizar: vAtualizar, historico: vHistorico, dividendos: vDividendos, cripto: vCripto, ajustes: vAjustes })[r]();
+}
+$('#btn-settings').onclick = () => { location.hash = '#ajustes'; };
+$('#btn-lock').onclick = lockNow;
+$('#btn-refresh').onclick = () => refreshPrices(false);
+window.addEventListener('online', () => DB && refreshPrices(true));
+
+function chart(id, cfg) {
+  const el = document.getElementById(id); if (!el || !window.Chart) return;
+  Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
+  Chart.defaults.color = '#64748B';
+  charts.push(new Chart(el, cfg));
+}
+const kTicks = { callback: (v) => (Math.abs(v) >= 1000 ? nf0.format(v / 1000) + 'k' : nf0.format(v)) };
+const gridOpts = { color: '#E2E8F0' };
+
+function vPainel() {
+  const P = portfolio(), st = historyStats(), pr = projections(P.total), ms = milestones(), s = DB.settings, cs = P.cs;
+  const meta = num(s.meta), prog = meta ? Math.min(1, P.total / meta) : 0;
+  const backupOld = !s.lastBackup || Date.now() - new Date(s.lastBackup) > 30 * 864e5;
+  const H = DB.history;
+  $('#view').innerHTML = `
+  ${backupOld ? `<div class="banner" onclick="location.hash='#ajustes'">💾 Faça um backup — ${s.lastBackup ? 'o último foi há mais de 30 dias' : 'você ainda não fez nenhum'}. Toque aqui.</div>` : ''}
+  <div class="grid split">
+   <div class="grid">
+    <div class="card hero kpi click" onclick="location.hash='#atualizar'">
+      <div class="lab">Patrimônio hoje</div><div class="val">${brl(P.total)}</div>
+      <div class="sub">${gbp(P.total / (DB.prices.gbpbrl || 1))} · ${usd(P.total / (DB.prices.usdbrl || 1))}</div>
+    </div>
+    <div class="grid g2">
+      <div class="card kpi click" onclick="location.hash='#historico'"><div class="lab">Crescimento/mês</div>
+        <div class="val pos">${st.cresc12 === null ? '–' : brl(st.cresc12)}</div><div class="sub">média 12 meses</div></div>
+      <div class="card kpi click" onclick="location.hash='#dividendos'"><div class="lab">Dividendos ${st.year}</div>
+        <div class="val">${brl(st.divYear)}</div><div class="sub">média ${brl(st.monthsWithDiv ? st.divYear / st.monthsWithDiv : 0)}/mês</div></div>
+      <div class="card kpi click" onclick="location.hash='#dividendos'"><div class="lab">Dividendos na vida</div>
+        <div class="val">${brl(st.divLife)}</div><div class="sub">próx. marco ${brl((Math.floor(st.divLife / 10000) + 1) * 10000)}</div></div>
+      <div class="card kpi click" onclick="location.hash='#cripto'"><div class="lab">Bitcoin lucro</div>
+        <div class="val ${cs.btcPL.pl < 0 ? 'neg' : 'pos'}">${signed(usd, cs.btcPL.pl)}</div><div class="sub">${signed(pct, cs.btcPL.plPct)} · médio ${usd(cs.btcPL.avg)}</div></div>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><div class="small"><b>META ${brl(meta)}</b></div><b style="font-size:20px;color:var(--navy)">${pct(prog)}</b></div>
+      <div class="bar"><div style="width:${(prog * 100).toFixed(1)}%"></div></div>
+      <div><b>Faltam ${brl(pr.falta)}</b></div>
+      <div class="small">No ritmo atual: <b>${pr.ritmo ? ymLabel(pr.ritmo) : '–'}</b> · Cenário (${gbp(s.aportePlanGBP)}/mês, ${pct(s.retornoAnual)} a.a.): <b>${pr.cenario ? ymLabel(pr.cenario) : '–'}</b></div>
+    </div>
+    <div class="card click" onclick="location.hash='#atualizar'">
+      <h2>Próximo aporte → <span class="blue">${P.next.n}</span></h2>
+      ${P.alloc.map((a) => `<div class="alloc-row"><b style="color:${a.c}">${a.n}</b>
+        <div class="track"><div style="width:${Math.min(100, a.cur * 100 / .5)}%;background:${a.c}"></div><span style="left:${Math.min(100, a.tgt * 100 / .5)}%"></span></div>
+        <span class="r">${pct(a.cur)}</span><span class="r" style="color:${a.gap > 0 ? 'var(--amber)' : 'var(--green)'};font-weight:700">${signed((v) => nf0.format(v), a.gap)}</span></div>`).join('')}
+      <div class="small" style="margin-top:6px">Barra = atual · traço = meta (${CLASSES.map((c) => pct(s.targets[c.k])).join(' / ')}) · laranja = falta para a meta · caixa ${brl(DB.balances.caixa)} fora das metas</div>
+    </div>
+    <div class="card"><h2>Marcos do patrimônio</h2>
+      <div class="mile">${ms.map((m) => `<div class="${m.hit ? 'ok' : ''}">${m.v >= 1e6 ? nf0.format(m.v / 1e6) + ' mi' : nf0.format(m.v / 1000) + 'k'}<b>${m.hit ? ymLabel(m.hit) : '–'}</b></div>`).join('')}</div>
+      <div class="small" style="margin-top:6px">Verde = atingido (2 meses seguidos acima). Os marcos seguem a sua meta.</div>
+    </div>
+   </div>
+   <div class="grid">
+    <div class="card"><h2>Patrimônio</h2><div class="chart-box"><canvas id="ch-pat"></canvas></div></div>
+    <div class="card"><h2>Dividendos por mês</h2><div class="chart-box"><canvas id="ch-div"></canvas></div></div>
+    <div class="grid g2">
+      <div class="card"><h2>Alocação</h2><div class="chart-box" style="height:170px"><canvas id="ch-alloc"></canvas></div>
+        <div class="legend">${P.alloc.map((a) => `<span><i style="background:${a.hex}"></i>${a.n}</span>`).join('')}</div></div>
+      <div class="card"><h2>Dividendos por ano</h2><div class="chart-box" style="height:200px"><canvas id="ch-year"></canvas></div></div>
+    </div>
+   </div>
+  </div>`;
+  const hp = H.filter((h) => typeof h.pat === 'number');
+  chart('ch-pat', { type: 'line', data: { labels: hp.map((h) => ymLabel(h.month)), datasets: [{ data: hp.map((h) => h.pat), borderColor: '#2563EB', backgroundColor: 'rgba(37,99,235,.12)', fill: true, pointRadius: 0, tension: .2, borderWidth: 2 }] },
+    options: { maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => brl(c.raw) } } }, scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 7 } }, y: { grid: gridOpts, ticks: kTicks } } } });
+  chart('ch-div', { type: 'bar', data: { labels: H.map((h) => ymLabel(h.month)), datasets: [{ data: H.map(divTotal), backgroundColor: '#0EA5A4', borderRadius: 2 }] },
+    options: { maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => brl(c.raw) } } }, scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 7 } }, y: { grid: gridOpts, ticks: kTicks } } } });
+  chart('ch-alloc', { type: 'doughnut', data: { labels: P.alloc.map((a) => a.n), datasets: [{ data: P.alloc.map((a) => a.v), backgroundColor: P.alloc.map((a) => a.hex), borderColor: '#fff', borderWidth: 2 }] },
+    options: { maintainAspectRatio: false, cutout: '60%', plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => c.label + ': ' + brl(c.raw) } } } } });
+  const yrs = yearsList(); const byY = yrs.map((y) => H.filter((h) => h.month.startsWith(y)).reduce((s2, h) => s2 + divTotal(h), 0));
+  chart('ch-year', { type: 'bar', data: { labels: yrs.slice(-10), datasets: [{ data: byY.slice(-10), backgroundColor: '#0B1F3A', borderRadius: 4 }] },
+    options: { maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => brl(c.raw) } } }, scales: { x: { grid: { display: false } }, y: { grid: gridOpts, ticks: kTicks } } } });
+}
+function yearsList() {
+  const H = DB.history; if (!H.length) return [String(new Date().getFullYear())];
+  const a = Number(H[0].month.slice(0, 4)), b = Math.max(Number(H[H.length - 1].month.slice(0, 4)), new Date().getFullYear());
+  return Array.from({ length: b - a + 1 }, (_, i) => String(a + i));
+}
+
+/* ----- Atualizar ----- */
+function fieldRow(label, key, val, hint, calc) {
+  return `<div class="field"><label>${label}${hint ? `<small>${hint}</small>` : ''}</label>
+    <div><input inputmode="decimal" data-k="${key}" value="${val === null || val === undefined ? '' : String(val).replace('.', ',')}">${calc ? `<div class="small calc" data-calc="${key}">${calc}</div>` : ''}</div></div>`;
+}
+function vAtualizar() {
+  const b = DB.balances, p = DB.prices, d = DB.draft, P = portfolio();
+  const exists = DB.history.find((h) => h.month === d.month);
+  $('#view').innerHTML = `
+  <div class="grid split">
+  <div class="grid">
+   <div class="card"><div class="step"><b>1</b><h2>Mês de referência</h2></div>
+     <div class="field"><label>Mês que você está atualizando</label><input type="month" id="f-month" value="${d.month}"></div>
+     <div class="small">${exists ? '⚠ Este mês já está no Histórico — salvar vai substituir.' : 'Este mês ainda não foi salvo.'}</div></div>
+   <div class="card"><div class="step"><b>2</b><h2>Câmbio e preços</h2></div>
+     <div class="small" style="margin-bottom:6px">Buscados automaticamente (${p.updatedAt ? fmtDate(p.updatedAt) : 'ainda não buscados'}). Você pode corrigir à mão.</div>
+     ${fieldRow('Libra → Real (GBP/BRL)', 'p.gbpbrl', p.gbpbrl)}
+     ${fieldRow('Dólar → Real (USD/BRL)', 'p.usdbrl', p.usdbrl)}
+     ${COINS.map((c) => fieldRow(c.k + ' (US$)', 'p.' + c.k, p[c.k])).join('')}
+     <button class="btn primary block" id="f-prices">⟳ Buscar preços agora</button></div>
+   <div class="card"><div class="step"><b>3</b><h2>Saldos de hoje</h2></div>
+     ${fieldRow('Ações (R$)', 'b.acoes', b.acoes, 'Corretora no Brasil')}
+     ${fieldRow('FIIs (R$)', 'b.fiis', b.fiis, 'Corretora no Brasil')}
+     ${fieldRow('Trading 212 — pie Stocks (£)', 'b.pieStocks', b.pieStocks, null, brl(b.pieStocks * p.gbpbrl))}
+     ${fieldRow('Trading 212 — pie REITs (£)', 'b.pieReits', b.pieReits, null, brl(b.pieReits * p.gbpbrl))}
+     ${fieldRow("Trading 212 — pie ETF's (£)", 'b.pieEtfs', b.pieEtfs, null, brl(b.pieEtfs * p.gbpbrl))}
+     ${fieldRow('Renda fixa — Trading 212 cash (£)', 'b.t212cash', b.t212cash, null, brl(b.t212cash * p.gbpbrl))}
+     ${fieldRow('Renda fixa — Brasil (R$)', 'b.rfBrasil', b.rfBrasil)}
+     ${fieldRow('Caixa (R$)', 'b.caixa', b.caixa, 'Conta no total, fora das metas')}
+     <div class="field"><label>Cripto <small>calculado na aba Cripto</small></label><div class="calc">${brl(P.cs.totalBRL)}</div></div>
+     <div class="total-line"><span>Patrimônio total</span><b id="f-total">${brl(P.total)}</b></div></div>
+  </div>
+  <div class="grid" style="align-content:start">
+   <div class="card"><div class="step"><b>4</b><h2>Dividendos e aporte do mês</h2></div>
+     ${fieldRow('Dividendos FIIs (R$)', 'd.divFII', d.divFII)}
+     ${fieldRow('Dividendos Ações (R$)', 'd.divAcoes', d.divAcoes)}
+     ${fieldRow('Dividendos Stocks (£)', 'd.divStocks', d.divStocks, null, d.divStocks ? brl(d.divStocks * p.gbpbrl) : '')}
+     ${fieldRow('Aporte do mês (£)', 'd.aporteGBP', d.aporteGBP, 'Dinheiro NOVO que você colocou', d.aporteGBP ? brl(d.aporteGBP * p.gbpbrl) : '')}</div>
+   <div class="card"><div class="step"><b>5</b><h2>Salvar o mês</h2></div>
+     <div class="small">Guarda no Histórico: patrimônio total, aporte, dividendos e o câmbio de hoje. Pode salvar de novo quantas vezes quiser — substitui o mês.</div>
+     <button class="btn primary block" id="f-save">Salvar ${ymLong(d.month)} no Histórico</button></div>
+  </div></div>`;
+  $('#f-month').onchange = async (e) => {
+    const m = e.target.value; if (!m) return;
+    const h = DB.history.find((x) => x.month === m);
+    DB.draft = { month: m, divFII: h?.divFII ?? null, divAcoes: h?.divAcoes ?? null, divStocks: h?.divStocks ?? null, aporteGBP: h?.aporteGBP ?? null };
+    await save(); render();
+  };
+  $$('#view input[data-k]').forEach((inp) => inp.addEventListener('change', async () => {
+    const [grp, key] = inp.dataset.k.split('.'); const v = parseNum(inp.value);
+    const target = grp === 'p' ? DB.prices : grp === 'b' ? DB.balances : DB.draft;
+    target[key] = grp === 'd' ? v : (v ?? 0);
+    await save(); render();
+  }));
+  $('#f-prices').onclick = () => refreshPrices(false);
+  $('#f-save').onclick = async () => {
+    const P2 = portfolio(), d2 = DB.draft;
+    const entry = { month: d2.month, pat: Math.round(P2.total * 100) / 100, aporteGBP: d2.aporteGBP, divFII: d2.divFII, divAcoes: d2.divAcoes, divStocks: d2.divStocks, fx: DB.prices.gbpbrl || null };
+    const i = DB.history.findIndex((h) => h.month === d2.month);
+    if (i > -1) { if (!confirm(`${ymLong(d2.month)} já existe. Substituir?`)) return; entry.note = DB.history[i].note; DB.history[i] = entry; }
+    else DB.history.push(entry);
+    DB.history.sort((a, b2) => a.month.localeCompare(b2.month));
+    const nextM = ymAdd(d2.month, 1);
+    await save(); toast(`✓ ${ymLong(d2.month)} salvo`);
+    if (confirm(`Começar ${ymLong(nextM)} agora? (os campos de dividendos e aporte ficam vazios)`)) {
+      DB.draft = { month: nextM, divFII: null, divAcoes: null, divStocks: null, aporteGBP: null }; await save();
+    }
+    render();
+  };
+}
+
+/* ----- Histórico ----- */
+function vHistorico() {
+  const H = [...DB.history].reverse();
+  const rows = H.map((h) => {
+    const i = DB.history.indexOf(h), prev = DB.history[i - 1];
+    const varP = prev && typeof prev.pat === 'number' && typeof h.pat === 'number' && ymDiff(prev.month, h.month) === 1 ? h.pat - prev.pat : null;
+    const rend = varP !== null && h.aporteGBP !== null && h.aporteGBP !== undefined && h.fx ? varP - h.aporteGBP * h.fx : null;
+    return `<div class="item click" data-m="${h.month}"><div><div class="t">${ymLong(h.month)}</div>
+      <div class="s">Div ${brl(divTotal(h))}${h.aporteGBP ? ' · aporte ' + gbp(h.aporteGBP) : ''}${h.note ? ' · ' + esc(h.note) : ''}</div></div>
+      <div class="r"><div class="t">${typeof h.pat === 'number' ? brl(h.pat) : '–'}</div>
+      <div class="s ${varP > 0 ? 'pos' : varP < 0 ? 'neg' : ''}">${varP === null ? '' : signed(brl, varP)}${rend !== null ? ' · rend. ' + signed(brl, rend) : ''}</div></div></div>`;
+  }).join('');
+  $('#view').innerHTML = `<div class="card"><div class="small" style="margin-bottom:6px">Toque num mês para editar. Novos meses entram pela aba Atualizar → Salvar.</div>${rows || '<p class="muted">Nenhum mês salvo ainda.</p>'}
+    <button class="btn block" id="h-add">+ Adicionar mês manualmente</button></div>`;
+  $$('#view .item').forEach((el) => (el.onclick = () => editMonth(el.dataset.m)));
+  $('#h-add').onclick = () => editMonth(null);
+}
+function editMonth(m) {
+  const h = m ? DB.history.find((x) => x.month === m) : { month: ym(), pat: null, aporteGBP: null, divFII: null, divAcoes: null, divStocks: null, fx: null, note: '' };
+  const f = (label, k, v) => `<div class="field"><label>${label}</label><input data-e="${k}" inputmode="decimal" value="${v ?? ''}"></div>`;
+  openSheet(`<h3>${m ? ymLong(m) : 'Novo mês'}</h3>
+    ${m ? '' : `<div class="field"><label>Mês</label><input type="month" id="e-month" value="${h.month}"></div>`}
+    ${f('Patrimônio (R$)', 'pat', h.pat)}${f('Aporte (£)', 'aporteGBP', h.aporteGBP)}${f('Div FIIs (R$)', 'divFII', h.divFII)}
+    ${f('Div Ações (R$)', 'divAcoes', h.divAcoes)}${f('Div Stocks (£)', 'divStocks', h.divStocks)}${f('GBP/BRL do mês', 'fx', h.fx)}
+    <div class="field"><label>Observação</label><input data-e="note" value="${esc(h.note || '')}" style="text-align:left"></div>
+    <div class="small">Os dividendos dos Stocks só entram no total quando o mês tem o câmbio GBP/BRL.</div>
+    <button class="btn primary block" id="e-save">Salvar</button>
+    ${m ? '<button class="btn danger block" id="e-del">Apagar este mês</button>' : ''}
+    <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
+    $('#e-save', el).onclick = async () => {
+      const out = { ...h };
+      $$('[data-e]', el).forEach((i) => { out[i.dataset.e] = i.dataset.e === 'note' ? i.value : parseNum(i.value); });
+      if (!m) {
+        out.month = $('#e-month', el).value; if (!out.month) return toast('Escolha o mês');
+        if (DB.history.find((x) => x.month === out.month)) return toast('Esse mês já existe — edite ele na lista');
+        DB.history.push(out);
+      } else DB.history[DB.history.indexOf(h)] = out;
+      DB.history.sort((a, b) => a.month.localeCompare(b.month)); await save(); closeSheet(); render();
+    };
+    if (m) $('#e-del', el).onclick = async () => { if (!confirm('Apagar ' + ymLong(m) + '?')) return; DB.history.splice(DB.history.indexOf(h), 1); await save(); closeSheet(); render(); };
+  });
+}
+
+/* ----- Dividendos ----- */
+function vDividendos() {
+  const yrs = yearsList(), H = DB.history;
+  const cell = (y, mi) => { const h = H.find((x) => x.month === `${y}-${String(mi + 1).padStart(2, '0')}`); return h ? divTotal(h) : 0; };
+  let max = 0; yrs.forEach((y) => { for (let i = 0; i < 12; i++) max = Math.max(max, cell(y, i)); });
+  const tot = yrs.map((y) => Array.from({ length: 12 }, (_, i) => cell(y, i)).reduce((a, b) => a + b, 0));
+  const cnt = yrs.map((y) => Array.from({ length: 12 }, (_, i) => cell(y, i)).filter((v) => v > 0).length);
+  const st = historyStats();
+  const life = st.divLife, step = 10000;
+  const mile = []; let acc = 0, k = 1, prevM = H[0]?.month;
+  for (const h of H) { acc += divTotal(h); while (acc >= k * step) { mile.push({ v: k * step, m: h.month, n: ymDiff(prevM, h.month) }); prevM = h.month; k++; } }
+  const last12 = H.filter((h) => st.last && ymDiff(h.month, st.last.month) >= 0 && ymDiff(h.month, st.last.month) < 12).reduce((s, h) => s + divTotal(h), 0);
+  $('#view').innerHTML = `
+  <div class="grid g2" style="margin-bottom:12px">
+    <div class="card kpi"><div class="lab">Total na vida</div><div class="val">${brl(life)}</div><div class="sub">próx. marco ${brl((Math.floor(life / step) + 1) * step)}</div></div>
+    <div class="card kpi"><div class="lab">Últimos 12 meses</div><div class="val">${brl(last12)}</div><div class="sub">≈ ${brl(last12 / 12)}/mês</div></div>
+  </div>
+  <div class="card"><h2>Dividendos por mês (R$)</h2><div class="tbl-wrap"><table>
+    <tr><th></th>${yrs.map((y) => `<th>${y}</th>`).join('')}</tr>
+    ${MONTHS.map((mn, i) => `<tr><td>${mn}</td>${yrs.map((y) => { const v = cell(y, i); return `<td class="${v > 0 && v === max ? 'max' : ''}">${v ? nf0.format(v) : ''}</td>`; }).join('')}</tr>`).join('')}
+    <tr class="tot"><td>Total do ano</td>${tot.map((v) => `<td>${nf0.format(v)}</td>`).join('')}</tr>
+    <tr><td>Média mensal</td>${tot.map((v, i) => `<td>${cnt[i] ? nf0.format(v / cnt[i]) : ''}</td>`).join('')}</tr>
+    <tr><td>Crescimento</td>${tot.map((v, i) => { const g = i && tot[i - 1] && cnt[i] === 12 ? v / tot[i - 1] - 1 : null; return `<td class="${g > 0 ? 'pos' : g < 0 ? 'neg' : ''}">${g === null ? '' : pct(g)}</td>`; }).join('')}</tr>
+  </table></div><div class="small" style="margin-top:6px">Azul = maior dividendo mensal de todos. Arraste a tabela para o lado. Crescimento só para anos completos. Stocks entram convertidos pelo câmbio do mês (a partir de out/2026).</div></div>
+  <div class="card" style="margin-top:12px"><h2>Marcos de R$ 10 mil</h2>
+    ${mile.map((x) => `<div class="row"><span class="l">✓ ${brl(x.v)}</span><span class="r">${ymLabel(x.m)} <span class="small">(${x.n} meses)</span></span></div>`).join('') || '<p class="muted">Ainda nenhum.</p>'}</div>`;
+  const tw = $('#view .tbl-wrap'); if (tw) tw.scrollLeft = tw.scrollWidth;
+}
+
+/* ----- Cripto ----- */
+function vCripto() {
+  const cs = cryptoSummary(), P = portfolio(), c = DB.crypto, p = DB.prices;
+  const log = [...c.log].reverse();
+  $('#view').innerHTML = `
+  <div class="grid split">
+  <div class="grid" style="align-content:start">
+   <div class="card hero kpi"><div class="lab">Total em cripto</div><div class="val">${brl(cs.totalBRL)}</div>
+     <div class="sub">${usd(cs.totalUSD)} · ${gbp(cs.totalBRL / (p.gbpbrl || 1))} · ${P.total ? pct(cs.totalBRL / P.total) : '–'} do patrimônio</div></div>
+   <div class="card"><h2>Por moeda</h2>
+     ${cs.coins.map((x) => `<div class="row"><span class="l"><b>${x.k}</b> <span class="small">${x.units.toLocaleString('pt-BR', { maximumFractionDigits: x.dec })}</span></span><span class="r">${brl(x.valBRL)}<div class="small">${usd(p[x.k])} cada</div></span></div>`).join('')}</div>
+   <div class="card"><h2>Bitcoin por pessoa</h2>
+     ${c.people.map((w) => { const u = cs.coins[0].per[w]; return `<div class="row"><span class="l">${esc(w)} <span class="small">${u.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></span><span class="r">${brl(u * p.BTC * p.usdbrl)}</span></div>`; }).join('')}
+     ${cs.coins[0].fee ? `<div class="row"><span class="l small">Taxas de transferência</span><span class="r small">−${cs.coins[0].fee.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></div>` : ''}</div>
+   <div class="card"><h2>Bitcoin — lucro / prejuízo</h2>
+     <div class="small" style="margin-bottom:6px">Só compras do registro (BTC de antes do registro não tem preço pago).</div>
+     ${[['Total', cs.btcPL], ...c.people.map((w) => [w, cs.btcPLby[w]])].filter(([, x]) => x.qty).map(([n, x]) => `<div class="row"><span class="l"><b>${esc(n)}</b><div class="small">pago ${usd(x.cost)} · médio ${usd(x.avg)}</div></span>
+       <span class="r ${x.pl < 0 ? 'neg' : 'pos'}">${signed(usd, x.pl)}<div class="small">${signed(pct, x.plPct)}</div></span></div>`).join('')}</div>
+  </div>
+  <div class="card" style="align-content:start"><h2>Registro de operações</h2>
+    <button class="btn primary block" id="c-add" style="margin:0 0 8px">+ Nova operação</button>
+    ${log.map((x) => { const imp = x.op === 'Buy' && x.qty && x.price ? x.value / (x.qty * x.price) - 1 : null; const bad = imp !== null && (imp < -0.005 || imp > 0.06);
+      return `<div class="item click" data-id="${x.id}"><div><div class="t">${x.op === 'Buy' ? 'Compra' : x.op === 'Sold' ? 'Venda' : 'Recebido'} · ${x.coin}</div><div class="s">${esc(x.name)} · ${x.date ? new Date(x.date + 'T12:00').toLocaleDateString('pt-BR') : ''}${bad ? ' · <span class="neg">⚠ confira os valores</span>' : ''}</div></div>
+      <div class="r"><div class="t">${usd(x.value, 2)}</div><div class="s">${num(x.qty).toLocaleString('pt-BR', { maximumFractionDigits: 8 })} @ ${usd(x.price)}</div></div></div>`; }).join('') || '<p class="muted">Nenhuma operação.</p>'}
+  </div></div>`;
+  $('#c-add').onclick = () => editOp(null);
+  $$('#view .item').forEach((el) => (el.onclick = () => editOp(el.dataset.id)));
+}
+function editOp(id) {
+  const c = DB.crypto, x = id ? c.log.find((o) => o.id === id) : { id: uid(), name: c.people[0], op: 'Buy', date: new Date().toISOString().slice(0, 10), coin: 'BTC', qty: null, value: null, price: DB.prices.BTC || null };
+  openSheet(`<h3>${id ? 'Editar operação' : 'Nova operação'}</h3>
+    <div class="field"><label>Quem</label><select id="o-name">${c.people.map((w) => `<option ${w === x.name ? 'selected' : ''}>${esc(w)}</option>`).join('')}</select></div>
+    <div class="field"><label>Operação</label><select id="o-op">${[['Buy', 'Compra'], ['Sold', 'Venda'], ['Received', 'Recebido']].map(([v, l]) => `<option value="${v}" ${v === x.op ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="field"><label>Data</label><input type="date" id="o-date" value="${x.date || ''}"></div>
+    <div class="field"><label>Cripto</label><select id="o-coin">${COINS.map((co) => `<option ${co.k === x.coin ? 'selected' : ''}>${co.k}</option>`).join('')}</select></div>
+    <div class="field"><label>Quantidade</label><input id="o-qty" inputmode="decimal" value="${x.qty ?? ''}"></div>
+    <div class="field"><label>Valor pago (US$)<small>com taxas</small></label><input id="o-val" inputmode="decimal" value="${x.value ?? ''}"></div>
+    <div class="field"><label>Preço da moeda (US$)</label><input id="o-price" inputmode="decimal" value="${x.price ?? ''}"></div>
+    <button class="btn primary block" id="o-save">Salvar</button>
+    ${id ? '<button class="btn danger block" id="o-del">Apagar</button>' : ''}
+    <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
+    $('#o-save', el).onclick = async () => {
+      const o = { id: x.id, name: $('#o-name', el).value, op: $('#o-op', el).value, date: $('#o-date', el).value, coin: $('#o-coin', el).value,
+        qty: parseNum($('#o-qty', el).value), value: parseNum($('#o-val', el).value), price: parseNum($('#o-price', el).value) };
+      if (!o.qty) return toast('Informe a quantidade');
+      const i = c.log.findIndex((q) => q.id === o.id); if (i > -1) c.log[i] = o; else c.log.push(o);
+      c.log.sort((a, b) => (a.date || '').localeCompare(b.date || '')); await save(); closeSheet(); render();
+    };
+    if (id) $('#o-del', el).onclick = async () => { if (!confirm('Apagar esta operação?')) return; c.log = c.log.filter((q) => q.id !== id); await save(); closeSheet(); render(); };
+  });
+}
+
+/* ----- Ajustes ----- */
+function vAjustes() {
+  const s = DB.settings, c = DB.crypto;
+  const tsum = CLASSES.reduce((a, k) => a + num(s.targets[k.k]), 0);
+  $('#view').innerHTML = `
+  <div class="grid split">
+  <div class="grid" style="align-content:start">
+   <div class="card"><h2>Meta e projeção</h2>
+     ${fieldRow('Meta de patrimônio (R$)', 's.meta', s.meta)}
+     ${fieldRow('Aporte mensal planejado (£)', 's.aportePlanGBP', s.aportePlanGBP)}
+     ${fieldRow('Retorno anual esperado (%)', 's.retornoAnual', Math.round(s.retornoAnual * 1000) / 10)}</div>
+   <div class="card"><h2>Metas de alocação (%)</h2>
+     ${CLASSES.map((k) => fieldRow(k.n, 't.' + k.k, Math.round(num(s.targets[k.k]) * 1000) / 10)).join('')}
+     <div class="small ${Math.abs(tsum - 1) > 1e-6 ? 'neg' : 'pos'}">Soma: ${pct(tsum)} ${Math.abs(tsum - 1) > 1e-6 ? '— precisa somar 100%' : '✓'}</div></div>
+   <div class="card"><h2>Cripto — saldos de antes do registro</h2>
+     <div class="small">Pessoas (separe por vírgula):</div>
+     <div class="field"><label>Pessoas</label><input id="a-people" value="${esc(c.people.join(', '))}" style="text-align:left"></div>
+     ${COINS.map((co) => c.people.map((w) => fieldRow(`${co.k} — ${esc(w)}`, `pre.${co.k}.${w}`, c.pre?.[co.k]?.[w] ?? 0)).join('') + fieldRow(`${co.k} — taxas de transferência`, `fee.${co.k}`, c.fees?.[co.k] ?? 0)).join('')}</div>
+  </div>
+  <div class="grid" style="align-content:start">
+   <div class="card"><h2>Backup e segurança</h2>
+     <div class="small">Último backup: <b>${s.lastBackup ? fmtDate(s.lastBackup) : 'nunca'}</b>. Seus dados existem só neste aparelho — faça backup todo mês e guarde o arquivo no iCloud Drive ou OneDrive.</div>
+     <button class="btn primary block" id="a-export">💾 Exportar backup (criptografado)</button>
+     <button class="btn block" id="a-import">Importar backup</button>
+     <button class="btn block" id="a-pin">Trocar PIN</button>
+     <button class="btn danger block" id="a-wipe">Apagar todos os dados deste aparelho</button></div>
+   <div class="card"><h2>Privacidade</h2><div class="small">
+     • Nenhum dado seu sai do aparelho. Ficam guardados criptografados com o seu PIN.<br>
+     • A internet só é usada para buscar preços (CoinGecko para cripto, Frankfurter/BCE para câmbio). Esses serviços recebem apenas os nomes das moedas, nunca quantidades ou valores.<br>
+     • O app trava sozinho após 2 minutos fora da tela.</div></div>
+  </div></div>`;
+  $$('#view input[data-k]').forEach((inp) => inp.addEventListener('change', async () => {
+    const parts = inp.dataset.k.split('.'); const v = parseNum(inp.value) ?? 0;
+    if (parts[0] === 's') DB.settings[parts[1]] = parts[1] === 'retornoAnual' ? v / 100 : v;
+    else if (parts[0] === 't') DB.settings.targets[parts[1]] = v / 100;
+    else if (parts[0] === 'pre') { (c.pre[parts[1]] ||= {})[parts.slice(2).join('.')] = v; }
+    else if (parts[0] === 'fee') c.fees[parts[1]] = v;
+    await save(); render();
+  }));
+  $('#a-people').onchange = async (e) => { const ps = e.target.value.split(',').map((x) => x.trim()).filter(Boolean); if (ps.length) { c.people = ps; await save(); render(); } };
+  $('#a-export').onclick = exportBackup;
+  $('#a-import').onclick = () => pickImport(false);
+  $('#a-pin').onclick = () => { KEY = null; showLock('setup'); };
+  $('#a-wipe').onclick = () => {
+    if (!confirm('Isso apaga TODOS os dados deste aparelho. Você tem um backup?')) return;
+    if (!confirm('Tem certeza? Não dá para desfazer.')) return;
+    localStorage.removeItem(K_DATA); localStorage.removeItem(K_META); DB = null; KEY = null; location.hash = ''; location.reload();
+  };
+}
+
+/* ---------------- boot ---------------- */
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+if (localStorage.getItem(K_META) && localStorage.getItem(K_DATA)) showLock('unlock');
+else { localStorage.removeItem(K_META); showLock('setup'); }
