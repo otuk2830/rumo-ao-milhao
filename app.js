@@ -229,19 +229,95 @@ async function refreshPrices(silent) {
   return false;
 }
 
+/* ---------------- keys: one random data key, unlocked by PIN, Face ID or recovery code ---------------- */
+let DKRAW = null; // raw data key while unlocked
+const rnd = (n) => crypto.getRandomValues(new Uint8Array(n));
+const getMeta = () => { try { return JSON.parse(localStorage.getItem(K_META)); } catch { return null; } };
+const setMeta = (m) => localStorage.setItem(K_META, JSON.stringify(m));
+const rawToKey = (raw) => crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+async function wrapRaw(kek, raw) { const iv = rnd(12); return { iv: b64(iv), ct: b64(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, kek, raw)) }; }
+async function unwrapRaw(kek, box) { return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(box.iv) }, kek, unb64(box.ct))); }
+async function wrapWithSecret(secret) { const salt = rnd(16); return { salt: b64(salt), ...(await wrapRaw(await deriveKey(secret, salt), DKRAW)) }; }
+async function unwrapWithSecret(secret, w) { return unwrapRaw(await deriveKey(secret, unb64(w.salt)), w); }
+async function prfKey(out) {
+  const base = await crypto.subtle.importKey('raw', out, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: enc.encode('rumo-faceid') }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+const RC_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function newRecoveryCode() { const b = rnd(20); let s = ''; for (let i = 0; i < 20; i++) { s += RC_ALPHA[b[i] % 32]; if (i % 4 === 3 && i < 19) s += '-'; } return s; }
+const normCode = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/(.{4})(?=.)/g, '$1-');
+async function openWithRaw(raw) { DKRAW = raw; KEY = await rawToKey(raw); DB = normalize(await decryptObj(JSON.parse(localStorage.getItem(K_DATA)), KEY)); }
+
+/* Face ID (passkey + PRF extension: the iPhone releases a secret only after Face ID) */
+async function faceGetSecret(credId, salt) {
+  const a = await navigator.credentials.get({ publicKey: { challenge: rnd(32), rpId: location.hostname, allowCredentials: [{ type: 'public-key', id: credId }],
+    userVerification: 'required', timeout: 60000, extensions: { prf: { eval: { first: salt } } } } });
+  const r = a.getClientExtensionResults()?.prf?.results?.first;
+  if (!r) throw new Error('noprf');
+  return r;
+}
+async function enableFaceID() {
+  if (!window.PublicKeyCredential || !navigator.credentials?.create) throw new Error('unsupported');
+  const prfSalt = rnd(32);
+  const cred = await navigator.credentials.create({ publicKey: {
+    challenge: rnd(32), rp: { name: 'Rumo ao Milhão', id: location.hostname },
+    user: { id: rnd(16), name: 'Rumo ao Milhão', displayName: 'Rumo ao Milhão' },
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+    authenticatorSelection: { authenticatorAttachment: 'platform', residentKey: 'preferred', userVerification: 'required' },
+    timeout: 60000, extensions: { prf: { eval: { first: prfSalt } } } } });
+  const ext = cred.getClientExtensionResults()?.prf;
+  if (!ext || ext.enabled === false) throw new Error('noprf');
+  let out = ext.results?.first;
+  if (!out) out = await faceGetSecret(cred.rawId, prfSalt);
+  const meta = getMeta();
+  meta.face = { credId: b64(cred.rawId), prfSalt: b64(prfSalt), ...(await wrapRaw(await prfKey(out), DKRAW)) };
+  setMeta(meta);
+}
+async function unlockWithFace() {
+  const f = getMeta()?.face; if (!f) return false;
+  const out = await faceGetSecret(unb64(f.credId), unb64(f.prfSalt));
+  await openWithRaw(await unwrapRaw(await prfKey(out), f));
+  return true;
+}
+
+/* recovery code sheet */
+function showRecovery(code, then) {
+  openSheet(`<h3>🔑 Código de recuperação</h3>
+    <p class="small">Se esquecer o PIN, este código abre o app. <b>Anote num lugar seguro</b> (papel, gerenciador de senhas). Ele só aparece agora.</p>
+    <div class="code-box" id="rc">${code}</div>
+    <button class="btn block" id="rc-copy">Copiar</button>
+    <button class="btn primary block" id="rc-ok">Já anotei</button>`, (el) => {
+    $('#rc-copy', el).onclick = () => navigator.clipboard?.writeText(code).then(() => toast('Copiado'), () => toast('Selecione e copie o código'));
+    $('#rc-ok', el).onclick = () => { closeSheet(); then && then(); };
+  });
+}
+
 /* ---------------- lock screen ---------------- */
 function showLock(mode) {
-  // mode: 'unlock' | 'setup' | 'confirm'
+  // mode: 'unlock' | 'setup' (new PIN; when DKRAW exists it only changes the PIN)
   $('#app').classList.add('hidden'); $('#welcome').classList.add('hidden'); $('#lock').classList.remove('hidden');
-  let pin = '', first = '';
+  let pin = '', first = '', confirming = false;
+  const meta = getMeta();
   const msg = $('#lock-msg'), dots = $('#dots'), foot = $('#lock-foot');
+  const changing = mode === 'setup' && !!DKRAW;
   const setMsg = () => {
-    msg.textContent = mode === 'unlock' ? 'Digite seu PIN' : mode === 'setup' ? 'Crie um PIN de 6 dígitos' : 'Confirme o PIN';
-    foot.textContent = mode === 'unlock' ? 'Esqueceu o PIN? Só é possível recuperar importando um backup.' : 'O PIN protege seus dados neste aparelho. Não há como recuperá-lo — guarde bem.';
+    msg.textContent = mode === 'unlock' ? 'Digite seu PIN' : confirming ? 'Confirme o PIN' : changing ? 'Crie o novo PIN' : 'Crie um PIN de 6 dígitos';
+    foot.innerHTML = mode === 'unlock'
+      ? (meta?.rec || meta?.salt ? '<button class="link" id="forgot">Esqueci o PIN</button>' : '')
+      : changing ? '<button class="link" id="cancel-pin">Cancelar</button>' : 'Você também vai receber um código de recuperação, caso esqueça o PIN.';
+    $('#forgot') && ($('#forgot').onclick = forgotPin);
+    $('#cancel-pin') && ($('#cancel-pin').onclick = () => enterApp());
   };
   const draw = () => $$('#dots i').forEach((d, i) => d.classList.toggle('on', i < pin.length));
   const fail = (m) => { msg.textContent = m; dots.classList.add('shake'); setTimeout(() => dots.classList.remove('shake'), 400); pin = ''; draw(); };
   setMsg(); draw();
+  const fb = $('#face-btn');
+  fb.classList.toggle('hidden', !(mode === 'unlock' && meta?.face));
+  fb.onclick = async () => {
+    try { msg.textContent = 'Abrindo…'; if (await unlockWithFace()) enterApp(); }
+    catch (e) { setMsg(); if (e.name !== 'NotAllowedError') toast('Face ID não funcionou — use o PIN'); }
+  };
+  if (mode === 'unlock' && meta?.face && showLock.auto !== false) { showLock.auto = false; setTimeout(() => fb.click(), 300); }
   const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'];
   $('#pad').innerHTML = keys.map((k) => `<button class="${k === '' ? 'blank' : ''}" data-k="${k}">${k}</button>`).join('');
   $('#pad').onclick = async (e) => {
@@ -250,46 +326,81 @@ function showLock(mode) {
     if (pin.length >= 6) return;
     pin += k; draw();
     if (pin.length < 6) return;
-    if (mode === 'setup') { first = pin; pin = ''; mode = 'confirm'; setMsg(); draw(); return; }
-    if (mode === 'confirm') {
-      if (pin !== first) { mode = 'setup'; first = ''; setMsg(); fail('Os PINs não batem — tente de novo'); return; }
-      const salt = crypto.getRandomValues(new Uint8Array(16));
-      KEY = await deriveKey(pin, salt);
-      localStorage.setItem(K_META, JSON.stringify({ salt: b64(salt) }));
-      if (DB) { await save(); enterApp(); } else { $('#lock').classList.add('hidden'); $('#welcome').classList.remove('hidden'); }
+    if (mode === 'setup') {
+      if (!confirming) { first = pin; pin = ''; confirming = true; setMsg(); draw(); return; }
+      if (pin !== first) { confirming = false; first = ''; setMsg(); fail('Os PINs não batem — tente de novo'); return; }
+      if (changing) {
+        const m = getMeta(); m.pin = await wrapWithSecret(pin); setMeta(m); toast('PIN alterado'); enterApp(); return;
+      }
+      // first run: new data key + recovery code
+      DKRAW = rnd(32); KEY = await rawToKey(DKRAW);
+      const code = newRecoveryCode();
+      setMeta({ v: 2, pin: await wrapWithSecret(pin), rec: await wrapWithSecret(code.replace(/-/g, '')), face: null });
+      showRecovery(code, () => {
+        if (DB) { save().then(enterApp); } else { $('#lock').classList.add('hidden'); $('#welcome').classList.remove('hidden'); }
+      });
       return;
     }
     msg.textContent = 'Abrindo…';
     try {
-      const meta = JSON.parse(localStorage.getItem(K_META));
-      const key = await deriveKey(pin, unb64(meta.salt));
-      const box = JSON.parse(localStorage.getItem(K_DATA));
-      DB = normalize(await decryptObj(box, key)); KEY = key; enterApp();
-    } catch (err) { fail('PIN incorreto'); }
+      const m = getMeta();
+      if (m && m.v === 2) { await openWithRaw(await unwrapWithSecret(pin, m.pin)); enterApp(); }
+      else {
+        // version 1 (data encrypted directly with the PIN): open, then upgrade to the new key system
+        const key = await deriveKey(pin, unb64(m.salt));
+        DB = normalize(await decryptObj(JSON.parse(localStorage.getItem(K_DATA)), key));
+        localStorage.setItem('rumo.legacy.bak', JSON.stringify({ meta: m, data: localStorage.getItem(K_DATA) })); // safety copy during upgrade
+        DKRAW = rnd(32); KEY = await rawToKey(DKRAW);
+        const code = newRecoveryCode();
+        const nm = { v: 2, pin: await wrapWithSecret(pin), rec: await wrapWithSecret(code.replace(/-/g, '')), face: null };
+        await save(); setMeta(nm);
+        showRecovery(code, enterApp);
+      }
+    } catch (err) { console.warn(err); fail('PIN incorreto'); }
   };
 }
-function lockNow() { DB = null; KEY = null; charts.forEach((c) => c.destroy()); charts = []; $('#view').innerHTML = ''; showLock('unlock'); }
+function forgotPin() {
+  const m = getMeta();
+  if (!m?.rec) { alert('Esta versão do app ainda não tinha código de recuperação. A única saída é importar um backup (Ajustes não está acessível sem o PIN): apague o app da tela inicial, adicione de novo e importe seu backup.'); return; }
+  openSheet(`<h3>Esqueci o PIN</h3><p class="small">Digite o código de recuperação que você anotou.</p>
+    <div class="field"><label>Código</label><input id="rc-in" autocapitalize="characters" autocomplete="off" style="text-align:left" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX"></div>
+    <button class="btn primary block" id="rc-go">Abrir e criar novo PIN</button><button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
+    $('#rc-go', el).onclick = async () => {
+      try { await openWithRaw(await unwrapWithSecret(normCode($('#rc-in', el).value).replace(/-/g, ''), m.rec)); closeSheet(); showLock('setup'); }
+      catch { toast('Código incorreto'); }
+    };
+  });
+}
+function lockNow() { DB = null; KEY = null; DKRAW = null; charts.forEach((c) => c.destroy()); charts = []; $('#view').innerHTML = ''; showLock.auto = true; showLock('unlock'); }
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) hiddenAt = Date.now();
-  else if (DB && hiddenAt && Date.now() - hiddenAt > AUTOLOCK_MS) lockNow();
+  if (document.hidden) { hiddenAt = Date.now(); return; }
+  if (DB && hiddenAt && Date.now() - hiddenAt > AUTOLOCK_MS) lockNow();
+  else if (DB) maybeRefreshPrices();
 });
 $('#w-empty').onclick = async () => { DB = emptyDB(); await save(); enterApp(); };
 $('#w-import').onclick = () => pickImport(true);
 
+const PRICE_EVERY = 15 * 60 * 1000;
+function maybeRefreshPrices() {
+  const age = DB?.prices.updatedAt ? Date.now() - new Date(DB.prices.updatedAt) : Infinity;
+  if (DB && age > PRICE_EVERY) refreshPrices(true);
+}
+setInterval(() => { if (DB && !document.hidden) maybeRefreshPrices(); }, 60 * 1000);
 async function enterApp() {
   $('#lock').classList.add('hidden'); $('#welcome').classList.add('hidden'); $('#app').classList.remove('hidden');
   if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
   render();
-  const age = DB.prices.updatedAt ? Date.now() - new Date(DB.prices.updatedAt) : Infinity;
-  if (age > 30 * 60 * 1000) refreshPrices(true);
+  maybeRefreshPrices();
 }
 
 /* ---------------- backup ---------------- */
 async function exportBackup() {
   openSheet(`<h3>Exportar backup</h3>
     <p class="small">Crie uma senha para o arquivo (mínimo 6 caracteres). Sem ela o arquivo não pode ser aberto — nem por você.</p>
-    <div class="field"><label>Senha do backup</label><input id="bk-p1" type="password" autocomplete="new-password"></div>
-    <div class="field"><label>Repita a senha</label><input id="bk-p2" type="password" autocomplete="new-password"></div>
+    <div class="field"><label>Senha do backup</label><input id="bk-p1" type="password" autocomplete="new-password" value="${esc(DB.settings.backupPass || '')}"></div>
+    <div class="field"><label>Repita a senha</label><input id="bk-p2" type="password" autocomplete="new-password" value="${esc(DB.settings.backupPass || '')}"></div>
+    <label class="small" style="display:flex;gap:8px;align-items:center;margin:8px 0"><input type="checkbox" id="bk-rem" ${DB.settings.backupPass ? 'checked' : ''}> Lembrar a senha neste aparelho (fica guardada criptografada)</label>
+    <p class="small">O arquivo se chama sempre <b>rumo-backup.json</b>. Salve na mesma pasta do iCloud Drive/OneDrive e escolha <b>Substituir</b> — assim fica só a cópia mais recente.</p>
     <button class="btn primary block" id="bk-go">Criar arquivo</button>
     <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
     $('#bk-go', el).onclick = async () => {
@@ -299,7 +410,8 @@ async function exportBackup() {
       const salt = crypto.getRandomValues(new Uint8Array(16));
       const box = await encryptObj(DB, await deriveKey(p1, salt));
       const file = JSON.stringify({ app: APP_ID, format: 1, encrypted: true, salt: b64(salt), ...box, createdAt: new Date().toISOString() });
-      const name = `rumo-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      const name = 'rumo-backup.json';
+      if ($('#bk-rem', el)?.checked) DB.settings.backupPass = p1; else delete DB.settings.backupPass;
       const blob = new Blob([file], { type: 'application/json' });
       const f = new File([blob], name, { type: 'application/json' });
       try {
@@ -352,13 +464,19 @@ $('#btn-lock').onclick = lockNow;
 $('#btn-refresh').onclick = () => refreshPrices(false);
 window.addEventListener('online', () => DB && refreshPrices(true));
 
+let chartLoading = false;
 function chart(id, cfg) {
-  const el = document.getElementById(id); if (!el || !window.Chart) return;
+  const el = document.getElementById(id); if (!el) return;
+  if (!window.Chart) {
+    el.parentElement.innerHTML = '<p class="small">Carregando gráficos… (se não aparecer, confira se o arquivo chart.umd.js está no GitHub)</p>';
+    if (!chartLoading) { chartLoading = true; const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'; sc.onload = () => render(); document.head.appendChild(sc); }
+    return;
+  }
   Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
   Chart.defaults.color = '#64748B';
   charts.push(new Chart(el, cfg));
 }
-const kTicks = { callback: (v) => (Math.abs(v) >= 1000 ? nf0.format(v / 1000) + 'k' : nf0.format(v)) };
+const kTicks = { callback: (v) => (Math.abs(v) >= 1000 ? (v / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + 'k' : nf0.format(v)) };
 const gridOpts = { color: '#E2E8F0' };
 
 function vPainel() {
@@ -430,9 +548,20 @@ function yearsList() {
 }
 
 /* ----- Atualizar ----- */
+function monthOptions(sel, onlyMissing) {
+  const first = DB.history[0]?.month || ymAdd(ym(), -12), last = ymAdd(ym(), 1), out = [];
+  for (let m = last; m >= first; m = ymAdd(m, -1)) {
+    if (onlyMissing && DB.history.find((h) => h.month === m)) continue;
+    out.push(`<option value="${m}" ${m === sel ? 'selected' : ''}>${ymLong(m)}</option>`);
+  }
+  return out.join('');
+}
+const DECS = { 'p.gbpbrl': 4, 'p.usdbrl': 4, 'p.XRP': 4 };
+const showNum = (key, v) => (v === null || v === undefined || v === '' ? '' :
+  Number(v).toLocaleString('pt-BR', { useGrouping: false, maximumFractionDigits: DECS[key] ?? (key.startsWith('pre.') || key.startsWith('fee.') ? 8 : 2) }));
 function fieldRow(label, key, val, hint, calc) {
   return `<div class="field"><label>${label}${hint ? `<small>${hint}</small>` : ''}</label>
-    <div><input inputmode="decimal" data-k="${key}" value="${val === null || val === undefined ? '' : String(val).replace('.', ',')}">${calc ? `<div class="small calc" data-calc="${key}">${calc}</div>` : ''}</div></div>`;
+    <div><input inputmode="decimal" data-k="${key}" value="${showNum(key, val)}">${calc ? `<div class="small calc" data-calc="${key}">${calc}</div>` : ''}</div></div>`;
 }
 function vAtualizar() {
   const b = DB.balances, p = DB.prices, d = DB.draft, P = portfolio();
@@ -441,7 +570,7 @@ function vAtualizar() {
   <div class="grid split">
   <div class="grid">
    <div class="card"><div class="step"><b>1</b><h2>Mês de referência</h2></div>
-     <div class="field"><label>Mês que você está atualizando</label><input type="month" id="f-month" value="${d.month}"></div>
+     <div class="field"><label>Mês que você está atualizando</label><select id="f-month">${monthOptions(d.month)}</select></div>
      <div class="small">${exists ? '⚠ Este mês já está no Histórico — salvar vai substituir.' : 'Este mês ainda não foi salvo.'}</div></div>
    <div class="card"><div class="step"><b>2</b><h2>Câmbio e preços</h2></div>
      <div class="small" style="margin-bottom:6px">Buscados automaticamente (${p.updatedAt ? fmtDate(p.updatedAt) : 'ainda não buscados'}). Você pode corrigir à mão.</div>
@@ -521,7 +650,7 @@ function editMonth(m) {
   const h = m ? DB.history.find((x) => x.month === m) : { month: ym(), pat: null, aporteGBP: null, divFII: null, divAcoes: null, divStocks: null, fx: null, note: '' };
   const f = (label, k, v) => `<div class="field"><label>${label}</label><input data-e="${k}" inputmode="decimal" value="${v ?? ''}"></div>`;
   openSheet(`<h3>${m ? ymLong(m) : 'Novo mês'}</h3>
-    ${m ? '' : `<div class="field"><label>Mês</label><input type="month" id="e-month" value="${h.month}"></div>`}
+    ${m ? '' : `<div class="field"><label>Mês</label><select id="e-month">${monthOptions(h.month, true)}</select></div>`}
     ${f('Patrimônio (R$)', 'pat', h.pat)}${f('Aporte (£)', 'aporteGBP', h.aporteGBP)}${f('Div FIIs (R$)', 'divFII', h.divFII)}
     ${f('Div Ações (R$)', 'divAcoes', h.divAcoes)}${f('Div Stocks (£)', 'divStocks', h.divStocks)}${f('GBP/BRL do mês', 'fx', h.fx)}
     <div class="field"><label>Observação</label><input data-e="note" value="${esc(h.note || '')}" style="text-align:left"></div>
@@ -649,11 +778,14 @@ function vAjustes() {
      <button class="btn primary block" id="a-export">💾 Exportar backup (criptografado)</button>
      <button class="btn block" id="a-import">Importar backup</button>
      <button class="btn block" id="a-pin">Trocar PIN</button>
+     <button class="btn block" id="a-face">${getMeta()?.face ? '✓ Face ID ativado — desativar' : '🙂 Ativar Face ID'}</button>
+     <button class="btn block" id="a-rec">Gerar novo código de recuperação</button>
      <button class="btn danger block" id="a-wipe">Apagar todos os dados deste aparelho</button></div>
    <div class="card"><h2>Privacidade</h2><div class="small">
      • Nenhum dado seu sai do aparelho. Ficam guardados criptografados com o seu PIN.<br>
      • A internet só é usada para buscar preços (CoinGecko para cripto, Frankfurter/BCE para câmbio). Esses serviços recebem apenas os nomes das moedas, nunca quantidades ou valores.<br>
-     • O app trava sozinho após 2 minutos fora da tela.</div></div>
+     • O app trava sozinho após 2 minutos fora da tela.<br>
+     • Face ID usa uma "chave de acesso" (passkey) do iPhone: o app só abre depois que o Face ID confirma que é você.</div></div>
   </div></div>`;
   $$('#view input[data-k]').forEach((inp) => inp.addEventListener('change', async () => {
     const parts = inp.dataset.k.split('.'); const v = parseNum(inp.value) ?? 0;
@@ -666,7 +798,21 @@ function vAjustes() {
   $('#a-people').onchange = async (e) => { const ps = e.target.value.split(',').map((x) => x.trim()).filter(Boolean); if (ps.length) { c.people = ps; await save(); render(); } };
   $('#a-export').onclick = exportBackup;
   $('#a-import').onclick = () => pickImport(false);
-  $('#a-pin').onclick = () => { KEY = null; showLock('setup'); };
+  $('#a-pin').onclick = () => showLock('setup');
+  $('#a-face').onclick = async () => {
+    const m = getMeta();
+    if (m.face) { if (!confirm('Desativar o Face ID? O app volta a pedir só o PIN.')) return; m.face = null; setMeta(m); render(); return toast('Face ID desativado'); }
+    try { await enableFaceID(); render(); toast('✓ Face ID ativado — o PIN continua valendo como reserva'); }
+    catch (e) {
+      console.warn(e);
+      if (e.name === 'NotAllowedError') return toast('Cancelado');
+      toast(e.message === 'noprf' || e.message === 'unsupported' ? 'Este aparelho/navegador não suporta Face ID para apps web (precisa iOS 18 ou mais novo)' : 'Não foi possível ativar o Face ID', 4500);
+    }
+  };
+  $('#a-rec').onclick = async () => {
+    if (!confirm('Gerar um novo código? O código antigo deixa de funcionar.')) return;
+    const code = newRecoveryCode(), m = getMeta(); m.rec = await wrapWithSecret(code.replace(/-/g, '')); setMeta(m); showRecovery(code);
+  };
   $('#a-wipe').onclick = () => {
     if (!confirm('Isso apaga TODOS os dados deste aparelho. Você tem um backup?')) return;
     if (!confirm('Tem certeza? Não dá para desfazer.')) return;

@@ -8,6 +8,6 @@ Personal investment tracker that runs in the browser and can be installed on the
 * Works offline (last saved prices are used).
 * Backups: Ajustes → Exportar backup creates a password-encrypted `.json` file. Save it to iCloud Drive or OneDrive. On a new phone: install the app → create a PIN → Importar backup.
 
-Files: `index.html`, `app.css`, `app.js` (all logic), `sw.js` (offline cache), `manifest.webmanifest`, `icons/`, `vendor/chart.umd.js` (Chart.js 4.4.1, MIT licence).
+Files: `index.html`, `app.css`, `app.js` (all logic), `sw.js` (offline cache), `manifest.webmanifest`, `chart.umd.js` (Chart.js 4.4.1, MIT licence).
 
 To publish an update: replace the files in the GitHub repository. The phone picks up the new version the next time the app opens with internet (sometimes it needs to be closed and opened twice).

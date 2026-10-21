@@ -11,8 +11,8 @@
 <meta name="robots" content="noindex">
 <title>Rumo ao Milhão</title>
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -23,6 +23,7 @@
     <h1>Rumo ao Milhão</h1>
     <p id="lock-msg">Digite seu PIN</p>
     <div class="dots" id="dots"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <button class="btn primary wide hidden" id="face-btn" style="margin:0 0 18px">🙂 Desbloquear com Face ID</button>
     <div class="pad" id="pad"></div>
     <p class="lock-foot" id="lock-foot"></p>
   </div>
@@ -65,7 +66,7 @@
 <div id="toast" class="toast hidden"></div>
 <input type="file" id="file-in" accept=".json,application/json" class="hidden">
 
-<script src="vendor/chart.umd.js"></script>
+<script src="chart.umd.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

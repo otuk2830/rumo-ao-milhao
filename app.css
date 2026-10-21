@@ -114,7 +114,12 @@ tr.tot td:first-child{background:#F8FAFC}
 .item .r{text-align:right}
 
 /* modal + toast */
-.modal{position:fixed; inset:0; background:rgba(15,23,42,.45); z-index:40; display:flex; align-items:flex-end; justify-content:center}
+.modal{position:fixed; inset:0; background:rgba(15,23,42,.45); z-index:70; display:flex; align-items:flex-end; justify-content:center}
 .sheet{background:#fff; width:100%; max-width:560px; border-radius:20px 20px 0 0; padding:18px 16px calc(var(--safe-b) + 18px); max-height:88vh; overflow:auto}
 .sheet h3{margin:0 0 12px}
 .toast{position:fixed; left:50%; transform:translateX(-50%); bottom:calc(var(--safe-b) + 80px); background:var(--ink); color:#fff; padding:10px 14px; border-radius:12px; font-size:13px; z-index:60; max-width:90%}
+
+.link{background:none; border:0; color:#93C5FD; text-decoration:underline; font-size:13px; padding:6px}
+.code-box{font:700 20px/1.3 ui-monospace, Menlo, monospace; letter-spacing:.04em; text-align:center; background:var(--blue-xl); color:var(--navy); border:1px dashed var(--blue); border-radius:12px; padding:14px 8px; margin:10px 0; user-select:all; -webkit-user-select:all; word-break:break-all}
+.field select{appearance:none; -webkit-appearance:none; text-align:right; text-align-last:right}
+.field input, .field select{min-width:0; max-width:100%}
