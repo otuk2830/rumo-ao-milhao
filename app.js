@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.2';
+const APP_VERSION = '4.3';
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
 const AUTOLOCK_MS = 2 * 60 * 1000;
@@ -524,24 +524,49 @@ async function alphaQuotes(syms, key) {
   return got;
 }
 // HG Brasil: B3 shares AND FIIs on the free plan (400 requests/day). Needs a key of type "uso exposto" with your site's domain authorised.
+// Their reply format differs between endpoints/plans, so the price is searched for anywhere in the reply.
+const PRICE_KEYS = ['price', 'value', 'last', 'close', 'regularMarketPrice', 'last_price', 'preco'];
+function findPrice(node, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 4) return null;
+  for (const k of PRICE_KEYS) { const v = node[k]; if (typeof v === 'number' && v > 0) return v; if (typeof v === 'string' && /^\d+([.,]\d+)?$/.test(v) && Number(v.replace(',', '.')) > 0) return Number(v.replace(',', '.')); }
+  for (const k of ['quote', 'quotes', 'price', 'data', 'market']) { const r = node[k] && typeof node[k] === 'object' ? findPrice(node[k], depth + 1) : null; if (r) return r; }
+  return null;
+}
+function hgExtract(j, syms) {
+  const got = {}, want = new Set(syms.map((x) => x.toUpperCase()));
+  const walk = (node, depth) => {
+    if (!node || typeof node !== 'object' || depth > 6) return;
+    if (Array.isArray(node)) { node.forEach((n) => walk(n, depth + 1)); return; }
+    const ids = Object.values(node).filter((v) => typeof v === 'string').map((v) => v.toUpperCase().split(':').pop());
+    const hit = ids.find((v) => want.has(v));
+    if (hit && !got[hit]) { const px = findPrice(node); if (px) got[hit] = px; }
+    for (const [k, v] of Object.entries(node)) {
+      const kk = k.toUpperCase().split(':').pop();
+      if (want.has(kk) && v && typeof v === 'object' && !got[kk]) { const px = findPrice(v); if (px) got[kk] = px; }
+      if (v && typeof v === 'object') walk(v, depth + 1);
+    }
+  };
+  walk(j, 0);
+  return got;
+}
+const hgSnippet = (j) => { const m = j?.message || j?.error || j?.results?.message || j?.results?.error; return m ? String(m) : 'resposta: ' + JSON.stringify(j).slice(0, 160); };
 async function hgQuotes(syms, key) {
   const got = {}; if (!key || !syms.length) return got;
   const k = encodeURIComponent(key);
+  let lastReply = null;
   try {
     const j = await fetchJSONo('https://api.hgbrasil.com/v2/finance/quotes?format=json-cors&key=' + k + '&tickers=' + syms.map((s) => 'B3:' + s).join(','));
-    for (const r of Array.isArray(j?.results) ? j.results : []) {
-      const sym = String(r.symbol || r.ticker || r.code || '').split(':').pop().toUpperCase(), px = Number(r.quote?.value ?? r.price);
-      if (sym && px > 0) got[sym] = px;
-    }
+    lastReply = j; Object.assign(got, hgExtract(j, syms));
     if (j?.valid_key === false) LASTERR.hg = 'chave inválida';
   } catch (e) { console.warn('hg v2', e); LASTERR.hg = e.message; }
   for (const s of syms.filter((x) => !got[x])) {   // older endpoint, one ticker at a time
     try {
       const j = await fetchJSONo('https://api.hgbrasil.com/finance/stock_price?format=json-cors&key=' + k + '&symbol=' + encodeURIComponent(s.toLowerCase()));
-      const r = j?.results?.[s] || j?.results?.[s.toUpperCase()] || Object.values(j?.results || {})[0];
-      if (r?.price > 0) got[s] = Number(r.price); else LASTERR.hg = r?.message || (j?.valid_key === false ? 'chave inválida' : 'ticker sem preço (' + s + ')');
+      lastReply = j; Object.assign(got, hgExtract(j, [s]));
+      if (!got[s]) LASTERR.hg = j?.valid_key === false ? 'chave inválida (' + hgSnippet(j) + ')' : hgSnippet(j);
     } catch (e) { console.warn('hg v1', s, e); LASTERR.hg = e.message; }
   }
+  if (Object.keys(got).length === 0 && lastReply && !LASTERR.hg) LASTERR.hg = hgSnippet(lastReply);
   return got;
 }
 async function setKeyStatus(prov, ok, okMsg) {
