@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.6';
+const APP_VERSION = '4.7';
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
 const AUTOLOCK_MS = 2 * 60 * 1000;
@@ -615,8 +615,8 @@ function vAtivos() {
   $('#view').innerHTML = `${segBar(cls)}
   <div class="grid split">
    <div class="grid" style="align-content:start">
-    <div class="card hero kpi"><div class="lab">${info.n} — pelos ativos</div><div class="val">${brl(total)}</div>
-      <div class="sub">${rows.length} ${rows.length === 1 ? 'ativo' : 'ativos'}${withCost.length ? ` · ${signed(brl, pl)} (${signed(pct, cost ? pl / cost : 0)}) sobre o preço pago` : ''}</div></div>
+    <div class="card hero kpi"><div class="lab">${info.n} — pelos ativos</div><div class="val">${brl(total, 2)}</div>
+      <div class="sub">${rows.length} ${rows.length === 1 ? 'ativo' : 'ativos'}${withCost.length ? ` · ${signed((v) => brl(v, 2), pl)} (${signed(pct, cost ? pl / cost : 0)}) sobre o preço pago` : ''}</div></div>
     <div class="card">
       <label class="toggle"><input type="checkbox" id="at-auto" ${auto ? 'checked' : ''}><span><b>Usar estes ativos no patrimônio</b><br><span class="small muted">${auto ? 'Ligado: o total de ' + info.n + ' é calculado aqui (preços ao vivo).' : 'Desligado: vale o total digitado em Atualizar (' + brl(manualTotal) + ').'}</span></span></label>
       <div class="small muted" style="margin-top:8px">Preços: ${DB.prices.assetsAt ? fmtDate(DB.prices.assetsAt) : 'ainda não buscados'} · atualizam sozinhos a cada hora</div>
@@ -632,7 +632,7 @@ function vAtivos() {
      ${rows.sort((x, y) => y.value - x.value).map((r) => `<div class="item click" data-id="${r.a.id}">
         <div><div class="t">${esc(r.a.ticker)} ${r.a.kind ? `<span class="small muted">${esc(r.a.kind)}</span>` : ''}</div>
         <div class="s">${r.a.qty.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} × ${fmtPx(r.cur, r.pr)}${r.a.market === 'MANUAL' ? ' · manual' : ''}${r.stale ? ` · <span class="neg">⚠ ${r.a.priceAt ? 'preço de ' + new Date(r.a.priceAt).toLocaleDateString('pt-BR') : 'sem preço'}</span>` : ''}</div></div>
-        <div class="r"><div class="t">${brl(r.value)}</div>${r.pl !== null ? `<div class="s ${r.pl < 0 ? 'neg' : 'pos'}">${signed(pct, r.plPct)}</div>` : ''}</div></div>`).join('') || '<p class="muted">Nenhum ativo ainda. Toque em ＋ Adicionar ativo.</p>'}
+        <div class="r"><div class="t">${brl(r.value, 2)}</div>${r.pl !== null ? `<div class="s ${r.pl < 0 ? 'neg' : 'pos'}">${signed(pct, r.plPct)}</div>` : ''}</div></div>`).join('') || '<p class="muted">Nenhum ativo ainda. Toque em ＋ Adicionar ativo.</p>'}
      <div class="small muted" style="margin-top:8px">⚠ = o preço não atualizou; o app continua usando o último preço bom. Você pode digitar um preço manual no ativo.</div>
    </div>
   </div>`;
