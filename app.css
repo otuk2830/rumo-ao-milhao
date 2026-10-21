@@ -165,3 +165,10 @@ html.dark .toast{background:#F8FAFC !important; color:#0B1F3A !important; border
 .tabs a:active{transform:scale(.9)}
 @keyframes rumo-spin{to{transform:rotate(360deg)}}
 .icon-btn.spin{animation:rumo-spin .8s linear infinite}
+
+/* v4.12 — 👁 hide values */
+html.priv .kpi .val, html.priv .kpi .sub, html.priv .item .r, html.priv .item .s, html.priv .row .r, html.priv .alloc-row,
+html.priv td, html.priv .total-line, html.priv .field input, html.priv canvas, html.priv .legend, html.priv .mile b, html.priv .hero .sub, html.priv .money, html.priv .calc, html.priv .row .small
+{filter:blur(8px); -webkit-user-select:none; user-select:none; pointer-events:none}
+html.priv .field input{pointer-events:none}
+.top-actions{gap:6px}

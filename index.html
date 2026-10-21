@@ -13,10 +13,10 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="icon-192.png">
-<link rel="stylesheet" href="app.css?v=4.11">
+<link rel="stylesheet" href="app.css?v=4.12">
 <script>/* theme before paint (not sensitive, kept outside the encrypted data) */
 (function(){var t='auto';try{t=localStorage.getItem('rumo.theme')||'auto'}catch(e){}
-var d=t==='dark'||(t==='auto'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);})();</script>
+var d=t==='dark'||(t==='auto'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);try{if(localStorage.getItem('rumo.hide')==='1')document.documentElement.classList.add('priv')}catch(e){}})();</script>
 </head>
 <body>
 <!-- Lock / setup screen -->
@@ -51,6 +51,7 @@ var d=t==='dark'||(t==='auto'&&matchMedia('(prefers-color-scheme: dark)').matche
     </div>
     <div class="top-actions">
       <button class="icon-btn" id="btn-refresh" aria-label="Atualizar preços">⟳</button>
+      <button class="icon-btn" id="btn-eye" aria-label="Esconder valores">👁</button>
       <button class="icon-btn" id="btn-lock" aria-label="Bloquear">🔒</button>
       <button class="icon-btn" id="btn-settings" aria-label="Ajustes">⚙︎</button>
     </div>
@@ -71,6 +72,6 @@ var d=t==='dark'||(t==='auto'&&matchMedia('(prefers-color-scheme: dark)').matche
 <input type="file" id="file-in" accept=".json,application/json" class="hidden">
 
 <script src="chart.umd.js"></script>
-<script src="app.js?v=4.11"></script>
+<script src="app.js?v=4.12"></script>
 </body>
 </html>

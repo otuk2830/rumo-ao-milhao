@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.11';
+const APP_VERSION = '4.12';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -630,7 +630,7 @@ function vAtivos() {
     <div class="card hero kpi"><div class="lab">${info.n} — pelos ativos</div><div class="val">${M(total)}</div>${inGBP ? `<div class="sub" style="margin-top:-2px">≈ ${brl(total, 2)}</div>` : ''}
       <div class="sub">${rows.length} ${rows.length === 1 ? 'ativo' : 'ativos'}${withCost.length ? ` · ${signed(M, pl)} (${signed(pct, cost ? pl / cost : 0)}) sobre o preço pago` : ''}</div></div>
     <div class="card">
-      <label class="toggle"><input type="checkbox" id="at-auto" ${auto ? 'checked' : ''}><span><b>Usar estes ativos no patrimônio</b><br><span class="small muted">${auto ? 'Ligado: o total de ' + info.n + ' é calculado aqui (preços ao vivo).' : 'Desligado: vale o total digitado em Atualizar (' + (inGBP ? M(manualTotal) : brl(manualTotal)) + ').'}</span></span></label>
+      <label class="toggle"><input type="checkbox" id="at-auto" ${auto ? 'checked' : ''}><span><b>Usar estes ativos no patrimônio</b><br><span class="small muted">${auto ? 'Ligado: o total de ' + info.n + ' é calculado aqui (preços ao vivo).' : 'Desligado: vale o total digitado em Atualizar (<span class="money">' + (inGBP ? M(manualTotal) : brl(manualTotal)) + '</span>).'}</span></span></label>
       <div class="small muted" style="margin-top:8px">Preços: ${DB.prices.assetsAt ? fmtDate(DB.prices.assetsAt) : 'ainda não buscados'} · atualizam sozinhos a cada hora</div>
       <button class="btn block" id="at-refresh">⟳ Atualizar preços agora</button>
       ${needGS ? '<div class="banner" style="margin:10px 0 0">Para preços de FIIs, cole o link da sua planilha do Google em ⚙︎ Ajustes → Chaves de preço → Google Sheets.</div>' : ''}
@@ -729,6 +729,10 @@ function render() {
 }
 $('#btn-settings').onclick = () => { location.hash = '#ajustes'; };
 $('#btn-lock').onclick = lockNow;
+// 👁 hides all amounts on screen (handy in public); the choice is remembered on this phone only
+const setPriv = (on) => { document.documentElement.classList.toggle('priv', on); try { localStorage.setItem('rumo.hide', on ? '1' : '0'); } catch {} const b = $('#btn-eye'); b.textContent = on ? '🙈' : '👁'; b.setAttribute('aria-label', on ? 'Mostrar valores' : 'Esconder valores'); };
+$('#btn-eye').onclick = () => { const on = !document.documentElement.classList.contains('priv'); setPriv(on); toast(on ? 'Valores escondidos' : 'Valores visíveis'); };
+setPriv(document.documentElement.classList.contains('priv'));
 $('#btn-refresh').onclick = () => refreshPrices(false);
 window.addEventListener('online', () => DB && refreshPrices(true));
 
@@ -801,8 +805,8 @@ function vPainel() {
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:baseline"><div class="small"><b>META ${brl(meta)}</b></div><b style="font-size:20px;color:var(--title)">${pct(prog)}</b></div>
       <div class="bar"><div style="width:${(prog * 100).toFixed(1)}%"></div></div>
-      <div><b>Faltam ${brl(pr.falta)}</b></div>
-      <div class="small">No ritmo atual: <b>${pr.ritmo ? ymLabel(pr.ritmo) : '–'}</b> · Cenário (${gbp(s.aportePlanGBP)}/mês, ${pct(s.retornoAnual)} a.a.): <b>${pr.cenario ? ymLabel(pr.cenario) : '–'}</b></div>
+      <div><b>Faltam <span class="money">${brl(pr.falta)}</span></b></div>
+      <div class="small">No ritmo atual: <b>${pr.ritmo ? ymLabel(pr.ritmo) : '–'}</b> · Cenário (<span class="money">${gbp(s.aportePlanGBP)}</span>/mês, ${pct(s.retornoAnual)} a.a.): <b>${pr.cenario ? ymLabel(pr.cenario) : '–'}</b></div>
     </div>
    </div>
    <div class="grid" style="align-content:start">
@@ -811,7 +815,7 @@ function vPainel() {
       ${P.alloc.map((a) => `<div class="alloc-row"><b style="color:${a.c}">${a.n}</b>
         <div class="track"><div style="width:${Math.min(100, a.cur * 100 / .5)}%;background:${a.c}"></div><span style="left:${Math.min(100, a.tgt * 100 / .5)}%"></span></div>
         <span class="r">${pct(a.cur)}</span><span class="r" style="color:${a.gap > 0 ? 'var(--amber)' : 'var(--green)'};font-weight:700">${signed((v) => nf0.format(v), a.gap)}</span></div>`).join('')}
-      <div class="small" style="margin-top:6px">Barra = atual · traço = meta · laranja = falta para a meta · caixa ${brl(DB.balances.caixa)} fora das metas</div>
+      <div class="small" style="margin-top:6px">Barra = atual · traço = meta · laranja = falta para a meta · caixa <span class="money">${brl(DB.balances.caixa)}</span> fora das metas</div>
     </div>
     <div class="card"><h2>Marcos do patrimônio</h2>
       <div class="mile">${ms.map((m) => `<div class="${m.hit ? 'ok' : ''}">${m.v >= 1e6 ? nf0.format(m.v / 1e6) + ' mi' : nf0.format(m.v / 1000) + 'k'}<b>${m.hit ? ymLabel(m.hit) : '–'}</b></div>`).join('')}</div>
