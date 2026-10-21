@@ -4,6 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
+const APP_VERSION = '3.1';
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
 const AUTOLOCK_MS = 2 * 60 * 1000;
@@ -837,6 +838,9 @@ function vAjustes() {
      <button class="btn block" id="a-face">${getMeta()?.face ? '✓ Face ID ativado — desativar' : '🙂 Ativar Face ID'}</button>
      <button class="btn block" id="a-rec">Gerar novo código de recuperação</button>
      <button class="btn danger block" id="a-wipe">Apagar todos os dados deste aparelho</button></div>
+   <div class="card"><h2>Versão do app</h2>
+     <div class="small">Você está usando a versão <b>${APP_VERSION}</b>.</div>
+     <button class="btn block" id="a-update">⟳ Buscar atualização</button></div>
    <div class="card"><h2>Aparência</h2>
      <div class="field"><label>Tema</label><select id="a-theme">${[['auto', 'Automático (igual ao iPhone)'], ['light', 'Claro'], ['dark', 'Escuro']].map(([v, l]) => `<option value="${v}" ${getTheme() === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
    <div class="card"><h2>Privacidade</h2><div class="small">
@@ -856,6 +860,7 @@ function vAjustes() {
   $('#a-people').onchange = async (e) => { const ps = e.target.value.split(',').map((x) => x.trim()).filter(Boolean); if (ps.length) { c.people = ps; await save(); render(); } };
   $('#a-export').onclick = exportBackup;
   $('#a-excel').onclick = exportExcel;
+  $('#a-update').onclick = forceUpdate;
   $('#a-theme').onchange = (e) => { try { localStorage.setItem('rumo.theme', e.target.value); } catch {} applyTheme(); render(); };
   $('#a-import').onclick = () => pickImport(false);
   $('#a-pin').onclick = () => showLock('setup');
@@ -932,6 +937,18 @@ async function exportExcel() {
 
 /* ---------------- boot ---------------- */
 applyTheme();
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((r) => r.update()).catch(() => {});
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded && !DB) { reloaded = true; location.reload(); } });
+}
+async function forceUpdate() {
+  if (!confirm('Baixar a versão mais nova do app? Seus dados não são afetados.')) return;
+  try {
+    for (const k of await caches.keys()) await caches.delete(k);
+    for (const r of (await navigator.serviceWorker?.getRegistrations()) || []) await r.unregister();
+  } catch {}
+  location.replace(location.pathname + '?u=' + Date.now());
+}
 if (localStorage.getItem(K_META) && localStorage.getItem(K_DATA)) showLock('unlock');
 else { localStorage.removeItem(K_META); showLock('setup'); }
