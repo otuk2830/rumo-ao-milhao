@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.0';
+const APP_VERSION = '4.2';
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
 const AUTOLOCK_MS = 2 * 60 * 1000;
@@ -105,7 +105,8 @@ function normalize(d) {
   for (const k of ['settings', 'balances', 'prices', 'draft', 'crypto']) d[k] = Object.assign(emptyDB()[k], d[k] || {});
   d.settings.targets = Object.assign(emptyDB().settings.targets, d.settings.targets || {});
   d.settings.auto = Object.assign({ acoes: false, fiis: false, stocks: false }, d.settings.auto || {});
-  d.settings.keys = Object.assign({ brapi: '', finnhub: '' }, d.settings.keys || {});
+  d.settings.keys = Object.assign({ brapi: '', finnhub: '', alpha: '', hg: '' }, d.settings.keys || {});
+  d.settings.keyStatus = d.settings.keyStatus || {};
   d.assets = (d.assets || []).map((a) => ({ id: a.id || uid(), ...a }));
   d.history = (d.history || []).filter((h) => h && h.month).sort((a, b) => a.month.localeCompare(b.month));
   d.crypto.log = (d.crypto.log || []).map((x) => ({ id: x.id || uid(), ...x })).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
@@ -217,13 +218,13 @@ async function refreshPrices(silent) {
   } catch (e) { console.warn('crypto price', e); }
   let fx = false;
   try {
-    const j = await fetchJSON('https://api.frankfurter.app/latest?from=GBP&to=BRL,USD');
-    if (j.rates?.BRL && j.rates?.USD) { p.gbpbrl = j.rates.BRL; p.usdbrl = j.rates.BRL / j.rates.USD; fx = true; }
+    const j = await fetchJSON('https://api.frankfurter.app/latest?from=GBP&to=BRL,USD,EUR');
+    if (j.rates?.BRL && j.rates?.USD) { p.gbpbrl = j.rates.BRL; p.usdbrl = j.rates.BRL / j.rates.USD; if (j.rates.EUR) p.eurbrl = j.rates.BRL / j.rates.EUR; fx = true; }
   } catch (e) { console.warn('fx frankfurter', e); }
   if (!fx) {
     try {
       const j = await fetchJSON('https://open.er-api.com/v6/latest/GBP');
-      if (j.rates?.BRL && j.rates?.USD) { p.gbpbrl = j.rates.BRL; p.usdbrl = j.rates.BRL / j.rates.USD; fx = true; }
+      if (j.rates?.BRL && j.rates?.USD) { p.gbpbrl = j.rates.BRL; p.usdbrl = j.rates.BRL / j.rates.USD; if (j.rates.EUR) p.eurbrl = j.rates.BRL / j.rates.EUR; fx = true; }
     } catch (e) { console.warn('fx er-api', e); }
   }
   let ar = null; try { ar = await refreshAssetPrices(!silent); } catch (e) { console.warn('assets', e); }
@@ -456,13 +457,13 @@ function pickImport(fromWelcome) {
 /* ---------------- Ativos: holdings with live prices ---------------- */
 const ACLS = [
   { k: 'acoes', n: 'Ações', market: 'B3' },
-  { k: 'fiis', n: 'FIIs', market: 'B3' },
+  { k: 'fiis', n: 'FIIs', market: 'HG' },
   { k: 'stocks', n: 'Exterior', market: 'US' },
 ];
-const FXOF = (cur) => (cur === 'BRL' ? 1 : cur === 'USD' ? num(DB.prices.usdbrl) : cur === 'GBP' ? num(DB.prices.gbpbrl) : cur === 'GBX' ? num(DB.prices.gbpbrl) / 100 : 1);
-const curOf = (a) => (a.market === 'B3' ? 'BRL' : a.market === 'US' ? 'USD' : a.currency || 'BRL');
+const FXOF = (cur) => (cur === 'BRL' ? 1 : cur === 'USD' ? num(DB.prices.usdbrl) : cur === 'GBP' ? num(DB.prices.gbpbrl) : cur === 'GBX' ? num(DB.prices.gbpbrl) / 100 : cur === 'EUR' ? num(DB.prices.eurbrl) : 1);
+const curOf = (a) => (a.market === 'B3' || a.market === 'HG' ? 'BRL' : a.market === 'US' ? 'USD' : a.currency || 'BRL');
 const priceOf = (a) => (a.market === 'MANUAL' ? num(a.manualPrice) : (typeof a.price === 'number' && a.price > 0 ? a.price : num(a.manualPrice)));
-const STALE_MS = 3 * 864e5;
+const STALE_MS = 4 * 864e5;
 function assetRows(cls) {
   return (DB.assets || []).filter((a) => !cls || a.cls === cls).map((a) => {
     const cur = curOf(a), fx = FXOF(cur), pr = priceOf(a), value = num(a.qty) * pr * fx;
@@ -473,7 +474,7 @@ function assetRows(cls) {
   });
 }
 const classTotal = (cls) => assetRows(cls).reduce((s, r) => s + r.value, 0);
-const curSym = (c) => ({ BRL: 'R$', USD: 'US$', GBP: '£', GBX: 'p' }[c] || c);
+const curSym = (c) => ({ BRL: 'R$', USD: 'US$', GBP: '£', GBX: 'p', EUR: '€' }[c] || c);
 const fmtPx = (c, v) => (c === 'GBX' ? nf2.format(v || 0) + 'p' : curSym(c) + ' ' + nf2.format(v || 0));
 
 async function fetchJSONo(url, opts = {}) {
@@ -481,6 +482,7 @@ async function fetchJSONo(url, opts = {}) {
   try { const r = await fetch(url, { ...opts, signal: ctl.signal, cache: 'no-store' }); const j = await r.json().catch(() => ({})); if (!r.ok) { const e = new Error(j?.message || j?.error || r.status); e.status = r.status; throw e; } return j; }
   finally { clearTimeout(t); }
 }
+const LASTERR = {};
 function brapiParse(j) {
   const out = {};
   for (const r of j?.results || []) {
@@ -496,18 +498,54 @@ async function brapiQuotes(syms, key) {
     () => fetchJSONo('https://brapi.dev/api/v2/stocks/quote?symbols=' + encodeURIComponent(list), key ? { headers: { Authorization: 'Bearer ' + key } } : {}),
     () => fetchJSONo('https://brapi.dev/api/quote/' + encodeURIComponent(list) + (key ? '?token=' + encodeURIComponent(key) : '')),
   ];
-  for (const t of tries) { try { Object.assign(got, brapiParse(await t())); if (syms.every((s) => got[s])) return got; } catch (e) { console.warn('brapi', e); } }
+  for (const t of tries) { try { Object.assign(got, brapiParse(await t())); if (syms.every((s) => got[s])) return got; } catch (e) { console.warn('brapi', e); LASTERR.brapi = e.message; } }
   for (const s of syms.filter((x) => !got[x])) {   // free plans may allow only one ticker per request
-    try { Object.assign(got, brapiParse(await fetchJSONo('https://brapi.dev/api/quote/' + encodeURIComponent(s) + (key ? '?token=' + encodeURIComponent(key) : '')))); } catch (e) { console.warn('brapi one', s, e); }
+    try { Object.assign(got, brapiParse(await fetchJSONo('https://brapi.dev/api/quote/' + encodeURIComponent(s) + (key ? '?token=' + encodeURIComponent(key) : '')))); } catch (e) { console.warn('brapi one', s, e); LASTERR.brapi = e.message; }
   }
   return got;
 }
 async function finnhubQuotes(syms, key) {
   const got = {}; if (!key) return got;
   for (const s of syms) {
-    try { const j = await fetchJSONo('https://finnhub.io/api/v1/quote?symbol=' + encodeURIComponent(s) + '&token=' + encodeURIComponent(key)); if (j.c > 0) got[s] = j.c; } catch (e) { console.warn('finnhub', s, e); }
+    try { const j = await fetchJSONo('https://finnhub.io/api/v1/quote?symbol=' + encodeURIComponent(s) + '&token=' + encodeURIComponent(key)); if (j.c > 0) got[s] = j.c; else LASTERR.finnhub = 'ticker sem preço (' + s + ')'; } catch (e) { console.warn('finnhub', s, e); LASTERR.finnhub = e.message; }
   }
   return got;
+}
+// Alpha Vantage: London (.LON, prices in pence) and European exchanges (.DEX, .PAR, .AMS…). End-of-day prices, ~25 requests/day on the free plan.
+async function alphaQuotes(syms, key) {
+  const got = {}; if (!key) return got;
+  for (const s of syms) {
+    try {
+      const j = await fetchJSONo('https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=' + encodeURIComponent(s) + '&apikey=' + encodeURIComponent(key));
+      const px = Number(j?.['Global Quote']?.['05. price']);
+      if (px > 0) got[s] = px; else LASTERR.alpha = j?.Information || j?.Note || j?.['Error Message'] || 'ticker sem preço (' + s + ')';
+    } catch (e) { console.warn('alpha', s, e); LASTERR.alpha = e.message; }
+  }
+  return got;
+}
+// HG Brasil: B3 shares AND FIIs on the free plan (400 requests/day). Needs a key of type "uso exposto" with your site's domain authorised.
+async function hgQuotes(syms, key) {
+  const got = {}; if (!key || !syms.length) return got;
+  const k = encodeURIComponent(key);
+  try {
+    const j = await fetchJSONo('https://api.hgbrasil.com/v2/finance/quotes?format=json-cors&key=' + k + '&tickers=' + syms.map((s) => 'B3:' + s).join(','));
+    for (const r of Array.isArray(j?.results) ? j.results : []) {
+      const sym = String(r.symbol || r.ticker || r.code || '').split(':').pop().toUpperCase(), px = Number(r.quote?.value ?? r.price);
+      if (sym && px > 0) got[sym] = px;
+    }
+    if (j?.valid_key === false) LASTERR.hg = 'chave inválida';
+  } catch (e) { console.warn('hg v2', e); LASTERR.hg = e.message; }
+  for (const s of syms.filter((x) => !got[x])) {   // older endpoint, one ticker at a time
+    try {
+      const j = await fetchJSONo('https://api.hgbrasil.com/finance/stock_price?format=json-cors&key=' + k + '&symbol=' + encodeURIComponent(s.toLowerCase()));
+      const r = j?.results?.[s] || j?.results?.[s.toUpperCase()] || Object.values(j?.results || {})[0];
+      if (r?.price > 0) got[s] = Number(r.price); else LASTERR.hg = r?.message || (j?.valid_key === false ? 'chave inválida' : 'ticker sem preço (' + s + ')');
+    } catch (e) { console.warn('hg v1', s, e); LASTERR.hg = e.message; }
+  }
+  return got;
+}
+async function setKeyStatus(prov, ok, okMsg) {
+  DB.settings.keyStatus[prov] = { ok, msg: ok ? okMsg : (LASTERR[prov] || 'sem resposta'), at: new Date().toISOString() };
 }
 let assetBusy = false;
 async function refreshAssetPrices(force) {
@@ -517,11 +555,18 @@ async function refreshAssetPrices(force) {
   try {
     const keys = DB.settings.keys || {};
     const b3 = [...new Set(A.filter((a) => a.market === 'B3').map((a) => a.ticker))], us = [...new Set(A.filter((a) => a.market === 'US').map((a) => a.ticker))];
-    const [pb, pu] = await Promise.all([b3.length ? brapiQuotes(b3, keys.brapi) : {}, us.length ? finnhubQuotes(us, keys.finnhub) : {}]);
+    const euDue = force || !DB.prices.euAt || Date.now() - new Date(DB.prices.euAt) > 20 * 3600 * 1000;   // saves the small daily allowance
+    const eu = euDue ? [...new Set(A.filter((a) => a.market === 'EU').map((a) => a.ticker))] : [];
+    const hg = [...new Set(A.filter((a) => a.market === 'HG').map((a) => a.ticker))];
+    const [pb, pu, pe, ph] = await Promise.all([b3.length ? brapiQuotes(b3, keys.brapi) : {}, us.length ? finnhubQuotes(us, keys.finnhub) : {}, eu.length ? alphaQuotes(eu, keys.alpha) : {}, hg.length ? hgQuotes(hg, keys.hg) : {}]);
+    if (hg.length && keys.hg) await setKeyStatus('hg', Object.keys(ph).length > 0, `${Object.keys(ph).length}/${hg.length} preços`);
+    if (b3.length) await setKeyStatus('brapi', Object.keys(pb).length > 0, `${Object.keys(pb).length}/${b3.length} preços`);
+    if (us.length && keys.finnhub) await setKeyStatus('finnhub', Object.keys(pu).length > 0, `${Object.keys(pu).length}/${us.length} preços`);
+    if (eu.length && keys.alpha) { await setKeyStatus('alpha', Object.keys(pe).length > 0, `${Object.keys(pe).length}/${eu.length} preços`); DB.prices.euAt = new Date().toISOString(); }
     let ok = 0, fail = [];
     for (const a of A) {
-      if (a.market === 'MANUAL') continue;
-      const px = (a.market === 'B3' ? pb : pu)[a.ticker];
+      if (a.market === 'MANUAL' || (a.market === 'EU' && !euDue)) continue;
+      const px = (a.market === 'B3' ? pb : a.market === 'US' ? pu : a.market === 'HG' ? ph : pe)[a.ticker];
       if (px) { a.price = px; a.priceAt = new Date().toISOString(); a.priceErr = null; ok++; }
       else { a.priceErr = 'não atualizou'; fail.push(a.ticker); }   // keeps the last good price
     }
@@ -542,7 +587,7 @@ function vAtivos() {
   const total = rows.reduce((s, r) => s + r.value, 0), auto = !!DB.settings.auto?.[cls];
   const cost = rows.filter((r) => r.cost !== null).reduce((s, r) => s + r.cost, 0), withCost = rows.filter((r) => r.cost !== null);
   const pl = withCost.reduce((s, r) => s + r.pl, 0);
-  const needB3 = rows.some((r) => r.a.market === 'B3') && !keys.brapi, needUS = rows.some((r) => r.a.market === 'US') && !keys.finnhub;
+  const needHG = rows.some((r) => r.a.market === 'HG') && !keys.hg, needB3 = rows.some((r) => r.a.market === 'B3') && !keys.brapi, needUS = rows.some((r) => r.a.market === 'US') && !keys.finnhub, needEU = rows.some((r) => r.a.market === 'EU') && !keys.alpha;
   const manualTotal = cls === 'stocks' ? (num(DB.balances.pieStocks) + num(DB.balances.pieReits) + num(DB.balances.pieEtfs)) * num(DB.prices.gbpbrl) : num(DB.balances[cls]);
   $('#view').innerHTML = `${segBar(cls)}
   <div class="grid split">
@@ -553,8 +598,10 @@ function vAtivos() {
       <label class="toggle"><input type="checkbox" id="at-auto" ${auto ? 'checked' : ''}><span><b>Usar estes ativos no patrimônio</b><br><span class="small muted">${auto ? 'Ligado: o total de ' + info.n + ' é calculado aqui (preços ao vivo).' : 'Desligado: vale o total digitado em Atualizar (' + brl(manualTotal) + ').'}</span></span></label>
       <div class="small muted" style="margin-top:8px">Preços: ${DB.prices.assetsAt ? fmtDate(DB.prices.assetsAt) : 'ainda não buscados'} · atualizam sozinhos a cada hora</div>
       <button class="btn block" id="at-refresh">⟳ Atualizar preços agora</button>
+      ${needHG ? '<div class="banner" style="margin:10px 0 0">Para preços de FIIs/ações, crie a chave grátis em <b>hgbrasil.com</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
       ${needB3 ? '<div class="banner" style="margin:10px 0 0">Para preços da B3, crie a chave grátis em <b>brapi.dev</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
       ${needUS ? '<div class="banner" style="margin:10px 0 0">Para preços dos EUA, crie a chave grátis em <b>finnhub.io</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
+      ${needEU ? '<div class="banner" style="margin:10px 0 0">Para Londres/Europa, crie a chave grátis em <b>alphavantage.co</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
     </div>
    </div>
    <div class="card" style="align-content:start"><h2>${info.n}</h2>
@@ -583,8 +630,9 @@ function editAsset(id, cls) {
     <div class="field"><label>Ticker<small>${a.cls === 'stocks' ? 'ex.: AAPL, O, VOO' : 'ex.: PETR4, HGLG11'}</small></label><input id="ea-t" value="${esc(a.ticker)}" autocapitalize="characters" style="text-align:left"></div>
     ${a.cls === 'stocks' ? `<div class="field"><label>Tipo</label><select id="ea-kind">${['Stock', 'REIT', 'ETF'].map((k) => `<option ${a.kind === k ? 'selected' : ''}>${k}</option>`).join('')}</select></div>` : ''}
     <div class="field"><label>Preço vem de</label><select id="ea-m">
-      ${[['B3', 'Automático — B3 (brapi)'], ['US', 'Automático — EUA (Finnhub)'], ['MANUAL', 'Manual — eu digito o preço']].map(([v, l]) => `<option value="${v}" ${a.market === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-    <div class="field" id="ea-cur-row"><label>Moeda do preço manual</label><select id="ea-cur">${[['BRL', 'R$'], ['USD', 'US$'], ['GBP', '£'], ['GBX', 'pence (p)']].map(([v, l]) => `<option value="${v}" ${a.currency === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      ${[['HG', 'Automático — B3 ações e FIIs (HG Brasil)'], ['B3', 'Automático — B3 só ações (brapi)'], ['US', 'Automático — EUA (Finnhub)'], ['EU', 'Automático — Londres/Europa (Alpha Vantage)'], ['MANUAL', 'Manual — eu digito o preço']].map(([v, l]) => `<option value="${v}" ${a.market === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="small muted hidden" id="ea-eu-hint" style="margin:-6px 0 10px">Use o sufixo da bolsa: <b>.LON</b> Londres (preço em pence), <b>.DEX</b> Alemanha, <b>.PAR</b> Paris, <b>.AMS</b> Amsterdã. Ex.: VUSA.LON. Preço de fechamento, atualiza 1× por dia.</div>
+    <div class="field" id="ea-cur-row"><label>Moeda do preço</label><select id="ea-cur">${[['BRL', 'R$'], ['USD', 'US$'], ['GBP', '£'], ['GBX', 'pence (p)'], ['EUR', '€']].map(([v, l]) => `<option value="${v}" ${a.currency === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <div class="field"><label>Quantidade</label>${inp('ea-qty', a.qty)}</div>
     <div class="field"><label>Preço médio pago<small>opcional — mostra lucro/prejuízo</small></label>${inp('ea-avg', a.avg)}</div>
     <div class="field"><label>Preço manual<small>usado se for "Manual" ou se o automático falhar</small></label>${inp('ea-man', a.manualPrice)}</div>
@@ -593,8 +641,11 @@ function editAsset(id, cls) {
     ${id ? '<button class="btn block" id="ea-buy">＋ Comprei mais</button><button class="btn danger block" id="ea-del">Apagar</button>' : ''}
     <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
     $$('input.pt', el).forEach(liveFormat);
-    const curRow = () => $('#ea-cur-row', el).classList.toggle('hidden', $('#ea-m', el).value !== 'MANUAL');
-    $('#ea-m', el).onchange = curRow; curRow();
+    const curRow = (changed) => {
+      const m = $('#ea-m', el).value; $('#ea-cur-row', el).classList.toggle('hidden', m !== 'MANUAL' && m !== 'EU'); $('#ea-eu-hint', el).classList.toggle('hidden', m !== 'EU');
+      if (changed && m === 'EU') { const t = $('#ea-t', el).value.toUpperCase(); $('#ea-cur', el).value = t.endsWith('.LON') ? 'GBX' : 'EUR'; }
+    };
+    $('#ea-m', el).onchange = () => curRow(true); $('#ea-t', el).addEventListener('change', () => curRow(true)); curRow(false);
     $('#ea-save', el).onclick = async () => {
       const t = $('#ea-t', el).value.trim().toUpperCase().replace(/\s+/g, ''); if (!t) return toast('Digite o ticker');
       const o = { ...a, ticker: t, kind: $('#ea-kind', el)?.value || a.kind, market: $('#ea-m', el).value, currency: $('#ea-cur', el).value,
@@ -1007,6 +1058,12 @@ function editOp(id) {
 }
 
 /* ----- Ajustes ----- */
+function keyBadge(prov) {
+  const st = DB.settings.keyStatus?.[prov], has = !!DB.settings.keys?.[prov];
+  if (!has) return '<div class="kst none">— sem chave</div>';
+  if (!st) return '<div class="kst none">• ainda não testada</div>';
+  return `<div class="kst ${st.ok ? 'ok' : 'bad'}">${st.ok ? '✓ Funcionando' : '✗ Não funcionou'} · ${esc(st.msg)} · ${fmtDate(st.at)}</div>`;
+}
 function vAjustes() {
   const s = DB.settings, c = DB.crypto;
   const tsum = CLASSES.reduce((a, k) => a + num(s.targets[k.k]), 0);
@@ -1022,9 +1079,16 @@ function vAjustes() {
      <div class="small ${Math.abs(tsum - 1) > 1e-6 ? 'neg' : 'pos'}">Soma: ${pct(tsum)} ${Math.abs(tsum - 1) > 1e-6 ? '— precisa somar 100%' : '✓'}</div></div>
    <div class="card"><h2>Chaves de preço (grátis)</h2>
      <div class="small muted">Só precisa se usar a aba Ativos. Ficam guardadas criptografadas neste aparelho.</div>
-     <div class="field"><label>brapi.dev (B3)<small>brapi.dev → criar conta → copiar token</small></label><input id="k-brapi" value="${esc(s.keys?.brapi || '')}" autocomplete="off" style="text-align:left"></div>
+     <div class="field"><label>HG Brasil (B3 ações e FIIs)<small>hgbrasil.com → chave "para uso exposto" com o domínio do app</small></label><input id="k-hg" value="${esc(s.keys?.hg || '')}" autocomplete="off" style="text-align:left"></div>
+     ${keyBadge('hg')}
+     <div class="field"><label>brapi.dev (B3 só ações)<small>brapi.dev → criar conta → copiar token</small></label><input id="k-brapi" value="${esc(s.keys?.brapi || '')}" autocomplete="off" style="text-align:left"></div>
+     ${keyBadge('brapi')}
      <div class="field"><label>Finnhub (EUA)<small>finnhub.io → Get free API key</small></label><input id="k-finn" value="${esc(s.keys?.finnhub || '')}" autocomplete="off" style="text-align:left"></div>
-     <button class="btn block" id="k-test">Testar chaves</button></div>
+     ${keyBadge('finnhub')}
+     <div class="field"><label>Alpha Vantage (Londres/Europa)<small>alphavantage.co → Get free API key</small></label><input id="k-alpha" value="${esc(s.keys?.alpha || '')}" autocomplete="off" style="text-align:left"></div>
+     ${keyBadge('alpha')}
+     <button class="btn block" id="k-test">Testar chaves</button>
+     <div class="small muted" style="margin-top:6px">O teste do Alpha Vantage usa 1 das ~25 consultas grátis do dia.</div></div>
    <div class="card"><h2>Cripto — saldos de antes do registro</h2>
      <div class="small">Pessoas (separe por vírgula):</div>
      <div class="field"><label>Pessoas</label><input id="a-people" value="${esc(c.people.join(', '))}" style="text-align:left"></div>
@@ -1051,7 +1115,7 @@ function vAjustes() {
      <div class="field"><label>Tema</label><select id="a-theme">${[['auto', 'Automático (igual ao iPhone)'], ['light', 'Claro'], ['dark', 'Escuro']].map(([v, l]) => `<option value="${v}" ${getTheme() === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
    <div class="card"><h2>Privacidade</h2><div class="small">
      • Nenhum dado seu sai do aparelho. Ficam guardados criptografados com o seu PIN.<br>
-     • A internet só é usada para buscar preços (CoinGecko para cripto, Frankfurter/BCE para câmbio, brapi e Finnhub para ações). Esses serviços recebem apenas os nomes (tickers), nunca quantidades ou valores.<br>
+     • A internet só é usada para buscar preços (CoinGecko para cripto, Frankfurter/BCE para câmbio, HG Brasil, brapi, Finnhub e Alpha Vantage para ações e FIIs). Esses serviços recebem apenas os nomes (tickers), nunca quantidades ou valores.<br>
      • ${getMeta()?.open ? 'O app está sem PIN (abre direto).' : 'O app trava sozinho após 2 minutos fora da tela.'}<br>
      • Face ID usa uma "chave de acesso" (passkey) do iPhone: o app só abre depois que o Face ID confirma que é você.</div></div>
   </div></div>`;
@@ -1064,13 +1128,19 @@ function vAjustes() {
     await save(); render();
   }));
   $('#a-people').onchange = async (e) => { const ps = e.target.value.split(',').map((x) => x.trim()).filter(Boolean); if (ps.length) { c.people = ps; await save(); render(); } };
-  $('#k-brapi').onchange = async (e) => { DB.settings.keys.brapi = e.target.value.trim(); await save(); toast('Chave brapi salva'); };
-  $('#k-finn').onchange = async (e) => { DB.settings.keys.finnhub = e.target.value.trim(); await save(); toast('Chave Finnhub salva'); };
+  $('#k-brapi').onchange = async (e) => { DB.settings.keys.brapi = e.target.value.trim(); delete DB.settings.keyStatus.brapi; await save(); render(); };
+  $('#k-finn').onchange = async (e) => { DB.settings.keys.finnhub = e.target.value.trim(); delete DB.settings.keyStatus.finnhub; await save(); render(); };
+  $('#k-hg').onchange = async (e) => { DB.settings.keys.hg = e.target.value.trim(); delete DB.settings.keyStatus.hg; await save(); render(); };
+  $('#k-alpha').onchange = async (e) => { DB.settings.keys.alpha = e.target.value.trim(); delete DB.settings.keyStatus.alpha; await save(); render(); };
   $('#k-test').onclick = async () => {
-    DB.settings.keys.brapi = $('#k-brapi').value.trim(); DB.settings.keys.finnhub = $('#k-finn').value.trim(); await save();
-    toast('Testando…');
-    const [b, f] = await Promise.all([brapiQuotes(['PETR4'], DB.settings.keys.brapi), finnhubQuotes(['AAPL'], DB.settings.keys.finnhub)]);
-    toast(`brapi: ${b.PETR4 ? '✓ PETR4 R$ ' + nf2.format(b.PETR4) : '✗ sem resposta'} · Finnhub: ${f.AAPL ? '✓ AAPL US$ ' + nf2.format(f.AAPL) : DB.settings.keys.finnhub ? '✗ sem resposta' : '— sem chave'}`, 6000);
+    const K = DB.settings.keys; K.brapi = $('#k-brapi').value.trim(); K.finnhub = $('#k-finn').value.trim(); K.alpha = $('#k-alpha').value.trim(); K.hg = $('#k-hg').value.trim();
+    toast('Testando…'); for (const k in LASTERR) delete LASTERR[k];
+    const [b, f, a, g] = await Promise.all([K.brapi ? brapiQuotes(['PETR4'], K.brapi) : null, K.finnhub ? finnhubQuotes(['AAPL'], K.finnhub) : null, K.alpha ? alphaQuotes(['TSCO.LON'], K.alpha) : null, K.hg ? hgQuotes(['HGLG11'], K.hg) : null]);
+    if (g) await setKeyStatus('hg', !!g.HGLG11, 'HGLG11 R$ ' + nf2.format(g.HGLG11 || 0));
+    if (b) await setKeyStatus('brapi', !!b.PETR4, 'PETR4 R$ ' + nf2.format(b.PETR4 || 0));
+    if (f) await setKeyStatus('finnhub', !!f.AAPL, 'AAPL US$ ' + nf2.format(f.AAPL || 0));
+    if (a) await setKeyStatus('alpha', !!a['TSCO.LON'], 'TSCO.LON ' + nf2.format(a['TSCO.LON'] || 0) + 'p');
+    await save(); render(); toast('Teste concluído');
   };
   $('#a-export').onclick = exportBackup;
   $('#a-excel').onclick = exportExcel;
