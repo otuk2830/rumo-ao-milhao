@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.12';
+const APP_VERSION = '4.13';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -729,6 +729,27 @@ function render() {
 }
 $('#btn-settings').onclick = () => { location.hash = '#ajustes'; };
 $('#btn-lock').onclick = lockNow;
+// pull down from the top of any tab to refresh all prices (same as ⟳)
+(() => {
+  const ind = document.createElement('div'); ind.id = 'ptr'; ind.innerHTML = '<span>⟳</span>'; document.body.appendChild(ind);
+  let y0 = null, dist = 0, busy = false;
+  const can = () => DB && !busy && window.scrollY <= 0 && $('#modal').classList.contains('hidden') && !$('#app').classList.contains('hidden');
+  document.addEventListener('touchstart', (e) => { y0 = can() && e.touches.length === 1 ? e.touches[0].clientY : null; dist = 0; if (y0 !== null) ind.style.top = ($('header.top').getBoundingClientRect().bottom + 8) + 'px'; }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (y0 === null) return; dist = Math.max(0, (e.touches[0].clientY - y0) * 0.5);
+    if (window.scrollY > 0) { y0 = null; dist = 0; }
+    ind.style.transform = `translate(-50%, ${Math.min(dist, 80) - 50}px) rotate(${dist * 4}deg)`; ind.style.opacity = Math.min(1, dist / 60);
+    ind.classList.toggle('ready', dist >= 70);
+  }, { passive: true });
+  document.addEventListener('touchend', async () => {
+    if (y0 === null) return; y0 = null;
+    if (dist >= 70) {
+      busy = true; ind.classList.add('spin'); ind.style.opacity = 1; ind.style.transform = 'translate(-50%, 20px)';
+      try { await refreshPrices(false); } finally { busy = false; ind.classList.remove('spin', 'ready'); ind.style.opacity = 0; ind.style.transform = ''; }
+    } else { ind.style.opacity = 0; ind.style.transform = ''; ind.classList.remove('ready'); }
+    dist = 0;
+  });
+})();
 // 👁 hides all amounts on screen (handy in public); the choice is remembered on this phone only
 const setPriv = (on) => { document.documentElement.classList.toggle('priv', on); try { localStorage.setItem('rumo.hide', on ? '1' : '0'); } catch {} const b = $('#btn-eye'); b.textContent = on ? '🙈' : '👁'; b.setAttribute('aria-label', on ? 'Mostrar valores' : 'Esconder valores'); };
 $('#btn-eye').onclick = () => { const on = !document.documentElement.classList.contains('priv'); setPriv(on); toast(on ? 'Valores escondidos' : 'Valores visíveis'); };
@@ -1056,7 +1077,7 @@ function vCripto() {
    <div class="card hero kpi"><div class="lab">Total em cripto</div><div class="val">${brl(cs.totalBRL)}</div>
      <div class="sub">${usd(cs.totalUSD)} · ${gbp(cs.totalBRL / (p.gbpbrl || 1))} · ${P.total ? pct(cs.totalBRL / P.total) : '–'} do patrimônio</div></div>
    <div class="card"><h2>Por moeda</h2>
-     ${cs.coins.map((x) => `<div class="row"><span class="l"><b>${x.k}</b> <span class="small">${x.units.toLocaleString('pt-BR', { maximumFractionDigits: x.dec })}</span></span><span class="r">${brl(x.valBRL)}<div class="small">${usd(p[x.k])} cada</div></span></div>`).join('')}</div>
+     ${cs.coins.map((x) => `<div class="row"><span class="l"><b>${x.k}</b> <span class="small">${x.units.toLocaleString('pt-BR', { maximumFractionDigits: x.dec })}</span></span><span class="r">${usd(p.usdbrl ? x.valBRL / p.usdbrl : x.units * num(p[x.k]))}<div class="small">${brl(x.valBRL)}</div></span></div>`).join('')}</div>
    <div class="card"><h2>Bitcoin por pessoa</h2>
      ${c.people.map((w) => { const u = cs.coins[0].per[w]; return `<div class="row"><span class="l">${esc(w)} <span class="small">${u.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></span><span class="r">${brl(u * p.BTC * p.usdbrl)}</span></div>`; }).join('')}
      ${cs.coins[0].fee ? `<div class="row"><span class="l small">Taxas de transferência</span><span class="r small">−${cs.coins[0].fee.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></div>` : ''}</div>
