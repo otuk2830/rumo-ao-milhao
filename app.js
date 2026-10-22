@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.22';
+const APP_VERSION = '4.23';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -866,6 +866,12 @@ function vPainel() {
   const HM = { BRL: (v) => brl(v), GBP: (v) => gbp(v / (DB.prices.gbpbrl || 1)), USD: (v) => usd(v / (DB.prices.usdbrl || 1)) };
   let heroCur = 'BRL'; try { heroCur = HM[localStorage.getItem('rumo.cur')] ? localStorage.getItem('rumo.cur') : 'BRL'; } catch {}
   const heroOpen = () => { try { return localStorage.getItem('rumo.hero') === '1'; } catch { return false; } };
+  const CV = (v) => HM[heroCur](v);   // every amount on the Painel follows the ⇄ currency
+  // "Este mês": live patrimônio vs the last month saved before this calendar month
+  const prevM = DB.history.filter((h) => typeof h.pat === 'number' && h.month < ym()).slice(-1)[0] || null, mChg = prevM ? P.total - prevM.pat : 0;
+  // crypto 24h move, weighted by what you hold of each coin
+  const c24 = (() => { let now = 0, before = 0, any = false; for (const x of cs.coins) { const ch = DB.prices[x.k + '_24h']; if (typeof ch !== 'number' || !x.valUSD) continue; any = true; now += x.valUSD; before += x.valUSD / (1 + ch / 100); } return any && before ? now / before - 1 : null; })();
+  const aportesYearGBP = DB.history.filter((h) => h.month.startsWith(st.year) && h.aporteGBP).reduce((a, h) => a + h.aporteGBP, 0);
   const aportesYear = DB.history.filter((h) => h.month.startsWith(st.year) && h.aporteGBP && h.fx).reduce((a, h) => a + h.aporteGBP * h.fx, 0);
   $('#view').innerHTML = `
   ${backupOld ? `<div class="banner" onclick="location.hash='#ajustes'">💾 Faça um backup — ${s.lastBackup ? 'o último foi há mais de 30 dias' : 'você ainda não fez nenhum'}. Toque aqui.</div>` : ''}
@@ -881,32 +887,33 @@ function vPainel() {
     <div class="grid g2">
       <div class="card kpi click" onclick="location.hash='#graficos'"><div class="lab">Rentabilidade ${st.year}</div>
         <div class="val ${Ry ? (Ry.r < 0 ? 'neg' : 'pos') : ''}">${Ry ? signed(pct, Ry.r) : '–'}</div>
-        <div class="sub">${Ry ? `${Ry.n} ${Ry.n === 1 ? 'mês' : 'meses'} · ${signed(brl, Ry.gain)}` : 'começa com os aportes'}</div></div>
-      <div class="card kpi click" onclick="location.hash='#historico'"><div class="lab">Crescimento/mês</div>
-        <div class="val pos">${st.cresc12 === null ? '–' : brl(st.cresc12)}</div><div class="sub">média 12m (com aportes)</div></div>
+        <div class="sub">${Ry ? `${Ry.n} ${Ry.n === 1 ? 'mês' : 'meses'} · ${signed(CV, Ry.gain)}` : 'começa com os aportes'}</div></div>
+      <div class="card kpi click" onclick="location.hash='#historico'"><div class="lab">Este mês</div>
+        ${prevM ? `<div class="val ${mChg < 0 ? 'neg' : 'pos'}">${signed(CV, mChg)}</div><div class="sub">${signed(pct, prevM.pat ? mChg / prevM.pat : 0)} · desde ${ymLabel(prevM.month)} · ao vivo</div>`
+          : '<div class="val">–</div><div class="sub">precisa de um mês salvo</div>'}</div>
       <div class="card kpi click" onclick="location.hash='#dividendos'"><div class="lab">Dividendos ${st.year}</div>
-        <div class="val">${brl(st.divYear)}</div><div class="sub">média ${brl(st.monthsWithDiv ? st.divYear / st.monthsWithDiv : 0)}/mês</div></div>
+        <div class="val">${CV(st.divYear)}</div><div class="sub">média ${CV(st.monthsWithDiv ? st.divYear / st.monthsWithDiv : 0)}/mês</div></div>
       <div class="card kpi click" onclick="location.hash='#dividendos'"><div class="lab">Dividendos na vida</div>
-        <div class="val">${brl(st.divLife)}</div><div class="sub">próx. marco ${brl((Math.floor(st.divLife / 10000) + 1) * 10000)}</div></div>
+        <div class="val">${CV(st.divLife)}</div><div class="sub">próx. marco ${brl((Math.floor(st.divLife / 10000) + 1) * 10000)}</div></div>
       <div class="card kpi click" onclick="location.hash='#historico'"><div class="lab">Aportes ${st.year}</div>
-        <div class="val">${brl(aportesYear)}</div><div class="sub">dinheiro novo no ano</div></div>
-      <div class="card kpi click" onclick="location.hash='#cripto'"><div class="lab">Bitcoin lucro</div>
-        <div class="val ${cs.btcPL.pl < 0 ? 'neg' : 'pos'}">${signed(usd, cs.btcPL.pl)}</div><div class="sub">${signed(pct, cs.btcPL.plPct)} · médio ${usd(cs.btcPL.avg)}</div></div>
+        <div class="val">${heroCur === 'GBP' ? gbp(aportesYearGBP) : CV(aportesYear)}</div><div class="sub">dinheiro novo no ano</div></div>
+      <div class="card kpi click" onclick="location.hash='#cripto'"><div class="lab">Cripto hoje</div>
+        <div class="val">${CV(cs.totalBRL)}</div><div class="sub">${typeof c24 === 'number' ? `<span class="${c24 < 0 ? 'neg' : 'pos'}">${c24 < 0 ? '▼' : '▲'} ${pct(Math.abs(c24))} 24h</span> · ` : ''}BTC ${usd(DB.prices.BTC)}</div></div>
     </div>
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:baseline"><div class="small"><b>META ${brl(meta)}</b></div><b style="font-size:20px;color:var(--title)">${pct(prog)}</b></div>
       <div class="bar"><div style="width:${(prog * 100).toFixed(1)}%"></div></div>
-      <div><b>Faltam <span class="money">${brl(pr.falta)}</span></b></div>
+      <div><b>Faltam <span class="money">${CV(pr.falta)}</span></b></div>
       <div class="small">No ritmo atual: <b>${pr.ritmo ? ymLabel(pr.ritmo) : '–'}</b> · Cenário (<span class="money">${gbp(s.aportePlanGBP)}</span>/mês, ${pct(s.retornoAnual)} a.a.): <b>${pr.cenario ? ymLabel(pr.cenario) : '–'}</b></div>
     </div>
    </div>
    <div class="grid" style="align-content:start">
     <div class="card click" onclick="location.hash='#atualizar'">
       <h2>Próximo aporte → <span class="blue">${P.next.n}</span></h2>
-      ${P.alloc.map((a) => `<div class="alloc-row"><span><b style="color:${a.c}">${a.n}</b><div class="small" style="margin-top:1px">${brl(a.v)}</div></span>
+      ${P.alloc.map((a) => `<div class="alloc-row"><span><b style="color:${a.c}">${a.n}</b><div class="small" style="margin-top:1px">${CV(a.v)}</div></span>
         <div class="track"><div style="width:${Math.min(100, a.cur * 100 / .5)}%;background:${a.c}"></div><span style="left:${Math.min(100, a.tgt * 100 / .5)}%"></span></div>
-        <span class="r">${pct(a.cur)}</span><span class="r" style="color:${a.gap > 0 ? 'var(--amber)' : 'var(--green)'};font-weight:700">${signed((v) => nf0.format(v), a.gap)}</span></div>`).join('')}
-      <div class="small" style="margin-top:6px">Barra = atual · traço = meta · laranja = falta para a meta · caixa <span class="money">${brl(DB.balances.caixa)}</span> fora das metas</div>
+        <span class="r">${pct(a.cur)}</span><span class="r" style="color:${a.gap > 0 ? 'var(--amber)' : 'var(--green)'};font-weight:700">${signed((v) => CV(v).replace(/^(R\$|£|US\$) /, ''), a.gap)}</span></div>`).join('')}
+      <div class="small" style="margin-top:6px">Barra = atual · traço = meta · laranja = falta para a meta · caixa <span class="money">${CV(num(DB.balances.caixa))}</span> fora das metas</div>
     </div>
     <div class="card"><h2>Marcos do patrimônio</h2>
       <div class="mile">${ms.map((m) => `<div class="${m.hit ? 'ok' : ''}">${m.v >= 1e6 ? nf0.format(m.v / 1e6) + ' mi' : nf0.format(m.v / 1000) + 'k'}<b>${m.hit ? ymLabel(m.hit) : '–'}</b></div>`).join('')}</div>
