@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.21';
+const APP_VERSION = '4.22';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -64,6 +64,16 @@ function toast(msg, ms = 2600) {
 function openSheet(html, onMount) {
   $('#sheet').innerHTML = html; $('#modal').classList.remove('hidden');
   if (onMount) onMount($('#sheet'));
+}
+// Sim / Não dialog in Portuguese (the iPhone's own confirm box always says OK / Cancel in the phone's language)
+function ask(msg, { yes = 'Sim', no = 'Não', danger = false } = {}) {
+  return new Promise((done) => {
+    const w = document.createElement('div'); w.className = 'ask';
+    w.innerHTML = `<div class="ask-box"><p></p><div class="ask-b"><button class="btn" data-a="0"></button><button class="btn ${danger ? 'danger' : 'primary'}" data-a="1"></button></div></div>`;
+    $('p', w).textContent = msg; w.querySelector('[data-a="0"]').textContent = no; w.querySelector('[data-a="1"]').textContent = yes;
+    w.onclick = (e) => { const b = e.target.closest('[data-a]'); if (!b) return; w.remove(); done(b.dataset.a === '1'); };
+    document.body.appendChild(w);
+  });
 }
 function closeSheet() { $('#modal').classList.add('hidden'); $('#sheet').innerHTML = ''; }
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeSheet(); });
@@ -232,8 +242,8 @@ async function refreshPricesNow(silent) {
   const p = DB.prices; let ok = 0;
   const assetsP = refreshAssetPrices(!silent).catch((e) => { console.warn('assets', e); return null; });   // shares run at the same time as crypto + FX
   try {
-    const j = await fetchJSON('https://api.coingecko.com/api/v3/simple/price?ids=' + COINS.map((c) => c.id).join(',') + '&vs_currencies=usd');
-    for (const c of COINS) if (j[c.id]?.usd) { p[c.k] = j[c.id].usd; ok++; }
+    const j = await fetchJSON('https://api.coingecko.com/api/v3/simple/price?ids=' + COINS.map((c) => c.id).join(',') + '&vs_currencies=usd&include_24hr_change=true');
+    for (const c of COINS) if (j[c.id]?.usd) { p[c.k] = j[c.id].usd; p[c.k + '_24h'] = j[c.id].usd_24h_change ?? null; ok++; }
   } catch (e) { console.warn('crypto price', e); }
   let fx = false;
   try {
@@ -449,7 +459,7 @@ async function exportBackup() {
     };
   });
 }
-function pickImport(fromWelcome) {
+async function pickImport(fromWelcome) {
   const inp = $('#file-in'); inp.value = '';
   inp.onchange = async () => {
     const file = inp.files[0]; if (!file) return;
@@ -469,7 +479,7 @@ function pickImport(fromWelcome) {
       };
     });
   };
-  if (!fromWelcome && !confirm('Importar um backup substitui TODOS os dados atuais deste aparelho. Continuar?')) return;
+  if (!fromWelcome && !(await ask('Importar um backup substitui TODOS os dados atuais deste aparelho. Continuar?'))) return;
   inp.click();
 }
 
@@ -759,7 +769,7 @@ function editAsset(id, cls) {
           a.qty = num(a.qty) + q; await save(); closeSheet(); render(); toast(`✓ ${a.ticker}: agora ${a.qty.toLocaleString('pt-BR', { maximumFractionDigits: 8 })}`);
         };
       });
-      $('#ea-del', el).onclick = async () => { if (!confirm('Apagar ' + a.ticker + '?')) return; DB.assets = DB.assets.filter((x) => x.id !== id); await save(); closeSheet(); render(); };
+      $('#ea-del', el).onclick = async () => { if (!(await ask('Apagar ' + a.ticker + '?', { yes: 'Sim, apagar', danger: true }))) return; DB.assets = DB.assets.filter((x) => x.id !== id); await save(); closeSheet(); render(); };
     }
   });
 }
@@ -1042,17 +1052,17 @@ function vAtualizar() {
   $('#f-save').onclick = async () => {
     const P2 = portfolio(), d2 = DB.draft;
     if (d2.aporteGBP === null || d2.aporteGBP === undefined) {
-      if (!confirm('Você não preencheu o aporte. Salvar como £0 (nenhum dinheiro novo este mês)?')) return;
+      if (!(await ask('Você não preencheu o aporte. Salvar como £0 (nenhum dinheiro novo este mês)?'))) return;
       d2.aporteGBP = 0;
     }
     const entry = { month: d2.month, pat: Math.round(P2.total * 100) / 100, aporteGBP: d2.aporteGBP, divFII: d2.divFII, divAcoes: d2.divAcoes, divStocks: d2.divStocks, fx: DB.prices.gbpbrl || null };
     const i = DB.history.findIndex((h) => h.month === d2.month);
-    if (i > -1) { if (!confirm(`${ymLong(d2.month)} já existe. Substituir?`)) return; entry.note = DB.history[i].note; DB.history[i] = entry; }
+    if (i > -1) { if (!(await ask(`${ymLong(d2.month)} já existe. Substituir?`))) return; entry.note = DB.history[i].note; DB.history[i] = entry; }
     else DB.history.push(entry);
     DB.history.sort((a, b2) => a.month.localeCompare(b2.month));
     const nextM = ymAdd(d2.month, 1);
     await save(); toast(`✓ ${ymLong(d2.month)} salvo`);
-    if (confirm(`Começar ${ymLong(nextM)} agora? (os campos de dividendos e aporte ficam vazios)`)) {
+    if (await ask(`Começar ${ymLong(nextM)} agora? (os campos de dividendos e aporte ficam vazios)`)) {
       DB.draft = { month: nextM, divFII: null, divAcoes: null, divStocks: null, aporteGBP: null }; await save();
     }
     render();
@@ -1098,7 +1108,7 @@ function editMonth(m) {
       } else DB.history[DB.history.indexOf(h)] = out;
       DB.history.sort((a, b) => a.month.localeCompare(b.month)); await save(); closeSheet(); render();
     };
-    if (m) $('#e-del', el).onclick = async () => { if (!confirm('Apagar ' + ymLong(m) + '?')) return; DB.history.splice(DB.history.indexOf(h), 1); await save(); closeSheet(); render(); };
+    if (m) $('#e-del', el).onclick = async () => { if (!(await ask('Apagar ' + ymLong(m) + '?', { yes: 'Sim, apagar', danger: true }))) return; DB.history.splice(DB.history.indexOf(h), 1); await save(); closeSheet(); render(); };
   });
 }
 
@@ -1141,7 +1151,8 @@ function vCripto() {
    <div class="card hero kpi"><div class="lab">Total em cripto</div><div class="val">${brl(cs.totalBRL)}</div>
      <div class="sub">${usd(cs.totalUSD)} · ${gbp(cs.totalBRL / (p.gbpbrl || 1))} · ${P.total ? pct(cs.totalBRL / P.total) : '–'} do patrimônio</div></div>
    <div class="card"><h2>Por moeda</h2>
-     ${cs.coins.filter((x) => Math.abs(x.units) >= 1e-8).map((x) => `<div class="row"><span class="l"><b>${x.k}</b> <span class="small">${x.units.toLocaleString('pt-BR', { maximumFractionDigits: x.dec })}</span></span><span class="r">${usd(p.usdbrl ? x.valBRL / p.usdbrl : x.units * num(p[x.k]))}<div class="small">${brl(x.valBRL)}</div></span></div>`).join('')}</div>
+     ${cs.coins.filter((x) => Math.abs(x.units) >= 1e-8).map((x) => { const ch = p[x.k + '_24h']; return `<div class="row"><span class="l"><b>${x.k}</b> <span class="small">${x.units.toLocaleString('pt-BR', { maximumFractionDigits: x.dec })}</span>
+       <div class="coinpx">${usd(p[x.k], p[x.k] < 100 ? 2 : 0)}${typeof ch === 'number' ? ` <span class="${ch < 0 ? 'neg' : 'pos'}">${ch < 0 ? '▼' : '▲'} ${pct(Math.abs(ch) / 100)} 24h</span>` : ''}</div></span><span class="r">${usd(p.usdbrl ? x.valBRL / p.usdbrl : x.units * num(p[x.k]))}<div class="small">${brl(x.valBRL)}</div></span></div>`; }).join('')}</div>
    <div class="card"><h2>Bitcoin por pessoa</h2>
      ${c.people.map((w) => { const u = cs.coins[0].net[w]; return `<div class="row"><span class="l">${esc(w)} <span class="small">${u.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></span><span class="r">${brl(u * p.BTC * p.usdbrl)}</span></div>`; }).join('')}
      ${cs.coins[0].fee ? `<div class="row"><span class="l small">Taxas de transferência</span><span class="r small">−${cs.coins[0].fee.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></div>` : ''}</div>
@@ -1205,7 +1216,7 @@ function editOp(id) {
       const i = c.log.findIndex((q) => q.id === o.id); if (i > -1) c.log[i] = o; else c.log.push(o);
       c.log.sort((a, b) => (a.date || '').localeCompare(b.date || '')); await save(); closeSheet(); render();
     };
-    if (id) $('#o-del', el).onclick = async () => { if (!confirm('Apagar esta operação?')) return; c.log = c.log.filter((q) => q.id !== id); await save(); closeSheet(); render(); };
+    if (id) $('#o-del', el).onclick = async () => { if (!(await ask('Apagar esta operação?', { yes: 'Sim, apagar', danger: true }))) return; c.log = c.log.filter((q) => q.id !== id); await save(); closeSheet(); render(); };
   });
 }
 
@@ -1300,15 +1311,15 @@ function vAjustes() {
   $('#a-update').onclick = forceUpdate;
   $('#a-theme').onchange = (e) => { try { localStorage.setItem('rumo.theme', e.target.value); } catch {} applyTheme(); render(); };
   $('#a-import').onclick = () => pickImport(false);
-  $('#a-lockoff') && ($('#a-lockoff').onclick = () => {
-    if (!confirm('Abrir o app sem PIN?\n\nQualquer pessoa com o seu iPhone desbloqueado poderá ver seus investimentos. Você pode voltar a pedir PIN aqui quando quiser.')) return;
+  $('#a-lockoff') && ($('#a-lockoff').onclick = async () => {
+    if (!(await ask('Abrir o app sem PIN?\n\nQualquer pessoa com o seu iPhone desbloqueado poderá ver seus investimentos. Você pode voltar a pedir PIN aqui quando quiser.'))) return;
     const m = getMeta(); m.open = b64(DKRAW); m.face = null; setMeta(m); render(); toast('🔓 O app agora abre sem PIN');
   });
   $('#a-lockon') && ($('#a-lockon').onclick = () => showLock('setup'));
   $('#a-pin') && ($('#a-pin').onclick = () => showLock('setup'));
   $('#a-face') && ($('#a-face').onclick = async () => {
     const m = getMeta();
-    if (m.face) { if (!confirm('Desativar o Face ID? O app volta a pedir só o PIN.')) return; m.face = null; setMeta(m); render(); return toast('Face ID desativado'); }
+    if (m.face) { if (!(await ask('Desativar o Face ID? O app volta a pedir só o PIN.'))) return; m.face = null; setMeta(m); render(); return toast('Face ID desativado'); }
     try { await enableFaceID(); render(); toast('✓ Face ID ativado — o PIN continua valendo como reserva'); }
     catch (e) {
       console.warn(e);
@@ -1317,12 +1328,12 @@ function vAjustes() {
     }
   });
   $('#a-rec').onclick = async () => {
-    if (!confirm('Gerar um novo código? O código antigo deixa de funcionar.')) return;
+    if (!(await ask('Gerar um novo código? O código antigo deixa de funcionar.'))) return;
     const code = newRecoveryCode(), m = getMeta(); m.rec = await wrapWithSecret(code.replace(/-/g, '')); setMeta(m); showRecovery(code);
   };
-  $('#a-wipe').onclick = () => {
-    if (!confirm('Isso apaga TODOS os dados deste aparelho. Você tem um backup?')) return;
-    if (!confirm('Tem certeza? Não dá para desfazer.')) return;
+  $('#a-wipe').onclick = async () => {
+    if (!(await ask('Isso apaga TODOS os dados deste aparelho. Você tem um backup?', { yes: 'Sim, apagar', danger: true }))) return;
+    if (!(await ask('Tem certeza? Não dá para desfazer.', { yes: 'Sim, apagar', danger: true }))) return;
     localStorage.removeItem(K_DATA); localStorage.removeItem(K_META); DB = null; KEY = null; location.hash = ''; location.reload();
   };
 }
@@ -1339,7 +1350,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { 
 /* ---------------- Excel export (readable copy, NOT encrypted) ---------------- */
 function loadScript(src) { return new Promise((ok, bad) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = bad; document.head.appendChild(s); }); }
 async function exportExcel() {
-  if (!confirm('O arquivo Excel NÃO é criptografado — qualquer pessoa com o arquivo consegue ler. Continuar?')) return;
+  if (!(await ask('O arquivo Excel NÃO é criptografado — qualquer pessoa com o arquivo consegue ler. Continuar?'))) return;
   try { if (!window.XLSX) await loadScript('xlsx.mini.min.js'); } catch { return toast('Não consegui carregar o gerador de Excel — tente com internet'); }
   const X = window.XLSX, wb = X.utils.book_new(), H = DB.history, R = returnsData(), P = portfolio(), cs = P.cs;
   const md = (m) => { const [y, mo] = m.split('-').map(Number); return new Date(Date.UTC(y, mo - 1, 1)); };
@@ -1388,7 +1399,7 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded && !DB) { reloaded = true; location.reload(); } });
 }
 async function forceUpdate() {
-  if (!confirm('Baixar a versão mais nova do app? Seus dados não são afetados.')) return;
+  if (!(await ask('Baixar a versão mais nova do app? Seus dados não são afetados.'))) return;
   try {
     for (const k of await caches.keys()) await caches.delete(k);
     for (const r of (await navigator.serviceWorker?.getRegistrations()) || []) await r.unregister();

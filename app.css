@@ -202,3 +202,13 @@ html.priv .hero-list b{filter:blur(8px)}
 .cur-swap:active{transform:scale(.9); background:var(--blue)}
 .pie-h{cursor:pointer; transition:opacity .12s} .pie-h:active{opacity:.6}
 .chev2{display:inline-block; width:14px; color:var(--muted); font-size:13px}
+
+/* v4.22 — Sim/Não dialog, coin prices */
+.ask{position:fixed; inset:0; z-index:90; background:rgba(2,6,23,.55); display:flex; align-items:center; justify-content:center; padding:24px}
+.ask-box{background:var(--card); color:var(--ink); border-radius:18px; padding:20px 18px 16px; width:100%; max-width:360px; box-shadow:0 20px 50px rgba(0,0,0,.4); border:1px solid var(--line)}
+.ask-box p{margin:0 0 16px; font-size:16px; line-height:1.45; white-space:pre-line}
+.ask-b{display:grid; grid-template-columns:1fr 1fr; gap:10px}
+.ask-b .btn{padding:13px 10px; font-size:16px}
+.ask-b .btn.danger{background:#DC2626; color:#fff}
+.coinpx{font-size:13px; color:var(--muted); margin-top:2px; font-weight:600}
+.coinpx span{font-weight:700; margin-left:4px}
