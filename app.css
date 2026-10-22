@@ -193,3 +193,10 @@ html.priv .field input{pointer-events:none}
 html.priv .hero-list b{filter:blur(8px)}
 .alloc-row{grid-template-columns:86px minmax(0,1fr) 44px 64px}
 .alloc-row .small{white-space:nowrap}
+
+/* v4.20 — pies in Exterior */
+.pie-h{display:flex; justify-content:space-between; align-items:center; gap:10px; margin:14px 0 2px; padding:10px 12px; border-radius:12px; background:var(--soft); border:1px solid var(--line)}
+.pie-h:first-of-type{margin-top:4px}
+.pie-h b{color:var(--title)} .pie-h .r{text-align:right}
+.cur-swap{border:1px solid rgba(255,255,255,.25); background:rgba(255,255,255,.1); color:#fff; border-radius:10px; padding:5px 10px; font-size:13px; font-weight:700; letter-spacing:0; transition:transform .12s}
+.cur-swap:active{transform:scale(.9); background:var(--blue)}

@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.18';
+const APP_VERSION = '4.20';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -623,7 +623,12 @@ async function refreshAssetPrices(force) {
     if (eu.length && keys.alpha) { await setKeyStatus('alpha', Object.keys(pe).length > 0, `${Object.keys(pe).length}/${eu.length} preços`); DB.prices.euAt = new Date().toISOString(); }
     let ok = 0, fail = [];
     for (const a of A) {
-      if (a.market === 'MANUAL' || (a.market === 'EU' && !euDue) || (a.market === 'GS' && !gsDue) || (a.market === 'US' && !usDue) || (a.market === 'B3' && !b3Due)) continue;
+      if (a.market === 'MANUAL') continue;
+      if ((a.market === 'EU' && !euDue) || (a.market === 'GS' && !gsDue) || (a.market === 'US' && !usDue) || (a.market === 'B3' && !b3Due)) {
+        if (a.priceAt && !a.priceErr) ok++;   // fetched moments ago — still fresh, counted as up to date
+        else if (!a.price) fail.push(a.ticker);
+        continue;
+      }
       const px = (a.market === 'B3' ? pb : a.market === 'US' ? pu : a.market === 'GS' ? pg : pe)[a.ticker];
       if (px) { a.price = px; a.priceAt = new Date().toISOString(); a.priceErr = null; ok++; if (a.market === 'GS' && sheetQuotes.cur?.[a.ticker]) a.currency = sheetQuotes.cur[a.ticker]; }
       else { a.priceErr = 'não atualizou'; fail.push(a.ticker); }   // keeps the last good price
@@ -667,10 +672,22 @@ function vAtivos() {
    </div>
    <div class="card" style="align-content:start"><h2>${info.n}</h2>
      <button class="btn primary block" id="at-add" style="margin:0 0 8px">＋ Adicionar ativo</button>
-     ${rows.sort((x, y) => y.value - x.value).map((r) => `<div class="item click" data-id="${r.a.id}">
+     ${(() => {
+        const itemHtml = (r) => `<div class="item click" data-id="${r.a.id}">
         <div><div class="t">${esc(r.a.ticker)} ${r.a.kind ? `<span class="small muted">${esc(r.a.kind)}</span>` : ''}</div>
         <div class="s">${r.a.qty.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} × ${fmtPx(r.cur, r.pr)}${r.a.market === 'MANUAL' ? ' · manual' : ''}${r.stale ? ` · <span class="neg">⚠ ${r.a.priceAt ? 'preço de ' + new Date(r.a.priceAt).toLocaleDateString('pt-BR') : 'sem preço'}</span>` : ''}</div></div>
-        <div class="r"><div class="t">${M(r.value)}</div>${inGBP ? `<div class="s">${brl(r.value, 2)}</div>` : ''}${r.pl !== null ? `<div class="s ${r.pl < 0 ? 'neg' : 'pos'}">${signed(pct, r.plPct)}</div>` : ''}</div></div>`).join('') || '<p class="muted">Nenhum ativo ainda. Toque em ＋ Adicionar ativo.</p>'}
+        <div class="r"><div class="t">${M(r.value)}</div>${inGBP ? `<div class="s">${brl(r.value, 2)}</div>` : ''}${r.pl !== null ? `<div class="s ${r.pl < 0 ? 'neg' : 'pos'}">${signed(pct, r.plPct)}</div>` : ''}</div></div>`;
+        const sorted = rows.sort((x, y) => y.value - x.value);
+        if (!sorted.length) return '<p class="muted">Nenhum ativo ainda. Toque em ＋ Adicionar ativo.</p>';
+        if (cls !== 'stocks') return sorted.map(itemHtml).join('');
+        // Exterior: one "pie" per type, like Trading 212 (Stocks, REITs, ETFs)
+        return ['Stock', 'REIT', 'ETF'].map((k) => {
+          const g = sorted.filter((r) => (r.a.kind || 'Stock') === k); if (!g.length) return '';
+          const v = g.reduce((a, r) => a + r.value, 0), wc = g.filter((r) => r.cost !== null), c = wc.reduce((a, r) => a + r.cost, 0), gp = wc.reduce((a, r) => a + r.pl, 0);
+          return `<div class="pie-h"><div><b>Pie ${k === 'Stock' ? 'Stocks' : k + 's'}</b><span class="small muted"> · ${g.length} ${g.length === 1 ? 'ativo' : 'ativos'} · ${pct(total ? v / total : 0)}</span></div>
+            <div class="r"><b class="money">${M(v)}</b>${c ? `<div class="small ${gp < 0 ? 'neg' : 'pos'}">${signed(pct, gp / c)}</div>` : ''}</div></div>` + g.map(itemHtml).join('');
+        }).join('');
+      })()}
      <div class="small muted" style="margin-top:8px">⚠ = o preço não atualizou; o app continua usando o último preço bom. Você pode digitar um preço manual no ativo.</div>
    </div>
   </div>`;
@@ -680,7 +697,7 @@ function vAtivos() {
     (DB.settings.auto ||= {})[cls] = e.target.checked; await save(); render();
     toast(e.target.checked ? `Patrimônio agora usa os ativos de ${info.n}` : `Voltou para o total digitado em Atualizar`);
   };
-  $('#at-refresh').onclick = async () => { toast('Buscando preços…'); $('#btn-refresh').classList.add('spin'); setTimeout(() => $('#btn-refresh')?.classList.remove('spin'), 1200); const r = await refreshAssetPrices(true); render(); if (r) toast(r.fail.length ? `${r.ok} atualizados · não atualizaram: ${r.fail.join(', ')}` : `✓ ${r.ok} preços atualizados`, 4500); else toast('Sem internet ou sem ativos'); };
+  $('#at-refresh').onclick = async () => { toast('Buscando preços…'); $('#btn-refresh').classList.add('spin'); setTimeout(() => $('#btn-refresh')?.classList.remove('spin'), 1200); const r = await refreshAssetPrices(true); render(); if (r) toast(r.fail.length ? `${r.ok} atualizados · não atualizaram: ${r.fail.join(', ')}` : `✓ ${r.ok} preços em dia`, 4500); else toast('Sem internet ou sem ativos'); };
   $('#at-add').onclick = () => editAsset(null, cls);
   $$('#view .item').forEach((el) => (el.onclick = () => editAsset(el.dataset.id)));
 }
@@ -830,6 +847,9 @@ function vPainel() {
   const meta = num(s.meta), prog = meta ? Math.min(1, P.total / meta) : 0;
   const backupOld = !s.lastBackup || Date.now() - new Date(s.lastBackup) > 30 * 864e5;
   const R = returnsData(), Ry = R.years.find((y) => y.year === st.year);
+  // ⇄ on the Patrimônio card: R$ → £ → US$ (remembered on this phone)
+  const HM = { BRL: (v) => brl(v), GBP: (v) => gbp(v / (DB.prices.gbpbrl || 1)), USD: (v) => usd(v / (DB.prices.usdbrl || 1)) };
+  let heroCur = 'BRL'; try { heroCur = HM[localStorage.getItem('rumo.cur')] ? localStorage.getItem('rumo.cur') : 'BRL'; } catch {}
   const heroOpen = () => { try { return localStorage.getItem('rumo.hero') === '1'; } catch { return false; } };
   const aportesYear = DB.history.filter((h) => h.month.startsWith(st.year) && h.aporteGBP && h.fx).reduce((a, h) => a + h.aporteGBP * h.fx, 0);
   $('#view').innerHTML = `
@@ -837,10 +857,11 @@ function vPainel() {
   <div class="grid split">
    <div class="grid" style="align-content:start">
     <div class="card hero kpi click" id="hero-tap">
-      <div class="lab" style="display:flex;justify-content:space-between">Patrimônio hoje <span class="chev">${heroOpen() ? '▴' : '▾'}</span></div><div class="val">${brl(P.total)}</div>
-      <div class="sub">${gbp(P.total / (DB.prices.gbpbrl || 1))} · ${usd(P.total / (DB.prices.usdbrl || 1))}</div>
+      <div class="lab" style="display:flex;justify-content:space-between;align-items:center">Patrimônio hoje <span style="display:flex;gap:10px;align-items:center"><button class="cur-swap" id="cur-swap" aria-label="Trocar moeda">⇄ ${heroCur === 'BRL' ? 'R$' : heroCur === 'GBP' ? '£' : 'US$'}</button><span class="chev">${heroOpen() ? '▴' : '▾'}</span></span></div>
+      <div class="val">${HM[heroCur](P.total)}</div>
+      <div class="sub">${['BRL', 'GBP', 'USD'].filter((c) => c !== heroCur).map((c) => HM[c](P.total)).join(' · ')}</div>
       ${heroOpen() ? `<div class="hero-list">${[...P.alloc.map((a) => [a.n, a.v, a.c]), ['Caixa', num(DB.balances.caixa), '#94A3B8']].map(([n, v, c]) =>
-        `<div><span><i style="background:${c}"></i>${n}</span><b>${brl(v)}</b><em>${pct(P.total ? v / P.total : 0)}</em></div>`).join('')}</div>` : ''}
+        `<div><span><i style="background:${c}"></i>${n}</span><b>${HM[heroCur](v)}</b><em>${pct(P.total ? v / P.total : 0)}</em></div>`).join('')}</div>` : ''}
     </div>
     <div class="grid g2">
       <div class="card kpi click" onclick="location.hash='#graficos'"><div class="lab">Rentabilidade ${st.year}</div>
@@ -879,6 +900,7 @@ function vPainel() {
     <a class="card click goto" href="#graficos"><span>📈 Ver gráficos</span><span>›</span></a>
    </div>
   </div>`;
+  $('#cur-swap').onclick = (e) => { e.stopPropagation(); const nx = { BRL: 'GBP', GBP: 'USD', USD: 'BRL' }[heroCur]; try { localStorage.setItem('rumo.cur', nx); } catch {} render(); };
   $('#hero-tap').onclick = () => { try { localStorage.setItem('rumo.hero', heroOpen() ? '0' : '1'); } catch {} render(); };
 }
 
