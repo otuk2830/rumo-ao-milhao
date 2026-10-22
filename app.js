@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.14';
+const APP_VERSION = '4.15';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -108,7 +108,10 @@ function normalize(d) {
   d.settings.auto = Object.assign({ acoes: false, fiis: false, stocks: false }, d.settings.auto || {});
   d.settings.keys = Object.assign({ brapi: '', finnhub: '', alpha: '', sheet: '' }, d.settings.keys || {});
   delete d.settings.keys.hg; if (d.settings.keyStatus) delete d.settings.keyStatus.hg;
-  for (const a of d.assets || []) if (a.market === 'HG') a.market = 'GS'; // HG Brasil removed (free plan has no quotes)
+  for (const a of d.assets || []) {
+    if (a.market === 'HG') a.market = 'GS'; // HG Brasil removed (free plan has no quotes)
+    if (!a.avgCur) a.avgCur = a.cls === 'stocks' ? 'GBP' : 'ASSET'; // Exterior: average price in £, as Trading 212 shows it
+  }
   d.settings.keyStatus = d.settings.keyStatus || {};
   d.assets = (d.assets || []).map((a) => ({ id: a.id || uid(), ...a }));
   d.history = (d.history || []).filter((h) => h && h.month).sort((a, b) => a.month.localeCompare(b.month));
@@ -482,7 +485,8 @@ const STALE_MS = 4 * 864e5;
 function assetRows(cls) {
   return (DB.assets || []).filter((a) => !cls || a.cls === cls).map((a) => {
     const cur = curOf(a), fx = FXOF(cur), pr = priceOf(a), value = num(a.qty) * pr * fx;
-    const cost = a.avg ? num(a.qty) * num(a.avg) * fx : null;
+    const avgFx = a.avgCur === 'GBP' ? FXOF('GBP') : fx;   // "€93,01 (£80,34)" → £80,34 compares what you paid in £ with today's value in £
+    const cost = a.avg ? num(a.qty) * num(a.avg) * avgFx : null;
     const auto = a.market !== 'MANUAL';
     const stale = auto && (!a.priceAt || Date.now() - new Date(a.priceAt) > STALE_MS || !!a.priceErr);
     return { a, cur, fx, pr, value, cost, pl: cost !== null ? value - cost : null, plPct: cost ? (value - cost) / cost : null, auto, stale };
@@ -666,7 +670,7 @@ function vAtivos() {
   $$('#view .item').forEach((el) => (el.onclick = () => editAsset(el.dataset.id)));
 }
 function editAsset(id, cls) {
-  const a = id ? DB.assets.find((x) => x.id === id) : { id: uid(), cls, ticker: '', kind: cls === 'stocks' ? 'Stock' : '', market: ACLS.find((c) => c.k === cls).market, currency: 'BRL', qty: 0, avg: null, manualPrice: null, price: null, priceAt: null };
+  const a = id ? DB.assets.find((x) => x.id === id) : { id: uid(), cls, ticker: '', kind: cls === 'stocks' ? 'Stock' : '', market: ACLS.find((c) => c.k === cls).market, currency: 'BRL', avgCur: cls === 'stocks' ? 'GBP' : 'ASSET', qty: 0, avg: null, manualPrice: null, price: null, priceAt: null };
   const inp = (id2, v, ph = '') => `<input id="${id2}" class="pt" inputmode="decimal" value="${v === null || v === undefined || v === 0 ? '' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 8 })}" placeholder="${ph || '0'}">`;
   openSheet(`<h3>${id ? esc(a.ticker) : 'Novo ativo — ' + ACLS.find((c) => c.k === a.cls).n}</h3>
     <div class="field"><label>Ticker<small>${a.cls === 'stocks' ? 'ex.: AAPL, O, VOO' : 'ex.: PETR4, HGLG11'}</small></label><input id="ea-t" value="${esc(a.ticker)}" autocapitalize="characters" style="text-align:left"></div>
@@ -677,7 +681,8 @@ function editAsset(id, cls) {
     <div class="small muted hidden" id="ea-gs-hint" style="margin:-6px 0 10px">B3: só o ticker (HGLG11). Outras bolsas: na planilha escreva <b>BOLSA:TICKER</b> (ex.: LON:VWRP); aqui basta <b>VWRP</b>. A moeda vem da coluna D da planilha.</div>
     <div class="field" id="ea-cur-row"><label>Moeda do preço</label><select id="ea-cur">${[['BRL', 'R$'], ['USD', 'US$'], ['GBP', '£'], ['GBX', 'pence (p)'], ['EUR', '€']].map(([v, l]) => `<option value="${v}" ${a.currency === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <div class="field"><label>Quantidade</label>${inp('ea-qty', a.qty)}</div>
-    <div class="field"><label>Preço médio pago<small>opcional — mostra lucro/prejuízo</small></label>${inp('ea-avg', a.avg)}</div>
+    ${a.cls === 'stocks' ? `<div class="field"><label>Preço médio em<small>no Trading 212 é o valor em £ entre parênteses</small></label><select id="ea-avgcur"><option value="GBP" ${a.avgCur !== 'ASSET' ? 'selected' : ''}>£ libras</option><option value="ASSET" ${a.avgCur === 'ASSET' ? 'selected' : ''}>moeda do ativo</option></select></div>` : ''}
+    <div class="field"><label>Preço médio pago<small id="ea-avg-h">opcional — mostra lucro/prejuízo</small></label>${inp('ea-avg', a.avg)}</div>
     <div class="field"><label>Preço manual<small>usado se for "Manual" ou se o automático falhar</small></label>${inp('ea-man', a.manualPrice)}</div>
     ${id ? `<div class="small muted">Último preço automático: ${a.price ? fmtPx(curOf(a), a.price) + ' em ' + fmtDate(a.priceAt) : '–'}${a.priceErr ? ' · ⚠ ' + esc(a.priceErr) : ''}</div>` : ''}
     <button class="btn primary block" id="ea-save">Salvar</button>
@@ -690,11 +695,14 @@ function editAsset(id, cls) {
       if (changed && m === 'EU') $('#ea-cur', el).value = t.endsWith('.LON') ? 'GBX' : 'EUR';
       if (changed && m === 'GS') $('#ea-cur', el).value = !t.includes(':') ? (a.cls === 'stocks' ? 'GBP' : 'BRL') : t.startsWith('LON:') ? 'GBP' : /^(NYSE|NASDAQ|NYSEARCA|BATS):/.test(t) ? 'USD' : 'EUR';
     };
+    const avgHint = () => { const ac = $('#ea-avgcur', el)?.value, c = $('#ea-cur', el).value, m = $('#ea-m', el).value;
+      const cc = m === 'US' ? 'USD' : m === 'B3' ? 'BRL' : c; $('#ea-avg-h', el).textContent = 'por unidade, em ' + (ac === 'GBP' ? '£' : cc === 'GBX' ? 'pence' : curSym(cc)) + ' — mostra lucro/prejuízo'; };
+    ['#ea-avgcur', '#ea-cur', '#ea-m'].forEach((k) => $(k, el)?.addEventListener('change', avgHint)); setTimeout(avgHint, 0);
     $('#ea-m', el).onchange = () => curRow(true); $('#ea-t', el).addEventListener('change', () => curRow(true)); curRow(false);
     $('#ea-save', el).onclick = async () => {
       const t = $('#ea-t', el).value.trim().toUpperCase().replace(/\s+/g, ''); if (!t) return toast('Digite o ticker');
       const o = { ...a, ticker: t, kind: $('#ea-kind', el)?.value || a.kind, market: $('#ea-m', el).value, currency: $('#ea-cur', el).value,
-        qty: parsePT($('#ea-qty', el).value) ?? 0, avg: parsePT($('#ea-avg', el).value), manualPrice: parsePT($('#ea-man', el).value) };
+        qty: parsePT($('#ea-qty', el).value) ?? 0, avg: parsePT($('#ea-avg', el).value), avgCur: $('#ea-avgcur', el)?.value || a.avgCur || 'ASSET', manualPrice: parsePT($('#ea-man', el).value) };
       if (o.ticker !== a.ticker || o.market !== a.market) { o.price = null; o.priceAt = null; }
       if (o.market === 'MANUAL' && !o.manualPrice) return toast('Digite o preço manual');
       if (!DB.assets.find((x) => x.id === o.id) && DB.assets.find((x) => x.ticker === o.ticker && x.cls === o.cls)) return toast(o.ticker + ' já está na lista — edite ele');
@@ -705,7 +713,7 @@ function editAsset(id, cls) {
     if (id) {
       $('#ea-buy', el).onclick = () => openSheet(`<h3>${esc(a.ticker)} — comprei mais</h3>
         <div class="field"><label>Quantidade comprada</label><input id="b-q" class="pt" inputmode="decimal"></div>
-        <div class="field"><label>Preço pago por unidade<small>opcional — atualiza o preço médio</small></label><input id="b-p" class="pt" inputmode="decimal"></div>
+        <div class="field"><label>Preço pago por unidade<small>opcional, em ${a.avgCur === 'GBP' ? '£' : curOf(a) === 'GBX' ? 'pence' : curSym(curOf(a))} — atualiza o preço médio</small></label><input id="b-p" class="pt" inputmode="decimal"></div>
         <button class="btn primary block" id="b-go">Adicionar</button><button class="btn block" onclick="closeSheet()">Cancelar</button>`, (e2) => {
         $$('input.pt', e2).forEach(liveFormat);
         $('#b-go', e2).onclick = async () => {
