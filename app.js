@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.13';
+const APP_VERSION = '4.14';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -124,24 +124,31 @@ async function save() {
 function cryptoSummary() {
   const c = DB.crypto, p = DB.prices, people = c.people;
   const coins = COINS.map((co) => {
-    const per = {};
+    const per = {}, got = {};
     for (const who of people) {
-      const pre = num(c.pre?.[co.k]?.[who]);
-      const net = c.log.filter((x) => x.coin === co.k && x.name === who)
-        .reduce((s, x) => s + (x.op === 'Sold' ? -1 : 1) * num(x.qty), 0);
-      per[who] = pre + net;
+      const pre = num(c.pre?.[co.k]?.[who]), ops = c.log.filter((x) => x.coin === co.k && x.name === who);
+      per[who] = pre + ops.reduce((s, x) => s + (x.op === 'Sold' ? -1 : 1) * num(x.qty), 0);
+      got[who] = pre + ops.filter((x) => x.op !== 'Sold').reduce((s, x) => s + num(x.qty), 0);
     }
     const fee = num(c.fees?.[co.k]);
+    // transfer fees are shared by how much each person ever received (doesn't change when someone sells)
+    const gotT = Object.values(got).reduce((a, b) => a + b, 0), net = {};
+    for (const who of people) { const v = per[who] - (gotT ? fee * got[who] / gotT : 0); net[who] = Math.abs(v) < 1e-9 ? 0 : v; }
     const units = Object.values(per).reduce((a, b) => a + b, 0) - fee;
     const valUSD = units * num(p[co.k]);
-    return { ...co, per, fee, units, valUSD, valBRL: valUSD * num(p.usdbrl) };
+    return { ...co, per, net, fee, units, valUSD, valBRL: valUSD * num(p.usdbrl) };
   });
   const totalUSD = coins.reduce((s, x) => s + x.valUSD, 0);
   // BTC profit: only Buy rows of the log
-  const buys = c.log.filter((x) => x.coin === 'BTC' && x.op === 'Buy');
+  // average-cost method: a sale removes coins at the average price paid, so a full sale leaves 0
+  const pos = (who) => { let qty = 0, cost = 0;
+    for (const x of c.log) { if (x.coin !== 'BTC' || x.name !== who) continue;
+      if (x.op === 'Buy') { qty += num(x.qty); cost += num(x.value); }
+      else if (x.op === 'Sold' && qty > 0) { const q = Math.min(qty, num(x.qty)); cost -= cost * q / qty; qty -= q; } }
+    return { qty: qty > 1e-12 ? qty : 0, cost: qty > 1e-12 ? cost : 0 }; };
   const pl = (who) => {
-    const b = who ? buys.filter((x) => x.name === who) : buys;
-    const qty = b.reduce((s, x) => s + num(x.qty), 0), cost = b.reduce((s, x) => s + num(x.value), 0);
+    const ps = (who ? [who] : people).map(pos);
+    const qty = ps.reduce((s, x) => s + x.qty, 0), cost = ps.reduce((s, x) => s + x.cost, 0);
     const now = qty * num(p.BTC);
     return { qty, cost, avg: qty ? cost / qty : 0, now, pl: now - cost, plPct: cost ? (now - cost) / cost : 0 };
   };
@@ -904,6 +911,7 @@ const DECS = { 'p.gbpbrl': 4, 'p.usdbrl': 4, 'p.XRP': 4 };
 const showNum = (key, v) => (v === null || v === undefined || v === '' ? '' :
   Number(v).toLocaleString('pt-BR', { useGrouping: true, maximumFractionDigits: DECS[key] ?? (key.startsWith('pre.') || key.startsWith('fee.') ? 8 : 2) }));
 // pt-BR numbers: "." = thousands, "," = decimals. The keypad's "." or "," both start the decimals.
+function fmtN(v, d) { return v === null || v === undefined || v === '' || !isFinite(v) || Number(v) === 0 ? '' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: d }); }
 function parsePT(s) {
   s = String(s ?? '').replace(/\s|R\$|£|US\$/g, ''); if (!s) return null;
   const v = Number(s.replace(/\./g, '').replace(',', '.')); return isFinite(v) ? v : null;
@@ -1077,9 +1085,9 @@ function vCripto() {
    <div class="card hero kpi"><div class="lab">Total em cripto</div><div class="val">${brl(cs.totalBRL)}</div>
      <div class="sub">${usd(cs.totalUSD)} · ${gbp(cs.totalBRL / (p.gbpbrl || 1))} · ${P.total ? pct(cs.totalBRL / P.total) : '–'} do patrimônio</div></div>
    <div class="card"><h2>Por moeda</h2>
-     ${cs.coins.map((x) => `<div class="row"><span class="l"><b>${x.k}</b> <span class="small">${x.units.toLocaleString('pt-BR', { maximumFractionDigits: x.dec })}</span></span><span class="r">${usd(p.usdbrl ? x.valBRL / p.usdbrl : x.units * num(p[x.k]))}<div class="small">${brl(x.valBRL)}</div></span></div>`).join('')}</div>
+     ${cs.coins.filter((x) => Math.abs(x.units) >= 1e-8).map((x) => `<div class="row"><span class="l"><b>${x.k}</b> <span class="small">${x.units.toLocaleString('pt-BR', { maximumFractionDigits: x.dec })}</span></span><span class="r">${usd(p.usdbrl ? x.valBRL / p.usdbrl : x.units * num(p[x.k]))}<div class="small">${brl(x.valBRL)}</div></span></div>`).join('')}</div>
    <div class="card"><h2>Bitcoin por pessoa</h2>
-     ${c.people.map((w) => { const u = cs.coins[0].per[w]; return `<div class="row"><span class="l">${esc(w)} <span class="small">${u.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></span><span class="r">${brl(u * p.BTC * p.usdbrl)}</span></div>`; }).join('')}
+     ${c.people.map((w) => { const u = cs.coins[0].net[w]; return `<div class="row"><span class="l">${esc(w)} <span class="small">${u.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></span><span class="r">${brl(u * p.BTC * p.usdbrl)}</span></div>`; }).join('')}
      ${cs.coins[0].fee ? `<div class="row"><span class="l small">Taxas de transferência</span><span class="r small">−${cs.coins[0].fee.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></div>` : ''}</div>
    <div class="card"><h2>Bitcoin — lucro / prejuízo</h2>
      <div class="small" style="margin-bottom:6px">Só compras do registro (BTC de antes do registro não tem preço pago).</div>
@@ -1103,15 +1111,40 @@ function editOp(id) {
     <div class="field"><label>Operação</label><select id="o-op">${[['Buy', 'Compra'], ['Sold', 'Venda'], ['Received', 'Recebido']].map(([v, l]) => `<option value="${v}" ${v === x.op ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <div class="field"><label>Data</label><input type="date" id="o-date" value="${x.date || ''}"></div>
     <div class="field"><label>Cripto</label><select id="o-coin">${COINS.map((co) => `<option ${co.k === x.coin ? 'selected' : ''}>${co.k}</option>`).join('')}</select></div>
-    <div class="field"><label>Quantidade</label><input id="o-qty" inputmode="decimal" value="${x.qty ?? ''}"></div>
-    <div class="field"><label>Valor pago (US$)<small>com taxas</small></label><input id="o-val" inputmode="decimal" value="${x.value ?? ''}"></div>
-    <div class="field"><label>Preço da moeda (US$)</label><input id="o-price" inputmode="decimal" value="${x.price ?? ''}"></div>
+    <div class="field"><label>Quantidade<small id="o-have"></small></label><input id="o-qty" class="pt" inputmode="decimal" value="${fmtN(x.qty, 8)}"></div>
+    <button class="btn block hidden" id="o-all" style="margin:-4px 0 10px">Vender tudo</button>
+    <div class="field"><label id="o-val-l">Valor pago (US$)<small>com taxas</small></label><input id="o-val" class="pt" inputmode="decimal" value="${fmtN(x.value, 2)}"></div>
+    <div class="field"><label>Preço da moeda (US$)</label><input id="o-price" class="pt" inputmode="decimal" value="${fmtN(x.price, 2)}"></div>
     <button class="btn primary block" id="o-save">Salvar</button>
     ${id ? '<button class="btn danger block" id="o-del">Apagar</button>' : ''}
     <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
+    $$('input.pt', el).forEach(liveFormat);
+    // how much this person holds of the coin right now (ignoring the operation being edited)
+    const holding = () => {
+      const who = $('#o-name', el).value, coin = $('#o-coin', el).value;
+      const saved = c.log; c.log = saved.filter((q) => q.id !== x.id);
+      try { return Math.max(0, cryptoSummary().coins.find((q) => q.k === coin).net[who] || 0); } finally { c.log = saved; }
+    };
+    const sync = () => {
+      const sell = $('#o-op', el).value === 'Sold', h = holding(), coin = $('#o-coin', el).value;
+      $('#o-all', el).classList.toggle('hidden', !sell || h <= 0);
+      $('#o-have', el).textContent = sell ? `você tem ${fmtN(h, 8) || '0'} ${coin}` : '';
+      $('#o-val-l', el).firstChild.textContent = sell ? 'Valor recebido (US$)' : 'Valor pago (US$)';
+      $('#o-price', el).value = $('#o-price', el).value || fmtN(DB.prices[coin], 2);
+    };
+    const autoVal = () => { const q = parsePT($('#o-qty', el).value), pr = parsePT($('#o-price', el).value); if (q && pr && !$('#o-val', el).dataset.typed) $('#o-val', el).value = fmtN(q * pr, 2); };
+    $('#o-val', el).addEventListener('input', () => ($('#o-val', el).dataset.typed = '1'));
+    if (x.value) $('#o-val', el).dataset.typed = '1';
+    ['#o-op', '#o-name'].forEach((k) => ($(k, el).onchange = sync));
+    $('#o-coin', el).onchange = () => { $('#o-price', el).value = fmtN(DB.prices[$('#o-coin', el).value], 2); sync(); autoVal(); };
+    $('#o-qty', el).addEventListener('input', autoVal); $('#o-price', el).addEventListener('input', autoVal);
+    $('#o-all', el).onclick = () => { $('#o-qty', el).value = fmtN(holding(), 8); autoVal(); };
+    sync();
     $('#o-save', el).onclick = async () => {
       const o = { id: x.id, name: $('#o-name', el).value, op: $('#o-op', el).value, date: $('#o-date', el).value, coin: $('#o-coin', el).value,
-        qty: parseNum($('#o-qty', el).value), value: parseNum($('#o-val', el).value), price: parseNum($('#o-price', el).value) };
+        qty: parsePT($('#o-qty', el).value), value: parsePT($('#o-val', el).value), price: parsePT($('#o-price', el).value) };
+      if (o.op === 'Sold' && $('#o-qty', el).value === fmtN(holding(), 8)) o.qty = holding(); // "Vender tudo": use the exact amount, not the rounded one shown
+      if (o.op === 'Sold' && o.qty > holding() * 1.000001 + 1e-12) return toast(`Você só tem ${fmtN(holding(), 8)} ${o.coin}`);
       if (!o.qty) return toast('Informe a quantidade');
       const i = c.log.findIndex((q) => q.id === o.id); if (i > -1) c.log[i] = o; else c.log.push(o);
       c.log.sort((a, b) => (a.date || '').localeCompare(b.date || '')); await save(); closeSheet(); render();
