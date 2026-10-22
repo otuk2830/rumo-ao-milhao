@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.15';
+const APP_VERSION = '4.16';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -230,6 +230,7 @@ async function refreshPrices(silent) {
 async function refreshPricesNow(silent) {
   if (!navigator.onLine) { if (!silent) toast('Sem internet — usando os últimos preços salvos'); return false; }
   const p = DB.prices; let ok = 0;
+  const assetsP = refreshAssetPrices(!silent).catch((e) => { console.warn('assets', e); return null; });   // shares run at the same time as crypto + FX
   try {
     const j = await fetchJSON('https://api.coingecko.com/api/v3/simple/price?ids=' + COINS.map((c) => c.id).join(',') + '&vs_currencies=usd');
     for (const c of COINS) if (j[c.id]?.usd) { p[c.k] = j[c.id].usd; ok++; }
@@ -245,7 +246,7 @@ async function refreshPricesNow(silent) {
       if (j.rates?.BRL && j.rates?.USD) { p.gbpbrl = j.rates.BRL; p.usdbrl = j.rates.BRL / j.rates.USD; if (j.rates.EUR) p.eurbrl = j.rates.BRL / j.rates.EUR; fx = true; }
     } catch (e) { console.warn('fx er-api', e); }
   }
-  let ar = null; try { ar = await refreshAssetPrices(!silent); } catch (e) { console.warn('assets', e); }
+  const ar = await assetsP;
   if (ok || fx || ar) {
     p.updatedAt = new Date().toISOString(); await save(); render();
     if (!silent) toast(ok === COINS.length && fx ? 'Preços atualizados' : 'Alguns preços não atualizaram — confira em Atualizar');
@@ -406,7 +407,7 @@ document.addEventListener('visibilitychange', () => {
 $('#w-empty').onclick = async () => { DB = emptyDB(); await save(); enterApp(); };
 $('#w-import').onclick = () => pickImport(true);
 
-const PRICE_EVERY = 15 * 60 * 1000;
+const PRICE_EVERY = 5 * 60 * 1000;   // while the app is open: shares every 5 min (Finnhub is real-time), the Google Sheet every 15
 function maybeRefreshPrices() {
   const age = DB?.prices.updatedAt ? Date.now() - new Date(DB.prices.updatedAt) : Infinity;
   if (DB && age > PRICE_EVERY) refreshPrices(true);
@@ -517,17 +518,21 @@ async function brapiQuotes(syms, key) {
     () => fetchJSONo('https://brapi.dev/api/v2/stocks/quote?symbols=' + encodeURIComponent(list), key ? { headers: { Authorization: 'Bearer ' + key } } : {}),
     () => fetchJSONo('https://brapi.dev/api/quote/' + encodeURIComponent(list) + (key ? '?token=' + encodeURIComponent(key) : '')),
   ];
-  for (const t of tries) { try { Object.assign(got, brapiParse(await t())); if (syms.every((s) => got[s])) return got; } catch (e) { console.warn('brapi', e); LASTERR.brapi = e.message; } }
-  for (const s of syms.filter((x) => !got[x])) {   // free plans may allow only one ticker per request
+  const mode = DB?.settings?.brapiMode;   // remembers what works with your plan, so refused requests aren't repeated
+  if (mode !== 'single') for (const [i, t] of tries.entries()) { if (mode === 'v1' && i === 0) continue;
+    try { Object.assign(got, brapiParse(await t())); if (syms.every((s) => got[s])) { if (DB) DB.settings.brapiMode = i ? 'v1' : 'v2'; return got; } } catch (e) { console.warn('brapi', e); LASTERR.brapi = e.message; } }
+  const single = syms.filter((x) => !got[x]);
+  await Promise.all(single.map(async (s) => {   // free plans may allow only one ticker per request
     try { Object.assign(got, brapiParse(await fetchJSONo('https://brapi.dev/api/quote/' + encodeURIComponent(s) + (key ? '?token=' + encodeURIComponent(key) : '')))); } catch (e) { console.warn('brapi one', s, e); LASTERR.brapi = e.message; }
-  }
+  }));
+  if (DB && single.length && single.every((x) => got[x]) && !Object.keys(got).some((k) => !single.includes(k))) DB.settings.brapiMode = 'single';
   return got;
 }
 async function finnhubQuotes(syms, key) {
   const got = {}; if (!key) return got;
-  for (const s of syms) {
+  await Promise.all(syms.map(async (s) => {   // all tickers at once (limit is ~60/minute)
     try { const j = await fetchJSONo('https://finnhub.io/api/v1/quote?symbol=' + encodeURIComponent(s) + '&token=' + encodeURIComponent(key)); if (j.c > 0) got[s] = j.c; else LASTERR.finnhub = 'ticker sem preço (' + s + ')'; } catch (e) { console.warn('finnhub', s, e); LASTERR.finnhub = e.message; }
-  }
+  }));
   return got;
 }
 // Alpha Vantage: London (.LON, prices in pence) and European exchanges (.DEX, .PAR, .AMS…). End-of-day prices, ~25 requests/day on the free plan.
@@ -593,14 +598,16 @@ async function setKeyStatus(prov, ok, okMsg) {
 let assetBusy = false;
 async function refreshAssetPrices(force) {
   const A = DB?.assets || []; if (!A.length || assetBusy || !navigator.onLine) return null;
-  if (!force && DB.prices.assetsAt && Date.now() - new Date(DB.prices.assetsAt) < 60 * 60 * 1000) return null;
+  if (!force && DB.prices.assetsAt && Date.now() - new Date(DB.prices.assetsAt) < 5 * 60 * 1000) return null;
   assetBusy = true;
   try {
     const keys = DB.settings.keys || {};
     const b3 = [...new Set(A.filter((a) => a.market === 'B3').map((a) => a.ticker))], us = [...new Set(A.filter((a) => a.market === 'US').map((a) => a.ticker))];
     const euDue = force || !DB.prices.euAt || Date.now() - new Date(DB.prices.euAt) > 20 * 3600 * 1000;   // saves the small daily allowance
     const eu = euDue ? [...new Set(A.filter((a) => a.market === 'EU').map((a) => a.ticker))] : [];
-    const gs = [...new Set(A.filter((a) => a.market === 'GS').map((a) => a.ticker))];
+    const gsDue = force || !DB.prices.gsAt || Date.now() - new Date(DB.prices.gsAt) > 15 * 60 * 1000,
+      gs = gsDue ? [...new Set(A.filter((a) => a.market === 'GS').map((a) => a.ticker))] : [];
+    if (gs.length) DB.prices.gsAt = new Date().toISOString();
     const [pb, pu, pe, pg] = await Promise.all([b3.length ? brapiQuotes(b3, keys.brapi) : {}, us.length ? finnhubQuotes(us, keys.finnhub) : {}, eu.length ? alphaQuotes(eu, keys.alpha) : {}, gs.length ? sheetQuotes(gs, keys.sheet) : {}]);
     if (gs.length && keys.sheet) await setKeyStatus('sheet', Object.keys(pg).length > 0, `${Object.keys(pg).length}/${gs.length} preços`);
     if (b3.length) await setKeyStatus('brapi', Object.keys(pb).length > 0, `${Object.keys(pb).length}/${b3.length} preços`);
@@ -608,7 +615,7 @@ async function refreshAssetPrices(force) {
     if (eu.length && keys.alpha) { await setKeyStatus('alpha', Object.keys(pe).length > 0, `${Object.keys(pe).length}/${eu.length} preços`); DB.prices.euAt = new Date().toISOString(); }
     let ok = 0, fail = [];
     for (const a of A) {
-      if (a.market === 'MANUAL' || (a.market === 'EU' && !euDue)) continue;
+      if (a.market === 'MANUAL' || (a.market === 'EU' && !euDue) || (a.market === 'GS' && !gsDue)) continue;
       const px = (a.market === 'B3' ? pb : a.market === 'US' ? pu : a.market === 'GS' ? pg : pe)[a.ticker];
       if (px) { a.price = px; a.priceAt = new Date().toISOString(); a.priceErr = null; ok++; if (a.market === 'GS' && sheetQuotes.cur?.[a.ticker]) a.currency = sheetQuotes.cur[a.ticker]; }
       else { a.priceErr = 'não atualizou'; fail.push(a.ticker); }   // keeps the last good price
@@ -777,7 +784,8 @@ function chart(id, cfg) {
   const el = document.getElementById(id); if (!el) return;
   if (!window.Chart) {
     el.parentElement.innerHTML = '<p class="small">Carregando gráficos… (se não aparecer, confira se o arquivo chart.umd.js está no GitHub)</p>';
-    if (!chartLoading) { chartLoading = true; const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'; sc.onload = () => render(); document.head.appendChild(sc); }
+    if (!chartLoading) { chartLoading = true;   // loaded only when a chart is needed, so the app opens faster
+      loadScript('chart.umd.js').catch(() => loadScript('https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js')).then(() => render(), () => { chartLoading = false; }); }
     return;
   }
   Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
@@ -814,14 +822,17 @@ function vPainel() {
   const meta = num(s.meta), prog = meta ? Math.min(1, P.total / meta) : 0;
   const backupOld = !s.lastBackup || Date.now() - new Date(s.lastBackup) > 30 * 864e5;
   const R = returnsData(), Ry = R.years.find((y) => y.year === st.year);
+  const heroOpen = () => { try { return localStorage.getItem('rumo.hero') === '1'; } catch { return false; } };
   const aportesYear = DB.history.filter((h) => h.month.startsWith(st.year) && h.aporteGBP && h.fx).reduce((a, h) => a + h.aporteGBP * h.fx, 0);
   $('#view').innerHTML = `
   ${backupOld ? `<div class="banner" onclick="location.hash='#ajustes'">💾 Faça um backup — ${s.lastBackup ? 'o último foi há mais de 30 dias' : 'você ainda não fez nenhum'}. Toque aqui.</div>` : ''}
   <div class="grid split">
    <div class="grid" style="align-content:start">
-    <div class="card hero kpi click" onclick="location.hash='#atualizar'">
-      <div class="lab">Patrimônio hoje</div><div class="val">${brl(P.total)}</div>
+    <div class="card hero kpi click" id="hero-tap">
+      <div class="lab" style="display:flex;justify-content:space-between">Patrimônio hoje <span class="chev">${heroOpen() ? '▴' : '▾'}</span></div><div class="val">${brl(P.total)}</div>
       <div class="sub">${gbp(P.total / (DB.prices.gbpbrl || 1))} · ${usd(P.total / (DB.prices.usdbrl || 1))}</div>
+      ${heroOpen() ? `<div class="hero-list">${[...P.alloc.map((a) => [a.n, a.v, a.c]), ['Caixa', num(DB.balances.caixa), '#94A3B8']].map(([n, v, c]) =>
+        `<div><span><i style="background:${c}"></i>${n}</span><b>${brl(v)}</b><em>${pct(P.total ? v / P.total : 0)}</em></div>`).join('')}</div>` : ''}
     </div>
     <div class="grid g2">
       <div class="card kpi click" onclick="location.hash='#graficos'"><div class="lab">Rentabilidade ${st.year}</div>
@@ -848,7 +859,7 @@ function vPainel() {
    <div class="grid" style="align-content:start">
     <div class="card click" onclick="location.hash='#atualizar'">
       <h2>Próximo aporte → <span class="blue">${P.next.n}</span></h2>
-      ${P.alloc.map((a) => `<div class="alloc-row"><b style="color:${a.c}">${a.n}</b>
+      ${P.alloc.map((a) => `<div class="alloc-row"><span><b style="color:${a.c}">${a.n}</b><div class="small" style="margin-top:1px">${brl(a.v)}</div></span>
         <div class="track"><div style="width:${Math.min(100, a.cur * 100 / .5)}%;background:${a.c}"></div><span style="left:${Math.min(100, a.tgt * 100 / .5)}%"></span></div>
         <span class="r">${pct(a.cur)}</span><span class="r" style="color:${a.gap > 0 ? 'var(--amber)' : 'var(--green)'};font-weight:700">${signed((v) => nf0.format(v), a.gap)}</span></div>`).join('')}
       <div class="small" style="margin-top:6px">Barra = atual · traço = meta · laranja = falta para a meta · caixa <span class="money">${brl(DB.balances.caixa)}</span> fora das metas</div>
@@ -860,6 +871,7 @@ function vPainel() {
     <a class="card click goto" href="#graficos"><span>📈 Ver gráficos</span><span>›</span></a>
    </div>
   </div>`;
+  $('#hero-tap').onclick = () => { try { localStorage.setItem('rumo.hero', heroOpen() ? '0' : '1'); } catch {} render(); };
 }
 
 function vGraficos() {
