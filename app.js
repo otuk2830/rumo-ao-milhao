@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.23';
+const APP_VERSION = '4.24';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -108,6 +108,7 @@ function emptyDB() {
     crypto: { people: ['Eu'], pre: {}, fees: {}, log: [] },
     assets: [],
     history: [],
+    daily: [],
   };
 }
 function normalize(d) {
@@ -125,6 +126,7 @@ function normalize(d) {
   d.settings.keyStatus = d.settings.keyStatus || {};
   d.assets = (d.assets || []).map((a) => ({ id: a.id || uid(), ...a }));
   d.history = (d.history || []).filter((h) => h && h.month).sort((a, b) => a.month.localeCompare(b.month));
+  d.daily = (d.daily || []).filter((x) => x && x.d && typeof x.v === 'number').sort((a, b) => a.d.localeCompare(b.d));
   d.crypto.log = (d.crypto.log || []).map((x) => ({ id: x.id || uid(), ...x })).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   return d;
 }
@@ -258,7 +260,7 @@ async function refreshPricesNow(silent) {
   }
   const ar = await assetsP;
   if (ok || fx || ar) {
-    p.updatedAt = new Date().toISOString(); await save(); render();
+    p.updatedAt = new Date().toISOString(); await save(); render(); dailySnap();
     if (!silent) toast(ok === COINS.length && fx ? 'Preços atualizados' : 'Alguns preços não atualizaram — confira em Atualizar');
     return true;
   }
@@ -423,11 +425,22 @@ function maybeRefreshPrices() {
   if (DB && age > PRICE_EVERY) refreshPrices(true);
 }
 setInterval(() => { if (DB && !document.hidden) maybeRefreshPrices(); }, 60 * 1000);
+// ---- daily snapshot: today's patrimônio, saved quietly after prices load (later the same day replaces it)
+const today = () => { const t = new Date(); return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0'); };
+async function dailySnap() {
+  if (!DB || !DB.prices.updatedAt || Date.now() - new Date(DB.prices.updatedAt) > 2 * 3600 * 1000) return;   // only with fresh prices
+  const P = portfolio(); if (!(P.total > 0)) return;
+  const e = { d: today(), v: Math.round(P.total * 100) / 100, g: DB.prices.gbpbrl || null, u: DB.prices.usdbrl || null };
+  const D = (DB.daily ||= []), last = D[D.length - 1];
+  if (last && last.d === e.d) D[D.length - 1] = e; else D.push(e);
+  await save();
+}
 async function enterApp() {
   $('#lock').classList.add('hidden'); $('#welcome').classList.add('hidden'); $('#app').classList.remove('hidden');
   if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
   render();
   maybeRefreshPrices();
+  setTimeout(() => dailySnap(), 20000);   // fallback if prices were already fresh (no refresh needed)
 }
 
 /* ---------------- backup ---------------- */
@@ -926,6 +939,7 @@ function vPainel() {
   $('#hero-tap').onclick = () => { try { localStorage.setItem('rumo.hero', heroOpen() ? '0' : '1'); } catch {} render(); };
 }
 
+const patRange = () => { try { return localStorage.getItem('rumo.range') || 'all'; } catch { return 'all'; } };
 function vGraficos() {
   const P = portfolio(), H = DB.history, R = returnsData();
   const hp = H.filter((h) => typeof h.pat === 'number');
@@ -933,7 +947,10 @@ function vGraficos() {
   $('#view').innerHTML = `
   <div class="grid split">
    <div class="grid" style="align-content:start">
-    <div class="card"><h2>Patrimônio</h2><div class="chart-box" style="height:260px"><canvas id="ch-pat"></canvas></div></div>
+    <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px"><h2 style="margin:0">Patrimônio</h2>
+      <div class="seg mini">${[['30', '30d'], ['90', '90d'], ['365', '1a'], ['all', 'Tudo']].map(([k, l]) => `<button class="${patRange() === k ? 'on' : ''}" data-rg="${k}">${l}</button>`).join('')}</div></div>
+      <div class="chart-box" style="height:260px"><canvas id="ch-pat"></canvas></div>
+      <div class="small" style="margin-top:6px">${(DB.daily || []).length ? `Diário desde ${new Date((DB.daily[0].d) + 'T12:00').toLocaleDateString('pt-BR')} (salvo sozinho ao abrir o app)` : 'O app guarda o patrimônio de cada dia em que você abrir — a linha diária começa hoje.'}${patRange() === 'all' ? ' · antes disso, os meses do Histórico' : ''}</div></div>
     <div class="card"><h2>Dividendos por mês</h2><div class="chart-box" style="height:240px"><canvas id="ch-div"></canvas></div></div>
     <div class="card"><h2>Dividendos por ano</h2><div class="chart-box" style="height:220px"><canvas id="ch-year"></canvas></div></div>
    </div>
@@ -952,7 +969,20 @@ function vGraficos() {
    </div>
   </div>`;
   const opts = (fmt) => ({ maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => fmt(c.raw) } } }, scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 7 } }, y: { grid: gridOpts(), ticks: kTicks } } });
-  chart('ch-pat', { type: 'line', data: { labels: hp.map((h) => ymLabel(h.month)), datasets: [{ data: hp.map((h) => h.pat), borderColor: '#2563EB', backgroundColor: 'rgba(37,99,235,.15)', fill: true, pointRadius: 0, tension: .2, borderWidth: 2 }] }, options: opts(brl) });
+  // patrimônio line: monthly history until the daily snapshots start, then one point per day
+  { const D = DB.daily || [], first = D[0]?.d, ts = (d) => new Date(d + 'T12:00').getTime(), pr = DB.prices;
+    const cur = (() => { try { return localStorage.getItem('rumo.cur') || 'BRL'; } catch { return 'BRL'; } })();
+    const conv = (v, g, u) => (cur === 'GBP' ? v / (g || pr.gbpbrl || 1) : cur === 'USD' ? v / (u || pr.usdbrl || 1) : v);
+    const fmt = cur === 'GBP' ? gbp : cur === 'USD' ? usd : brl;
+    let pts = [...hp.filter((h) => !first || h.month < first.slice(0, 7)).map((h) => { const [y, m] = h.month.split('-').map(Number); return { x: new Date(y, m, 0, 12).getTime(), y: conv(h.pat, h.fx) }; }),
+      ...D.map((x) => ({ x: ts(x.d), y: conv(x.v, x.g, x.u) }))];
+    const rg = patRange(); if (rg !== 'all') { const from = Date.now() - Number(rg) * 864e5; pts = pts.filter((q) => q.x >= from); }
+    const span = pts.length > 1 ? pts[pts.length - 1].x - pts[0].x : 0;
+    const dl = (v) => { const d = new Date(v); return span > 200 * 864e5 ? MONTHS[d.getMonth()].slice(0, 3).toLowerCase() + '/' + String(d.getFullYear()).slice(2) : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }); };
+    chart('ch-pat', { type: 'line', data: { datasets: [{ data: pts, borderColor: '#2563EB', backgroundColor: 'rgba(37,99,235,.15)', fill: true, pointRadius: pts.length < 40 ? 2 : 0, tension: .2, borderWidth: 2 }] },
+      options: { maintainAspectRatio: false, parsing: false, plugins: { legend: { display: false }, tooltip: { callbacks: { title: (c) => new Date(c[0].raw.x).toLocaleDateString('pt-BR'), label: (c) => fmt(c.raw.y) } } },
+        scales: { x: { type: 'linear', min: pts[0]?.x, max: pts[pts.length - 1]?.x, grid: { display: false }, ticks: { maxTicksLimit: 6, callback: dl } }, y: { grid: gridOpts(), ticks: kTicks } } } }); }
+  $$('#view [data-rg]').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.range', b.dataset.rg); } catch {} render(); }));
   chart('ch-div', { type: 'bar', data: { labels: H.map((h) => ymLabel(h.month)), datasets: [{ data: H.map(divTotal), backgroundColor: '#0EA5A4', borderRadius: 2 }] }, options: opts(brl) });
   chart('ch-year', { type: 'bar', data: { labels: yrs.slice(-10), datasets: [{ data: byY.slice(-10), backgroundColor: cssVar('--bar-strong'), borderRadius: 4 }] }, options: opts(brl) });
   chart('ch-alloc', { type: 'doughnut', data: { labels: P.alloc.map((a) => a.n), datasets: [{ data: P.alloc.map((a) => a.v), backgroundColor: P.alloc.map((a) => a.hex), borderColor: cssVar('--card'), borderWidth: 2 }] },
@@ -1370,6 +1400,7 @@ async function exportExcel() {
     X.utils.book_append_sheet(wb, ws, name);
   };
   const BR = '"R$" #,##0.00', GB = '"£" #,##0.00', PC = '0.00%';
+  if ((DB.daily || []).length) add('Diário', [['Data', 'Patrimônio (R$)', 'GBP/BRL', 'USD/BRL'], ...DB.daily.map((x) => [new Date(x.d + 'T12:00:00Z'), x.v, x.g, x.u])], [12, 18, 10, 10], { 0: 'dd/mm/yyyy', 1: BR });
   add('Histórico', [['Mês', 'Patrimônio (R$)', 'Aporte (£)', 'GBP/BRL', 'Aporte (R$)', 'Div FIIs (R$)', 'Div Ações (R$)', 'Div Stocks (£)', 'Div total (R$)', 'Variação (R$)', 'Rendimento sem aporte (R$)', 'Retorno do mês', 'Observação'],
     ...H.map((h, i) => { const prev = H[i - 1], v = prev && typeof prev.pat === 'number' && typeof h.pat === 'number' && ymDiff(prev.month, h.month) === 1 ? h.pat - prev.pat : null, rm = rByM[h.month];
       return [md(h.month), h.pat ?? null, h.aporteGBP ?? null, h.fx ?? null, h.aporteGBP != null && h.fx ? h.aporteGBP * h.fx : null, h.divFII ?? null, h.divAcoes ?? null, h.divStocks ?? null, divTotal(h), v, rm ? rm.gain : null, rm ? rm.r : null, h.note || null]; })],

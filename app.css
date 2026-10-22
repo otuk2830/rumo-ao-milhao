@@ -212,3 +212,6 @@ html.priv .hero-list b{filter:blur(8px)}
 .ask-b .btn.danger{background:#DC2626; color:#fff}
 .coinpx{font-size:13px; color:var(--muted); margin-top:2px; font-weight:600}
 .coinpx span{font-weight:700; margin-left:4px}
+
+/* v4.24 — range buttons on the Patrimônio chart */
+.seg.mini{margin:0; padding:3px; border-radius:10px} .seg.mini button{padding:5px 9px; font-size:12px; flex:0 0 auto}
