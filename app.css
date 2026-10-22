@@ -215,3 +215,4 @@ html.priv .hero-list b{filter:blur(8px)}
 
 /* v4.24 — range buttons on the Patrimônio chart */
 .seg.mini{margin:0; padding:3px; border-radius:10px} .seg.mini button{padding:5px 9px; font-size:12px; flex:0 0 auto}
+#pat-note:not([data-all="1"]) .pat-all{display:none}

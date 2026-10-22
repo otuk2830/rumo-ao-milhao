@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.24';
+const APP_VERSION = '4.25';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -950,7 +950,7 @@ function vGraficos() {
     <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px"><h2 style="margin:0">Patrimônio</h2>
       <div class="seg mini">${[['30', '30d'], ['90', '90d'], ['365', '1a'], ['all', 'Tudo']].map(([k, l]) => `<button class="${patRange() === k ? 'on' : ''}" data-rg="${k}">${l}</button>`).join('')}</div></div>
       <div class="chart-box" style="height:260px"><canvas id="ch-pat"></canvas></div>
-      <div class="small" style="margin-top:6px">${(DB.daily || []).length ? `Diário desde ${new Date((DB.daily[0].d) + 'T12:00').toLocaleDateString('pt-BR')} (salvo sozinho ao abrir o app)` : 'O app guarda o patrimônio de cada dia em que você abrir — a linha diária começa hoje.'}${patRange() === 'all' ? ' · antes disso, os meses do Histórico' : ''}</div></div>
+      <div class="small" id="pat-note" data-all="${patRange() === 'all' ? '1' : ''}" style="margin-top:6px">${(DB.daily || []).length ? `Diário desde ${new Date((DB.daily[0].d) + 'T12:00').toLocaleDateString('pt-BR')} (salvo sozinho ao abrir o app)` : 'O app guarda o patrimônio de cada dia em que você abrir — a linha diária começa hoje.'}<span class="pat-all"> · antes disso, os meses do Histórico</span></div></div>
     <div class="card"><h2>Dividendos por mês</h2><div class="chart-box" style="height:240px"><canvas id="ch-div"></canvas></div></div>
     <div class="card"><h2>Dividendos por ano</h2><div class="chart-box" style="height:220px"><canvas id="ch-year"></canvas></div></div>
    </div>
@@ -974,15 +974,27 @@ function vGraficos() {
     const cur = (() => { try { return localStorage.getItem('rumo.cur') || 'BRL'; } catch { return 'BRL'; } })();
     const conv = (v, g, u) => (cur === 'GBP' ? v / (g || pr.gbpbrl || 1) : cur === 'USD' ? v / (u || pr.usdbrl || 1) : v);
     const fmt = cur === 'GBP' ? gbp : cur === 'USD' ? usd : brl;
-    let pts = [...hp.filter((h) => !first || h.month < first.slice(0, 7)).map((h) => { const [y, m] = h.month.split('-').map(Number); return { x: new Date(y, m, 0, 12).getTime(), y: conv(h.pat, h.fx) }; }),
+    const build = (rg) => { let pts = [...hp.filter((h) => !first || h.month < first.slice(0, 7)).map((h) => { const [y, m] = h.month.split('-').map(Number); return { x: new Date(y, m, 0, 12).getTime(), y: conv(h.pat, h.fx) }; }),
       ...D.map((x) => ({ x: ts(x.d), y: conv(x.v, x.g, x.u) }))];
-    const rg = patRange(); if (rg !== 'all') { const from = Date.now() - Number(rg) * 864e5; pts = pts.filter((q) => q.x >= from); }
-    const span = pts.length > 1 ? pts[pts.length - 1].x - pts[0].x : 0;
-    const dl = (v) => { const d = new Date(v); return span > 200 * 864e5 ? MONTHS[d.getMonth()].slice(0, 3).toLowerCase() + '/' + String(d.getFullYear()).slice(2) : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }); };
+      if (rg !== 'all') { const from = Date.now() - Number(rg) * 864e5; pts = pts.filter((q) => q.x >= from); }
+      const span = pts.length > 1 ? pts[pts.length - 1].x - pts[0].x : 0;
+      const dl = (v) => { const d = new Date(v); return span > 200 * 864e5 ? MONTHS[d.getMonth()].slice(0, 3).toLowerCase() + '/' + String(d.getFullYear()).slice(2) : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }); };
+      return { pts, dl }; };
+    const { pts, dl } = build(patRange());
     chart('ch-pat', { type: 'line', data: { datasets: [{ data: pts, borderColor: '#2563EB', backgroundColor: 'rgba(37,99,235,.15)', fill: true, pointRadius: pts.length < 40 ? 2 : 0, tension: .2, borderWidth: 2 }] },
       options: { maintainAspectRatio: false, parsing: false, plugins: { legend: { display: false }, tooltip: { callbacks: { title: (c) => new Date(c[0].raw.x).toLocaleDateString('pt-BR'), label: (c) => fmt(c.raw.y) } } },
-        scales: { x: { type: 'linear', min: pts[0]?.x, max: pts[pts.length - 1]?.x, grid: { display: false }, ticks: { maxTicksLimit: 6, callback: dl } }, y: { grid: gridOpts(), ticks: kTicks } } } }); }
-  $$('#view [data-rg]').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.range', b.dataset.rg); } catch {} render(); }));
+        scales: { x: { type: 'linear', min: pts[0]?.x, max: pts[pts.length - 1]?.x, grid: { display: false }, ticks: { maxTicksLimit: 6, callback: dl } }, y: { grid: gridOpts(), ticks: kTicks } } } });
+    // range buttons change only this chart (no full-page redraw)
+    $$('#view [data-rg]').forEach((b) => (b.onclick = () => {
+      const rg = b.dataset.rg; try { localStorage.setItem('rumo.range', rg); } catch {}
+      $$('#view [data-rg]').forEach((x) => x.classList.toggle('on', x === b));
+      const ch = charts.find((c) => c.canvas.id === 'ch-pat'); if (!ch) return render();
+      const n = build(rg), ds = ch.data.datasets[0];
+      ds.data = n.pts; ds.pointRadius = n.pts.length < 40 ? 2 : 0;
+      Object.assign(ch.options.scales.x, { min: n.pts[0]?.x, max: n.pts[n.pts.length - 1]?.x }); ch.options.scales.x.ticks.callback = n.dl;
+      ch.update();
+      const note = $('#pat-note'); if (note) note.dataset.all = rg === 'all' ? '1' : '';
+    })); }
   chart('ch-div', { type: 'bar', data: { labels: H.map((h) => ymLabel(h.month)), datasets: [{ data: H.map(divTotal), backgroundColor: '#0EA5A4', borderRadius: 2 }] }, options: opts(brl) });
   chart('ch-year', { type: 'bar', data: { labels: yrs.slice(-10), datasets: [{ data: byY.slice(-10), backgroundColor: cssVar('--bar-strong'), borderRadius: 4 }] }, options: opts(brl) });
   chart('ch-alloc', { type: 'doughnut', data: { labels: P.alloc.map((a) => a.n), datasets: [{ data: P.alloc.map((a) => a.v), backgroundColor: P.alloc.map((a) => a.hex), borderColor: cssVar('--card'), borderWidth: 2 }] },
