@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.20';
+const APP_VERSION = '4.21';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -681,11 +681,13 @@ function vAtivos() {
         if (!sorted.length) return '<p class="muted">Nenhum ativo ainda. Toque em ＋ Adicionar ativo.</p>';
         if (cls !== 'stocks') return sorted.map(itemHtml).join('');
         // Exterior: one "pie" per type, like Trading 212 (Stocks, REITs, ETFs)
+        let openP = []; try { openP = JSON.parse(localStorage.getItem('rumo.pies') || '[]'); } catch {}
         return ['Stock', 'REIT', 'ETF'].map((k) => {
           const g = sorted.filter((r) => (r.a.kind || 'Stock') === k); if (!g.length) return '';
           const v = g.reduce((a, r) => a + r.value, 0), wc = g.filter((r) => r.cost !== null), c = wc.reduce((a, r) => a + r.cost, 0), gp = wc.reduce((a, r) => a + r.pl, 0);
-          return `<div class="pie-h"><div><b>Pie ${k === 'Stock' ? 'Stocks' : k + 's'}</b><span class="small muted"> · ${g.length} ${g.length === 1 ? 'ativo' : 'ativos'} · ${pct(total ? v / total : 0)}</span></div>
-            <div class="r"><b class="money">${M(v)}</b>${c ? `<div class="small ${gp < 0 ? 'neg' : 'pos'}">${signed(pct, gp / c)}</div>` : ''}</div></div>` + g.map(itemHtml).join('');
+          const op = openP.includes(k);
+          return `<div class="pie-h click" data-pie="${k}"><div><b><span class="chev2">${op ? '▾' : '▸'}</span> ${k === 'Stock' ? 'Stocks' : k + 's'}</b><span class="small muted"> · ${g.length} ${g.length === 1 ? 'ativo' : 'ativos'} · ${pct(total ? v / total : 0)}</span></div>
+            <div class="r"><b class="money">${M(v)}</b>${c ? `<div class="small ${gp < 0 ? 'neg' : 'pos'}">${signed(pct, gp / c)}</div>` : ''}</div></div>` + (op ? g.map(itemHtml).join('') : '');
         }).join('');
       })()}
      <div class="small muted" style="margin-top:8px">⚠ = o preço não atualizou; o app continua usando o último preço bom. Você pode digitar um preço manual no ativo.</div>
@@ -700,6 +702,9 @@ function vAtivos() {
   $('#at-refresh').onclick = async () => { toast('Buscando preços…'); $('#btn-refresh').classList.add('spin'); setTimeout(() => $('#btn-refresh')?.classList.remove('spin'), 1200); const r = await refreshAssetPrices(true); render(); if (r) toast(r.fail.length ? `${r.ok} atualizados · não atualizaram: ${r.fail.join(', ')}` : `✓ ${r.ok} preços em dia`, 4500); else toast('Sem internet ou sem ativos'); };
   $('#at-add').onclick = () => editAsset(null, cls);
   $$('#view .item').forEach((el) => (el.onclick = () => editAsset(el.dataset.id)));
+  // tap a pie to open/close its shares (remembered on this phone)
+  $$('#view .pie-h').forEach((el) => (el.onclick = () => { let o = []; try { o = JSON.parse(localStorage.getItem('rumo.pies') || '[]'); } catch {}
+    const k = el.dataset.pie; o = o.includes(k) ? o.filter((x) => x !== k) : [...o, k]; try { localStorage.setItem('rumo.pies', JSON.stringify(o)); } catch {} render(); }));
 }
 function editAsset(id, cls) {
   const a = id ? DB.assets.find((x) => x.id === id) : { id: uid(), cls, ticker: '', kind: cls === 'stocks' ? 'Stock' : '', market: ACLS.find((c) => c.k === cls).market, currency: 'BRL', avgCur: cls === 'stocks' ? 'GBP' : 'ASSET', qty: 0, avg: null, manualPrice: null, price: null, priceAt: null };
@@ -921,9 +926,9 @@ function vGraficos() {
     <div class="card"><h2>Rentabilidade (sem aportes)</h2>
       ${R.years.length ? `
       <div class="row"><span class="l small"><b>Ano</b></span><span class="r small">Meses · Ganho · <b>Retorno</b></span></div>
-      ${R.years.map((y) => `<div class="row"><span class="l"><b>${y.year}</b></span><span class="r">${y.n} · ${signed(brl, y.gain)} · <b class="${y.r < 0 ? 'neg' : 'pos'}">${signed(pct, y.r)}</b></span></div>`).join('')}
+      ${[...R.years].reverse().map((y) => `<div class="row"><span class="l"><b>${y.year}</b></span><span class="r">${y.n} · ${signed(brl, y.gain)} · <b class="${y.r < 0 ? 'neg' : 'pos'}">${signed(pct, y.r)}</b></span></div>`).join('')}
       <div class="row"><span class="l">Desde ${ymLabel(R.since)}</span><span class="r"><b class="${R.total < 0 ? 'neg' : 'pos'}">${signed(pct, R.total)}</b></span></div>
-      <div class="chart-box" style="height:200px;margin-top:8px"><canvas id="ch-ret"></canvas></div>`
+      <div class="small" style="margin-top:10px">Mês a mês — últimos 12 meses</div><div class="chart-box" style="height:200px;margin-top:4px"><canvas id="ch-ret"></canvas></div>`
       : '<p class="small">Ainda sem dados. A rentabilidade começa a ser calculada a partir do primeiro mês salvo com aporte (mesmo que seja £0).</p>'}
       <div class="small" style="margin-top:8px">Método "time-weighted" (o mesmo de corretoras e fundos): cada mês = variação do patrimônio − aporte, dividido pelo que estava investido; os meses se multiplicam no ano. Dividendos contam como ganho. Em R$, então inclui o efeito do câmbio.</div>
     </div>
@@ -936,7 +941,8 @@ function vGraficos() {
   chart('ch-alloc', { type: 'doughnut', data: { labels: P.alloc.map((a) => a.n), datasets: [{ data: P.alloc.map((a) => a.v), backgroundColor: P.alloc.map((a) => a.hex), borderColor: cssVar('--card'), borderWidth: 2 }] },
     options: { maintainAspectRatio: false, cutout: '60%', plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => c.label + ': ' + brl(c.raw) } } } } });
   if (R.months.length) {
-    chart('ch-ret', { type: 'bar', data: { labels: R.months.map((m) => ymLabel(m.month)), datasets: [{ data: R.months.map((m) => m.r * 100), backgroundColor: R.months.map((m) => (m.r < 0 ? '#DC2626' : '#16A34A')), borderRadius: 2 }] },
+    const RM = R.months.slice(-12);   // chart: the last 12 months; the table above keeps every year
+    chart('ch-ret', { type: 'bar', data: { labels: RM.map((m) => ymLabel(m.month)), datasets: [{ data: RM.map((m) => m.r * 100), backgroundColor: RM.map((m) => (m.r < 0 ? '#DC2626' : '#16A34A')), borderRadius: 2, maxBarThickness: 48 }] },
       options: { maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => c.raw.toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + '%' } } },
         scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 7 } }, y: { grid: gridOpts(), ticks: { callback: (v) => v + '%' } } } } });
   }

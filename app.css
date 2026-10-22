@@ -200,3 +200,5 @@ html.priv .hero-list b{filter:blur(8px)}
 .pie-h b{color:var(--title)} .pie-h .r{text-align:right}
 .cur-swap{border:1px solid rgba(255,255,255,.25); background:rgba(255,255,255,.1); color:#fff; border-radius:10px; padding:5px 10px; font-size:13px; font-weight:700; letter-spacing:0; transition:transform .12s}
 .cur-swap:active{transform:scale(.9); background:var(--blue)}
+.pie-h{cursor:pointer; transition:opacity .12s} .pie-h:active{opacity:.6}
+.chev2{display:inline-block; width:14px; color:var(--muted); font-size:13px}
