@@ -217,3 +217,15 @@ html.priv .hero-list b{filter:blur(8px)}
 .seg.mini{margin:0; padding:3px; border-radius:10px} .seg.mini button{padding:5px 9px; font-size:12px; flex:0 0 auto}
 #pat-note:not([data-all="1"]) .pat-all{display:none}
 .banner.info{background:var(--blue-xl); color:var(--title); border:1px solid var(--input-border)}
+
+/* v4.27 — calendar month picker */
+.month-btn{border:1px solid var(--input-border); background:var(--blue-xl); color:var(--blue); border-radius:10px; padding:9px 12px; font-weight:700; font-size:16px; white-space:nowrap}
+html.dark .month-btn{color:#93C5FD}
+.mp-head{display:flex; align-items:center; justify-content:space-between; margin:6px 0 12px}
+.mp-head b{font-size:20px; color:var(--title)} .mp-head .icon-btn{font-size:22px} .mp-head .icon-btn:disabled{opacity:.3}
+.mp-grid{display:grid; grid-template-columns:repeat(3, 1fr); gap:8px}
+.mp-m{position:relative; border:1px solid var(--line); background:var(--soft); color:var(--ink); border-radius:12px; padding:14px 0; font-size:16px; font-weight:700}
+.mp-m.now{border:2px solid var(--blue)} .mp-m.on{background:var(--blue); color:#fff; border-color:var(--blue)}
+.mp-m:disabled{opacity:.3} .mp-m:active{transform:scale(.95)}
+.mp-m i{position:absolute; top:7px; right:9px; width:7px; height:7px; border-radius:4px; background:var(--green)}
+.mp-m.on i{background:#fff}

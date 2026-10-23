@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.26';
+const APP_VERSION = '4.27';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1028,6 +1028,24 @@ function yearsList() {
 }
 
 /* ----- Atualizar ----- */
+// calendar-style month picker: a year with ‹ › and 12 month tiles; saved months get a green dot
+function pickMonth(sel, onPick) {
+  const max = ymAdd(ym(), 1), min = DB.history[0]?.month || ymAdd(ym(), -12);
+  let year = Number(sel.slice(0, 4));
+  const draw = (el) => {
+    const yMin = Number(min.slice(0, 4)), yMax = Number(max.slice(0, 4));
+    el.innerHTML = `<h3 style="margin-bottom:4px">Mês de referência</h3>
+      <div class="mp-head"><button class="icon-btn" data-y="-1" ${year <= yMin ? 'disabled' : ''}>‹</button><b>${year}</b><button class="icon-btn" data-y="1" ${year >= yMax ? 'disabled' : ''}>›</button></div>
+      <div class="mp-grid">${MONTHS.map((n, i) => { const m = year + '-' + String(i + 1).padStart(2, '0'), off = m > max || m < min, saved = DB.history.some((h) => h.month === m);
+        return `<button class="mp-m ${m === sel ? 'on' : ''} ${m === ym() ? 'now' : ''}" data-m="${m}" ${off ? 'disabled' : ''}>${n.slice(0, 3)}${saved ? '<i></i>' : ''}</button>`; }).join('')}</div>
+      <div class="small muted" style="margin:10px 0"><span style="color:var(--green)">●</span> já salvo no Histórico · borda azul = mês atual</div>
+      <button class="btn block" id="mp-cancel">Cancelar</button>`;
+    $$('[data-y]', el).forEach((b) => (b.onclick = () => { year += Number(b.dataset.y); draw(el); }));
+    $$('[data-m]', el).forEach((b) => (b.onclick = () => { closeSheet(); if (b.dataset.m !== sel) onPick(b.dataset.m); }));
+    $('#mp-cancel', el).onclick = closeSheet;
+  };
+  openSheet('<div id="mp"></div>', (el) => draw($('#mp', el)));
+}
 function monthOptions(sel, onlyMissing) {
   const first = DB.history[0]?.month || ymAdd(ym(), -12), out = [];
   let last = ymAdd(ym(), 1); if (sel && sel > last) last = sel;
@@ -1070,7 +1088,7 @@ function vAtualizar() {
   <div class="grid split">
   <div class="grid">
    <div class="card"><div class="step"><b>1</b><h2>Mês de referência</h2></div>
-     <div class="field"><label>Mês que você está atualizando</label><select id="f-month">${monthOptions(d.month)}</select></div>
+     <div class="field"><label>Mês que você está atualizando</label><button class="month-btn" id="f-month">📅 ${ymLong(d.month)}</button></div>
      <div class="small">${exists ? '⚠ Este mês já está no Histórico — salvar vai substituir.' : 'Este mês ainda não foi salvo.'}</div></div>
    <div class="card"><div class="step"><b>2</b><h2>Câmbio e preços</h2></div>
      <div class="small" style="margin-bottom:6px">Buscados automaticamente (${p.updatedAt ? fmtDate(p.updatedAt) : 'ainda não buscados'}). Você pode corrigir à mão.</div>
@@ -1100,12 +1118,11 @@ function vAtualizar() {
      <div class="small">Guarda no Histórico: patrimônio total, aporte, dividendos e o câmbio de hoje. Pode salvar de novo quantas vezes quiser — substitui o mês.</div>
      <button class="btn primary block" id="f-save">Salvar ${ymLong(d.month)} no Histórico</button></div>
   </div></div>`;
-  $('#f-month').onchange = async (e) => {
-    const m = e.target.value; if (!m) return;
+  $('#f-month').onclick = () => pickMonth(d.month, async (m) => {
     const h = DB.history.find((x) => x.month === m);
     DB.draft = { month: m, divFII: h?.divFII ?? null, divAcoes: h?.divAcoes ?? null, divStocks: h?.divStocks ?? null, aporteGBP: h?.aporteGBP ?? null };
     await save(); render();
-  };
+  });
   $$('#view input[data-k]').forEach((inp) => inp.addEventListener('change', async () => {
     const [grp, key] = inp.dataset.k.split('.'); const v = parsePT(inp.value);
     const target = grp === 'p' ? DB.prices : grp === 'b' ? DB.balances : DB.draft;
