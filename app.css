@@ -229,3 +229,9 @@ html.dark .month-btn{color:#93C5FD}
 .mp-m:disabled{opacity:.3} .mp-m:active{transform:scale(.95)}
 .mp-m i{position:absolute; top:7px; right:9px; width:7px; height:7px; border-radius:4px; background:var(--green)}
 .mp-m.on i{background:#fff}
+.month-btn{display:inline-flex; align-items:center; gap:7px; max-width:100%; min-width:0; padding:9px 12px; font-size:15px; overflow:hidden}
+.month-btn span{white-space:nowrap; overflow:hidden; text-overflow:ellipsis} .month-btn svg{flex:0 0 auto}
+.month-btn .mb-chev{font-size:12px; opacity:.7; flex:0 0 auto}
+.month-row{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0}
+.month-row label{font-size:14px; flex:1 1 auto; min-width:0}
+.month-row .month-btn{flex:0 0 auto}

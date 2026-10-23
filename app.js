@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.27';
+const APP_VERSION = '4.29';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -646,7 +646,8 @@ async function refreshAssetPrices(force) {
       gs = gsDue ? [...new Set(A.filter((a) => a.market === 'GS' || (a.market === 'B3' && keys.sheet)).map((a) => a.ticker))] : [];
     if (gs.length) DB.prices.gsAt = new Date().toISOString();
     const [pb, pu, pe, pg] = await Promise.all([b3.length ? brapiQuotes(b3, keys.brapi) : {}, us.length ? finnhubQuotes(us, keys.finnhub) : {}, eu.length ? alphaQuotes(eu, keys.alpha) : {}, gs.length ? sheetQuotes(gs, keys.sheet) : {}]);
-    if (gs.length && keys.sheet) await setKeyStatus('sheet', Object.keys(pg).length > 0, `${Object.keys(pg).length}/${gs.length} preços`);
+    if (gs.length && keys.sheet) { const own = [...new Set(A.filter((a) => a.market === 'GS').map((a) => a.ticker))], n = own.filter((t) => pg[t]).length;   // B3 extras are only a backup for brapi
+      await setKeyStatus('sheet', Object.keys(pg).length > 0, `${n}/${own.length} preços`); }
     if (b3.length) await setKeyStatus('brapi', Object.keys(pb).length > 0, `${Object.keys(pb).length}/${b3.length} preços`);
     if (us.length && keys.finnhub) await setKeyStatus('finnhub', Object.keys(pu).length > 0, `${Object.keys(pu).length}/${us.length} preços`);
     if (eu.length && keys.alpha) { await setKeyStatus('alpha', Object.keys(pe).length > 0, `${Object.keys(pe).length}/${eu.length} preços`); DB.prices.euAt = new Date().toISOString(); }
@@ -1088,7 +1089,7 @@ function vAtualizar() {
   <div class="grid split">
   <div class="grid">
    <div class="card"><div class="step"><b>1</b><h2>Mês de referência</h2></div>
-     <div class="field"><label>Mês que você está atualizando</label><button class="month-btn" id="f-month">📅 ${ymLong(d.month)}</button></div>
+     <div class="month-row"><label>Mês que você está atualizando</label><button class="month-btn" id="f-month"><svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>${ymLong(d.month)}</span><span class="mb-chev">▾</span></button></div>
      <div class="small">${exists ? '⚠ Este mês já está no Histórico — salvar vai substituir.' : 'Este mês ainda não foi salvo.'}</div></div>
    <div class="card"><div class="step"><b>2</b><h2>Câmbio e preços</h2></div>
      <div class="small" style="margin-bottom:6px">Buscados automaticamente (${p.updatedAt ? fmtDate(p.updatedAt) : 'ainda não buscados'}). Você pode corrigir à mão.</div>
