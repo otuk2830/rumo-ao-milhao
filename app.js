@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.32';
+const APP_VERSION = '4.33';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -544,13 +544,13 @@ function editAp(id) {
       const old = DB.apLog.find((e) => e.id === o.id)?.date.slice(0, 7);
       const i = DB.apLog.findIndex((e) => e.id === o.id); if (i > -1) DB.apLog[i] = o; else DB.apLog.push(o);
       applyApLog(m); if (old && old !== m) { if (apSum(old) === null) { if (DB.draft.month === old) DB.draft.aporteGBP = null; const h = DB.history.find((q) => q.month === old); if (h) h.aporteGBP = null; } else applyApLog(old); }
-      await save(); closeSheet(); render();
+      await save(); closeSheet(); render(); fillMissingFx();
       toast(`✓ Aporte de ${gbp(o.gbp, 2)} em ${new Date(o.date + 'T12:00').toLocaleDateString('pt-BR')} — atualize hoje os saldos/quantidades que mudaram`, 5000);
     };
     if (id) $('#ap-del', el).onclick = async () => {
       if (!(await ask('Apagar este aporte?', { yes: 'Sim, apagar', danger: true }))) return;
       const m = x.date.slice(0, 7); DB.apLog = DB.apLog.filter((e) => e.id !== id);
-      if (apSum(m) === null) { if (DB.draft.month === m) DB.draft.aporteGBP = null; const h = DB.history.find((q) => q.month === m); if (h) h.aporteGBP = null; } else applyApLog(m);
+      if (apSum(m) === null) { if (DB.draft.month === m) DB.draft.aporteGBP = 0; const h = DB.history.find((q) => q.month === m); if (h) h.aporteGBP = 0; } else applyApLog(m);   // no entries left = £0 that month
       await save(); closeSheet(); render();
     };
   });
@@ -572,12 +572,45 @@ function dailyMonth(month) {
   return { month, r: f - 1, gain, aporte: cfT, daily: true, days: pts.length - 1 };
 }
 
+// old months (imported from the spreadsheet) have no GBP/BRL rate: fetch the official rate of the month's last day (ECB, Frankfurter)
+async function fillMissingFx() {
+  if (!DB || !navigator.onLine) return; let changed = false;
+  for (const h of DB.history) {
+    if (h.fx || h.aporteGBP === null || h.aporteGBP === undefined || !num(h.aporteGBP)) continue;
+    const [y, m] = h.month.split('-').map(Number), last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    try { const j = await fetchJSON('https://api.frankfurter.app/' + last + '?from=GBP&to=BRL'); if (j?.rates?.BRL) { h.fx = j.rates.BRL; h.fxAuto = true; changed = true; } } catch (e) { console.warn('fx hist', e); }
+  }
+  for (const e of DB.apLog || []) {   // aportes logged with a past date get that day's rate
+    if (e.gFixed || e.date >= today()) continue;
+    try { const j = await fetchJSON('https://api.frankfurter.app/' + e.date + '?from=GBP&to=BRL'); if (j?.rates?.BRL) { e.g = j.rates.BRL; e.gFixed = true; changed = true; } } catch (er) { console.warn('fx ap', er); }
+  }
+  if (changed) { await save(); render(); }
+}
 // ---- daily snapshot: today's patrimônio, saved quietly after prices load (later the same day replaces it)
 const today = () => { const t = new Date(); return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0'); };
+const CAT_N = { acoes: 'Ações', fiis: 'FIIs', rf: 'Renda fixa', stocks: 'Exterior', crypto: 'Cripto', caixa: 'Caixa' };
+const catNow = (P) => { const o = {}; for (const k in P.v) o[k] = Math.round(P.v[k] * 100) / 100; o.caixa = Math.round(num(DB.balances.caixa) * 100) / 100; return o; };
+// "where did the growth come from": total change − aportes = real growth; split into dividends + price/FX, and by category when both ends have it
+function growthBreak(from, to, apBRLv, divBRL) {
+  const chg = to.v - from.v, real = chg - apBRLv, cats = from.c && to.c ? Object.keys(CAT_N).map((k) => ({ k, n: CAT_N[k], d: num(to.c[k]) - num(from.c[k]) })) : null;
+  return { chg, ap: apBRLv, real, div: divBRL, val: real - divBRL, pct: from.v ? real / (from.v + 0.5 * apBRLv) : 0, cats };
+}
+function breakHtml(B, title, sub) {
+  const ln = (l, v, cls = '', b = false) => `<div class="mc-row"><span>${l}</span>${b ? '<b' : '<span'} class="${cls}" style="text-align:right">${v}${b ? '</b>' : '</span>'}</div>`;
+  const sg = (v) => signed((x) => brl(x), v), cl = (v) => (v < 0 ? 'neg' : 'pos');
+  return `<div class="mc"><div class="mc-top"><div class="small muted">${sub}</div><h3 style="margin:2px 0 0">${title}</h3>
+    <div class="mc-big ${cl(B.real)}">${sg(B.real)}</div><div style="font-weight:700" class="${cl(B.real)}">${signed(pct, B.pct)} de crescimento real</div></div>
+    ${ln('Variação do patrimônio', sg(B.chg))}${ln('− Aportes (dinheiro novo)', B.ap ? '−' + brl(B.ap) : brl(0))}${ln('= Crescimento real', sg(B.real), cl(B.real), true)}
+    <div class="small muted" style="margin:12px 0 2px;font-weight:700;letter-spacing:.03em">DE ONDE VEIO</div>
+    ${ln('💰 Dividendos recebidos', sg(B.div), cl(B.div))}${ln('📈 Preços e câmbio', sg(B.val), cl(B.val))}
+    ${B.cats ? `<div class="small muted" style="margin:12px 0 2px;font-weight:700;letter-spacing:.03em">POR CATEGORIA (inclui aportes e dividendos que ficaram lá)</div>${B.cats.map((c) => ln(c.n, sg(c.d), Math.abs(c.d) < 0.5 ? '' : cl(c.d))).join('')}`
+      : '<div class="small muted" style="margin-top:10px">A divisão por categoria aparece a partir do próximo mês salvo (o app começou a guardar o valor de cada categoria agora).</div>'}
+    <button class="btn block" onclick="closeSheet()" style="margin-top:14px">Fechar</button></div>`;
+}
 async function dailySnap() {
   if (!DB || !DB.prices.updatedAt || Date.now() - new Date(DB.prices.updatedAt) > 2 * 3600 * 1000) return;   // only with fresh prices
   const P = portfolio(); if (!(P.total > 0)) return;
-  const e = { d: today(), v: Math.round(P.total * 100) / 100, g: DB.prices.gbpbrl || null, u: DB.prices.usdbrl || null };
+  const e = { d: today(), v: Math.round(P.total * 100) / 100, g: DB.prices.gbpbrl || null, u: DB.prices.usdbrl || null, c: catNow(P) };
   const D = (DB.daily ||= []), last = D[D.length - 1];
   if (last && last.d === e.d) D[D.length - 1] = e; else D.push(e);
   await save();
@@ -588,6 +621,7 @@ async function enterApp() {
   render();
   maybeRefreshPrices();
   setTimeout(() => dailySnap(), 20000);   // fallback if prices were already fresh (no refresh needed)
+  setTimeout(() => fillMissingFx(), 4000);
 }
 
 /* ---------------- backup ---------------- */
@@ -1019,8 +1053,9 @@ function returnsData() {
     const a = H[i - 1], b = H[i];
     if (typeof a.pat !== 'number' || typeof b.pat !== 'number' || ymDiff(a.month, b.month) !== 1) continue;
     const dm = b.month < ym() ? dailyMonth(b.month) : null; if (dm) { months.push(dm); continue; }   // daily data covers it → exact
-    if (b.aporteGBP === null || b.aporteGBP === undefined || !b.fx) continue; // aporte unknown → month can't be measured
-    const C = num(b.aporteGBP) * b.fx, den = a.pat + 0.5 * C;
+    if (b.aporteGBP === null || b.aporteGBP === undefined) continue; // aporte unknown → month can't be measured
+    const fx = b.fx || (num(b.aporteGBP) === 0 ? 1 : null); if (!fx) continue;   // rate is fetched in the background for old months
+    const C = num(b.aporteGBP) * fx, den = a.pat + 0.5 * C;
     if (den <= 0) continue;
     months.push({ month: b.month, gain: b.pat - a.pat - C, r: (b.pat - a.pat - C) / den, aporte: C });
   }
@@ -1049,8 +1084,10 @@ function vPainel() {
   // "Este mês": live patrimônio vs the last month saved before this calendar month
   const prevM = DB.history.filter((h) => typeof h.pat === 'number' && h.month < ym()).slice(-1)[0] || null, mChg = prevM ? P.total - prevM.pat : 0;
   // real growth this month (aportes taken out): exact daily chain when possible, otherwise vs last saved month
+  const apNowGBP = (() => { const a = apSum(ym()); if (a !== null) return a; const dv = DB.draft.month === ym() ? DB.draft.aporteGBP : null; if (dv !== null && dv !== undefined) return dv; const h = DB.history.find((x) => x.month === ym()); return h && h.aporteGBP !== undefined ? h.aporteGBP : null; })();
+  const mRealV = prevM && apNowGBP !== null && apNowGBP !== undefined ? mChg - apNowGBP * num(DB.prices.gbpbrl) : null;
   const mReal = (() => { const dm = dailyMonth(ym()); if (dm) return dm.r; if (!prevM || !prevM.pat) return null;
-    const apNow = apSum(ym()) ?? (DB.draft.month === ym() ? DB.draft.aporteGBP : null); if (apNow === null || apNow === undefined) return null;
+    const apNow = apNowGBP; if (apNow === null || apNow === undefined) return null;
     return (P.total - prevM.pat - apNow * num(DB.prices.gbpbrl)) / prevM.pat; })();
   // crypto 24h move, weighted by what you hold of each coin
   const c24 = (() => { let now = 0, before = 0, any = false; for (const x of cs.coins) { const ch = DB.prices[x.k + '_24h']; if (typeof ch !== 'number' || !x.valUSD) continue; any = true; now += x.valUSD; before += x.valUSD / (1 + ch / 100); } return any && before ? now / before - 1 : null; })();
@@ -1071,8 +1108,9 @@ function vPainel() {
       <div class="card kpi click" onclick="location.hash='#graficos'"><div class="lab">Rentabilidade ${st.year}</div>
         <div class="val ${Ry ? (Ry.r < 0 ? 'neg' : 'pos') : ''}">${Ry ? signed(pct, Ry.r) : '–'}</div>
         <div class="sub">${Ry ? `${Ry.n} ${Ry.n === 1 ? 'mês' : 'meses'} · ${signed(CV, Ry.gain)}` : 'começa com os aportes'}</div></div>
-      <div class="card kpi click" onclick="location.hash='#historico'"><div class="lab">Este mês</div>
-        ${prevM ? `<div class="val ${mChg < 0 ? 'neg' : 'pos'}">${signed(CV, mChg)}</div><div class="sub">${mReal === null ? signed(pct, prevM.pat ? mChg / prevM.pat : 0) + ' · ' : `<b class="${mReal < 0 ? 'neg' : 'pos'}">${signed(pct, mReal)}</b> sem aportes · `}desde ${ymLabel(prevM.month)}</div>`
+      <div class="card kpi click" id="k-month"><div class="lab">Crescimento ${MON3[new Date().getMonth()].toLowerCase()} <span class="chev" style="color:var(--muted)">ⓘ</span></div>
+        ${prevM ? (mReal !== null ? `<div class="val ${mReal < 0 ? 'neg' : 'pos'}">${signed(pct, mReal)}</div><div class="sub">${signed(CV, mRealV)} real · total ${signed(CV, mChg)}</div>`
+            : `<div class="val ${mChg < 0 ? 'neg' : 'pos'}">${signed(CV, mChg)}</div><div class="sub">informe o aporte do mês para ver o real</div>`)
           : '<div class="val">–</div><div class="sub">precisa de um mês salvo</div>'}</div>
       <div class="card kpi click" onclick="location.hash='#dividendos'"><div class="lab">Dividendos ${MONTHS[new Date().getMonth()].toLowerCase()}</div>
         <div class="val">${CV(divNow)}</div><div class="sub">${st.year}: ${CV(st.divYear)} · média ${CV(st.monthsWithDiv ? st.divYear / st.monthsWithDiv : 0)}/mês</div></div>
@@ -1107,6 +1145,13 @@ function vPainel() {
   </div>`;
   $('#cur-swap').onclick = (e) => { e.stopPropagation(); const nx = { BRL: 'GBP', GBP: 'USD', USD: 'BRL' }[heroCur]; try { localStorage.setItem('rumo.cur', nx); } catch {} render(); };
   $('#hero-tap').onclick = () => { try { localStorage.setItem('rumo.hero', heroOpen() ? '0' : '1'); } catch {} render(); };
+  $('#k-month').onclick = () => {
+    if (!prevM) return;
+    const from = { v: prevM.pat, c: prevM.cat || null }, D = DB.daily || [], base = [...D].filter((x) => x.d < ym() + '-01').pop();
+    const fromB = base && base.c && (new Date(ym() + '-01') - new Date(base.d)) / 864e5 <= 7 ? { v: base.v, c: base.c } : from;
+    const B = growthBreak(fromB, { v: P.total, c: catNow(P) }, num(apNowGBP) * num(DB.prices.gbpbrl), divNow);
+    openSheet(breakHtml(B, MONTHS[new Date().getMonth()] + ' até agora', 'desde ' + ymLong(prevM.month) + ' · ao vivo'));
+  };
 }
 
 const patRange = () => { try { return localStorage.getItem('rumo.range') || 'all'; } catch { return 'all'; } };
@@ -1306,7 +1351,7 @@ function vAtualizar() {
       if (!(await ask('Você não preencheu o aporte. Salvar como £0 (nenhum dinheiro novo este mês)?'))) return;
       d2.aporteGBP = 0;
     }
-    const entry = { month: d2.month, pat: Math.round(P2.total * 100) / 100, aporteGBP: d2.aporteGBP, divFII: d2.divFII, divAcoes: d2.divAcoes, divStocks: d2.divStocks, fx: DB.prices.gbpbrl || null };
+    const entry = { month: d2.month, pat: Math.round(P2.total * 100) / 100, aporteGBP: d2.aporteGBP, divFII: d2.divFII, divAcoes: d2.divAcoes, divStocks: d2.divStocks, fx: DB.prices.gbpbrl || null, cat: catNow(P2) };
     const i = DB.history.findIndex((h) => h.month === d2.month);
     if (i > -1) { if (!(await ask(`${ymLong(d2.month)} já existe. Substituir?`))) return; entry.note = DB.history[i].note; DB.history[i] = entry; }
     else DB.history.push(entry);
@@ -1354,8 +1399,10 @@ function monthCard(m) {
     <div class="mc-sub">FIIs ${brl(num(h.divFII), 2)} · Ações ${brl(num(h.divAcoes), 2)} · Stocks ${gbp(num(h.divStocks), 2)}${nLog ? ` · ${nLog} ${nLog === 1 ? 'lançamento' : 'lançamentos'}` : ''}</div>
     ${row('Câmbio', h.fx ? '£1 = R$ ' + nf2.format(h.fx) : '–')}
     ${h.note ? row('Nota', esc(h.note)) : ''}
-    <button class="btn primary block" id="mc-edit" style="margin-top:14px">✎ Editar mês</button>
-    <button class="btn block" onclick="closeSheet()">Fechar</button></div>`, (el) => { $('#mc-edit', el).onclick = () => { closeSheet(); editMonth(m); }; });
+    ${prev && typeof prev.pat === 'number' && typeof h.pat === 'number' && ap !== null ? '<button class="btn block" id="mc-why" style="margin-top:14px">📊 De onde veio o crescimento</button>' : ''}
+    <button class="btn primary block" id="mc-edit" style="margin-top:${prev && ap !== null ? 8 : 14}px">✎ Editar mês</button>
+    <button class="btn block" onclick="closeSheet()">Fechar</button></div>`, (el) => { $('#mc-edit', el).onclick = () => { closeSheet(); editMonth(m); };
+    $('#mc-why', el) && ($('#mc-why', el).onclick = () => openSheet(breakHtml(growthBreak({ v: prev.pat, c: prev.cat }, { v: h.pat, c: h.cat }, ap, divTotal(h)), ymLong(m), 'vs ' + ymLong(prev.month)))); });
 }
 function editMonth(m) {
   const h = m ? DB.history.find((x) => x.month === m) : { month: ym(), pat: null, aporteGBP: null, divFII: null, divAcoes: null, divStocks: null, fx: null, note: '' };
