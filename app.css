@@ -332,3 +332,25 @@ html.priv .dvbars, html.priv .dv-big{filter:blur(8px)}
 .rk:last-of-type{border-bottom:0} .rk em{font-style:normal; color:var(--muted); font-size:12px} .rk b{color:var(--title)}
 .rkb{height:8px; border-radius:4px; background:var(--track); overflow:hidden} .rkb i{display:block; height:100%; background:#14B8A6; border-radius:4px}
 #dmrow > div.next{flex-basis:92px}
+
+/* v4.45 — settings as grouped lists, chart sheet, year table */
+.sets{max-width:640px; margin:0 auto}
+.ssec{font-size:12px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin:16px 6px 6px}
+.ssec:first-child{margin-top:2px}
+.sgrp{background:var(--card); border:1px solid var(--line); border-radius:16px; overflow:hidden}
+.srow{display:flex; align-items:center; gap:12px; padding:12px 14px; border-bottom:1px solid var(--line); min-height:56px}
+.srow:last-child{border-bottom:0} .srow:active{background:var(--soft)}
+.sic{width:30px; height:30px; border-radius:9px; display:flex; align-items:center; justify-content:center; flex:0 0 auto}
+.sic svg{width:17px; height:17px; stroke:#fff; fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round}
+.srt{flex:1; min-width:0} .srt b{display:block; font-weight:600; color:var(--title); font-size:15px} .srt span{display:block; font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.srv{color:var(--muted); font-size:14px; white-space:nowrap} .schev{color:var(--faint); font-size:20px; margin-left:2px}
+.sbad{font-size:11px; font-weight:700; border-radius:999px; padding:3px 8px; white-space:nowrap} .sbad.ok{background:var(--green-l); color:var(--green)} .sbad.w{background:var(--banner-bg); color:var(--amber)}
+.stog{width:46px; height:28px; border-radius:14px; background:var(--track); position:relative; flex:0 0 auto; transition:background .15s}
+.stog::after{content:''; position:absolute; left:3px; top:3px; width:22px; height:22px; border-radius:11px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.3); transition:left .15s}
+.stog.on{background:#22C55E} .stog.on::after{left:21px}
+.sdanger .srt b{color:var(--red)}
+.pstats{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:12px 0 10px}
+.pstats > div{background:var(--soft); border-radius:12px; padding:8px 10px; min-width:0} .pstats b{display:block; color:var(--title); font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.yt{display:grid; grid-template-columns:52px 1fr 1fr 40px; gap:6px; padding:9px 0; border-bottom:1px solid var(--line); font-size:14px; align-items:center}
+.yt.h{font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.04em} .yt b{color:var(--title)} .yt span{text-align:right}
+html.priv .pstats b{filter:blur(7px)}

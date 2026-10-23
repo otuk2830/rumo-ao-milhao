@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.44';
+const APP_VERSION = '4.45';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -253,7 +253,7 @@ async function refreshPricesNow(silent) {
   } catch (e) { console.warn('crypto price', e); }
   let fx = false;
   try {
-    const j = await fetchJSON('https://api.frankfurter.app/latest?from=GBP&to=BRL,USD,EUR');
+    let j; try { j = await fetchJSON('https://api.frankfurter.dev/v1/latest?base=GBP&symbols=BRL,USD,EUR'); } catch { j = await fetchJSON('https://api.frankfurter.app/latest?from=GBP&to=BRL,USD,EUR'); }
     if (j.rates?.BRL && j.rates?.USD) { p.gbpbrl = j.rates.BRL; p.usdbrl = j.rates.BRL / j.rates.USD; if (j.rates.EUR) p.eurbrl = j.rates.BRL / j.rates.EUR; fx = true; }
   } catch (e) { console.warn('fx frankfurter', e); }
   if (!fx) {
@@ -585,16 +585,28 @@ function dailyMonth(month) {
 }
 
 // old months (imported from the spreadsheet) have no GBP/BRL rate: fetch the official rate of the month's last day (ECB, Frankfurter)
+async function fxOn(date) {   // official GBP/BRL of a past day (ECB via Frankfurter)
+  for (const u of ['https://api.frankfurter.dev/v1/' + date + '?base=GBP&symbols=BRL', 'https://api.frankfurter.app/' + date + '?from=GBP&to=BRL']) {
+    try { const j = await fetchJSON(u); if (j?.rates?.BRL) return j.rates.BRL; } catch (e) { console.warn('fx hist', u, e); }
+  }
+  return null;
+}
 async function fillMissingFx() {
   if (!DB || !navigator.onLine) return; let changed = false;
   for (const h of DB.history) {
     if (h.fx || h.aporteGBP === null || h.aporteGBP === undefined || !num(h.aporteGBP)) continue;
     const [y, m] = h.month.split('-').map(Number), last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
-    try { const j = await fetchJSON('https://api.frankfurter.app/' + last + '?from=GBP&to=BRL'); if (j?.rates?.BRL) { h.fx = j.rates.BRL; h.fxAuto = true; changed = true; } } catch (e) { console.warn('fx hist', e); }
+    const rate = await fxOn(last); if (rate) { h.fx = rate; h.fxAuto = true; changed = true; }
   }
   for (const e of DB.apLog || []) {   // aportes logged with a past date get that day's rate
     if (e.gFixed || e.date >= today()) continue;
-    try { const j = await fetchJSON('https://api.frankfurter.app/' + e.date + '?from=GBP&to=BRL'); if (j?.rates?.BRL) { e.g = j.rates.BRL; e.gFixed = true; changed = true; } } catch (er) { console.warn('fx ap', er); }
+    const rate = await fxOn(e.date); if (rate) { e.g = rate; e.gFixed = true; changed = true; }
+  }
+  // still missing (offline or service down): use the nearest saved month's rate, so the month can be measured
+  for (const h of DB.history) {
+    if (h.fx || !num(h.aporteGBP)) continue;
+    const near = DB.history.filter((x) => x.fx && Math.abs(ymDiff(x.month, h.month)) <= 2).sort((a, b) => Math.abs(ymDiff(a.month, h.month)) - Math.abs(ymDiff(b.month, h.month)))[0];
+    if (near) { h.fx = near.fx; h.fxAuto = 'aprox'; changed = true; }
   }
   if (changed) { await save(); render(); }
 }
@@ -650,6 +662,13 @@ function growthBreak(from, to, apBRLv, divBRL, loc) {
   const chg = to.v - from.v, real = chg - apBRLv, cats = from.c && to.c ? Object.keys(CAT_N).map((k) => ({ k, n: CAT_N[k], d: num(to.c[k]) - num(from.c[k]) })) : null;
   const inv = loc ? loc.gainR : real, fx = loc ? real - loc.gainR : null;   // investment result (no FX) and the exchange-rate part
   return { chg, ap: apBRLv, real, div: divBRL, val: inv - divBRL, fx, rl: loc ? loc.r : null, pct: from.v ? real / (from.v + 0.5 * apBRLv) : 0, cats };
+}
+function yearTable() {   // returns by year (was on the Gráficos tab)
+  const R = returnsData(); if (!R.years.length) return '';
+  return `<div class="small muted" style="margin:14px 0 2px;font-weight:700;letter-spacing:.03em">POR ANO</div>
+    <div class="yt h"><span style="text-align:left">Ano</span><span>sem câmbio</span><span>em R$</span><span>meses</span></div>
+    ${[...R.years].reverse().map((y) => `<div class="yt"><b>${y.year}</b><span>${y.rl !== null ? `<b class="${y.rl < 0 ? 'neg' : 'pos'}">${signed(pct, y.rl)}</b>${y.full ? '' : `<small> (${y.nl} m)</small>`}` : '<span class="muted">–</span>'}</span><span class="${y.r < 0 ? 'neg' : 'pos'}">${signed(pct, y.r)}</span><span>${y.n}</span></div>`).join('')}
+    <div class="yt" style="border:0"><b>Total</b><span class="muted">desde ${R.since ? ymLabel(R.since) : '–'}</span><span class="${R.total < 0 ? 'neg' : 'pos'}">${signed(pct, R.total)}</span><span>${R.months.length}</span></div>`;
 }
 function breakHtml(B, title, sub) {
   const ln = (l, v, cls = '', b = false) => `<div class="mc-row"><span>${l}</span>${b ? '<b' : '<span'} class="${cls}" style="text-align:right">${v}${b ? '</b>' : '</span>'}</div>`;
@@ -1058,7 +1077,7 @@ function render() {
   setTimeout(() => $$('#view input[data-k]').forEach(liveFormat), 0);
   $('#btn-lock').classList.toggle('hidden', !!getMeta()?.open);
   charts.forEach((c) => c.destroy()); charts = [];
-  const r = TITLES[route()] ? route() : 'painel';
+  const r = TITLES[route()] && route() !== 'graficos' ? route() : 'painel';
   $('#top-title').textContent = TITLES[r];
   $('#top-sub').textContent = 'Preços: ' + (DB.prices.updatedAt ? fmtDate(DB.prices.updatedAt) : 'ainda não buscados') + (navigator.onLine ? '' : ' · offline');
   $$('.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === (r === 'cripto' ? 'ativos' : r)));
@@ -1118,7 +1137,6 @@ function returnsData() {
   const H = DB.history, months = [];
   for (let i = 1; i < H.length; i++) {
     const a = H[i - 1], b = H[i];
-    if (DB.settings.rentStart && b.month < DB.settings.rentStart) continue;   // user chose to start measuring later
     if (typeof a.pat !== 'number' || typeof b.pat !== 'number' || ymDiff(a.month, b.month) !== 1) continue;
     const lm = localMonth(b.month), rl = lm ? lm.r : null;
     const dm = b.month < ym() ? dailyMonth(b.month) : null; if (dm) { months.push({ ...dm, rl }); continue; }   // daily data covers it → exact
@@ -1176,7 +1194,7 @@ function vPainel() {
     const mn = Math.min(...pts), mx = Math.max(...pts), W = 300, H = 50, y = (v) => (mx === mn ? H / 2 : H - 4 - ((v - mn) / (mx - mn)) * (H - 8));
     const d = pts.map((v, k) => `${k ? 'L' : 'M'}${((k / (pts.length - 1)) * W).toFixed(1)} ${y(v).toFixed(1)}`).join(' ');
     return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#60A5FA" stop-opacity=".35"/><stop offset="1" stop-color="#60A5FA" stop-opacity="0"/></linearGradient></defs>
-      <path d="${d} L${W} ${H} L0 ${H} Z" fill="url(#sg)"/><path d="${d}" fill="none" stroke="#93C5FD" stroke-width="2" vector-effect="non-scaling-stroke"/></svg><div class="spark-l">${lbl} · toque para ver as categorias</div>`;
+      <path d="${d} L${W} ${H} L0 ${H} Z" fill="url(#sg)"/><path d="${d}" fill="none" stroke="#93C5FD" stroke-width="2" vector-effect="non-scaling-stroke"/></svg><div class="spark-l">${lbl} · toque na linha para o gráfico completo</div>`;
   })();
   const bars = (() => {   // last 12 months of real growth; current month live (lighter)
     const byM = Object.fromEntries(R.months.map((m) => [m.month, m.rl ?? m.r])), L = [];   // bars: no-FX return when known
@@ -1199,7 +1217,7 @@ function vPainel() {
       <div class="val">${HM[heroCur](P.total)}</div>
       ${dLoc ? `<span class="dchip ${dChg < 0 ? 'neg' : 'pos'}">${dChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(dChg))}</span> hoje · ${signed(pct, dLoc.r)}</span>` : ''}
       <div class="sub">${['BRL', 'GBP', 'USD'].filter((c) => c !== heroCur).map((c) => HM[c](P.total)).join(' · ')}</div>
-      ${spark}
+      <div id="spark-tap">${spark}</div>
       ${heroOpen() ? `<div class="hero-list">${[...P.alloc.map((a) => [a.n, a.v, a.c]), ['Caixa', num(DB.balances.caixa), '#94A3B8']].map(([n, v, c]) =>
         `<div><span><i style="background:${c}"></i>${n}</span><b>${HM[heroCur](v)}</b><em>${pct(P.total ? v / P.total : 0)}</em></div>`).join('')}</div>` : ''}
     </div>
@@ -1241,21 +1259,49 @@ function vPainel() {
       <div class="mrow" id="mrow">${ms.map((m) => `<div class="${m.hit ? 'ok' : m === nextMs ? 'next' : ''}">${m.v >= 1e6 ? nf0.format(m.v / 1e6) + ' mi' : nf0.format(m.v / 1000) + 'k'}<b>${m.hit ? ymLabel(m.hit) : m === nextMs && etaMs ? '~' + ymLabel(etaMs) : '–'}</b></div>`).join('')}</div>
       <div class="small" style="margin-top:6px">Verde = atingido (2 meses seguidos acima) · contorno = próximo, com data estimada no ritmo atual.</div>
     </div>
-    <a class="card click goto" href="#graficos"><span>📈 Ver gráficos</span><span>›</span></a>
    </div>
   </div>`;
   { const r = $('#mrow'), k = ms.indexOf(nextMs); if (r && k > 0) r.scrollLeft = Math.max(0, (k - 2) * 70); }   // show the last 2 reached + the next one
   $('#cur-swap').onclick = (e) => { e.stopPropagation(); const nx = { BRL: 'GBP', GBP: 'USD', USD: 'BRL' }[heroCur]; try { localStorage.setItem('rumo.cur', nx); } catch {} render(); };
+  $('#spark-tap') && ($('#spark-tap').onclick = (e) => { e.stopPropagation(); patSheet(); });
   $('#hero-tap').onclick = () => { try { localStorage.setItem('rumo.hero', heroOpen() ? '0' : '1'); } catch {} render(); };
   $('#k-perf').onclick = () => {
     if (!prevM) return;
     const from = { v: prevM.pat, c: prevM.cat || null }, D = DB.daily || [], base = [...D].filter((x) => x.d < ym() + '-01').pop();
     const fromB = base && base.c && (new Date(ym() + '-01') - new Date(base.d)) / 864e5 <= 7 ? { v: base.v, c: base.c } : from;
     const B = growthBreak(fromB, { v: P.total, c: catNow(P) }, num(apNowGBP) * num(DB.prices.gbpbrl), divNow, mLoc);
-    openSheet(breakHtml(B, MONTHS[new Date().getMonth()] + ' até agora', 'desde ' + ymLong(prevM.month) + ' · ao vivo'));
+    openSheet(breakHtml(B, MONTHS[new Date().getMonth()] + ' até agora', 'desde ' + ymLong(prevM.month) + ' · ao vivo').replace('<button class="btn block" onclick="closeSheet()"', yearTable() + '<button class="btn block" onclick="closeSheet()"'));
   };
 }
 
+let patChart = null;
+async function patSheet() {
+  const hp = DB.history.filter((h) => typeof h.pat === 'number'), D = DB.daily || [], first = D[0]?.d, ts = (d) => new Date(d + 'T12:00').getTime(), pr = DB.prices;
+  const cur = (() => { try { return localStorage.getItem('rumo.cur') || 'BRL'; } catch { return 'BRL'; } })();
+  const conv = (v, g, u) => (cur === 'GBP' ? v / (g || pr.gbpbrl || 1) : cur === 'USD' ? v / (u || pr.usdbrl || 1) : v), fmt = cur === 'GBP' ? gbp : cur === 'USD' ? usd : brl;
+  const all = [...hp.filter((h) => !first || h.month < first.slice(0, 7)).map((h) => { const [y, m] = h.month.split('-').map(Number); return { x: new Date(y, m, 0, 12).getTime(), y: conv(h.pat, h.fx) }; }),
+    ...D.map((x) => ({ x: ts(x.d), y: conv(x.v, x.g, x.u) }))];
+  const build = (rg) => { const pts = rg === 'all' ? all : all.filter((q) => q.x >= Date.now() - Number(rg) * 864e5); const span = pts.length > 1 ? pts[pts.length - 1].x - pts[0].x : 0;
+    return { pts, dl: (v) => { const d = new Date(v); return span > 200 * 864e5 ? MON3[d.getMonth()] + '/' + String(d.getFullYear()).slice(2) : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }); } }; };
+  const stats = (pts) => { if (!pts.length) return ''; const mx = pts.reduce((a, q) => (q.y > a.y ? q : a), pts[0]), d = (x) => new Date(x).toLocaleDateString('pt-BR', { month: '2-digit', year: '2-digit' });
+    return [['início', pts[0]], ['agora', pts[pts.length - 1]], ['máximo', mx]].map(([l, q]) => `<div><span class="small muted">${l}</span><b class="money">${fmt(q.y)}</b><span class="small muted">${d(q.x)}</span></div>`).join(''); };
+  const rg0 = patRange(), b0 = build(rg0);
+  openSheet(`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h3 style="margin:0">Patrimônio</h3>
+      <div class="seg mini">${[['30', '30d'], ['90', '90d'], ['365', '1a'], ['all', 'Tudo']].map(([k, l]) => `<button class="${rg0 === k ? 'on' : ''}" data-rg="${k}">${l}</button>`).join('')}</div></div>
+    <div class="pstats" id="ps">${stats(b0.pts)}</div><div class="chart-box" style="height:280px"><canvas id="ch-pat2"></canvas></div>
+    <div class="small muted" style="margin:6px 0 12px">Antes do registro diário, os meses do Histórico. Toque na linha para ver cada ponto.</div>
+    <button class="btn block" onclick="closeSheet()">Fechar</button>`, async (el) => {
+    if (!window.Chart) { try { await loadScript('chart.umd.js'); } catch { try { await loadScript('https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'); } catch { return; } } }
+    Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif'; Chart.defaults.color = cssVar('--muted');
+    patChart?.destroy();
+    patChart = new Chart($('#ch-pat2', el), { type: 'line', data: { datasets: [{ data: b0.pts, borderColor: '#3B82F6', backgroundColor: 'rgba(59,130,246,.15)', fill: true, pointRadius: b0.pts.length < 40 ? 2 : 0, tension: .2, borderWidth: 2 }] },
+      options: { maintainAspectRatio: false, parsing: false, plugins: { legend: { display: false }, tooltip: { callbacks: { title: (c) => new Date(c[0].raw.x).toLocaleDateString('pt-BR'), label: (c) => fmt(c.raw.y) } } },
+        scales: { x: { type: 'linear', min: b0.pts[0]?.x, max: b0.pts[b0.pts.length - 1]?.x, grid: { display: false }, ticks: { maxTicksLimit: 5, callback: b0.dl } }, y: { grid: gridOpts(), ticks: kTicks } } } });
+    $$('[data-rg]', el).forEach((b) => (b.onclick = () => { const rg = b.dataset.rg; try { localStorage.setItem('rumo.range', rg); } catch {}
+      $$('[data-rg]', el).forEach((x) => x.classList.toggle('on', x === b)); const n = build(rg), ds = patChart.data.datasets[0];
+      ds.data = n.pts; ds.pointRadius = n.pts.length < 40 ? 2 : 0; Object.assign(patChart.options.scales.x, { min: n.pts[0]?.x, max: n.pts[n.pts.length - 1]?.x }); patChart.options.scales.x.ticks.callback = n.dl; patChart.update(); $('#ps', el).innerHTML = stats(n.pts); }));
+  });
+}
 const patRange = () => { try { return localStorage.getItem('rumo.range') || 'all'; } catch { return 'all'; } };
 function vGraficos() {
   const P = portfolio(), H = DB.history, R = returnsData();
@@ -1519,7 +1565,7 @@ function vHistorico() {
       return `<div class="mo click" data-m="${h.month}"><span class="n">${MONTHS[Number(h.month.slice(5)) - 1]}</span><span class="v">${typeof h.pat === 'number' ? brl(h.pat) : '–'}</span>
         <span class="s"><span class="gb">${r !== null ? `<i style="${r < 0 ? 'right:50%' : 'left:50%'};width:${w}%;background:${r < 0 ? 'var(--red)' : 'var(--green)'}"></i>` : ''}</span>
         ${r !== null ? `<b class="${r < 0 ? 'neg' : 'pos'}">${signed(pct, r)}</b>` : '<span>sem aporte</span>'}
-        ${h.aporteGBP !== null && h.aporteGBP !== undefined ? ` · 📥 ${gbp(h.aporteGBP)}` : ''} · 💰 ${brl(divTotal(h))}${r === null && varP !== null ? ` · <span class="${varP < 0 ? 'neg' : ''}">${signed(brl, varP)}</span>` : ''}${h.note ? ' · ' + esc(h.note) : ''}</span></div>`;
+        ${h.aporteGBP !== null && h.aporteGBP !== undefined ? ` · aporte ${gbp(h.aporteGBP)}` : ''} · div ${brl(divTotal(h))}${r === null && varP !== null ? ` · <span class="${varP < 0 ? 'neg' : ''}">${signed(brl, varP)}</span>` : ''}${h.note ? ' · ' + esc(h.note) : ''}</span></div>`;
     }).join('') : '';
     return `<div class="yr click" data-y="${y}"><div><b>${isOpen(y) ? '▾' : '▸'} ${y}</b><div class="small muted">${M.length} ${M.length === 1 ? 'mês' : 'meses'}${ap ? ' · aportes ' + gbp(ap) : ''} · div ${brl(dv)}</div></div>
       <div class="r"><b>${lastM ? brl(lastM.pat) : '–'}</b><div class="small muted">${ro !== null ? `<span class="${ro < 0 ? 'neg' : 'pos'}">${signed(pct, ro)}</span> real · ${Y.n} ${Y.n === 1 ? 'mês medido' : 'meses medidos'}` : chg !== null ? `${signed(brl, chg)} no ano` : ''}</div></div></div>${rows}`;
@@ -1728,102 +1774,125 @@ function keyBadge(prov) {
   if (!st) return '<div class="kst none">• ainda não testada</div>';
   return `<div class="kst ${st.ok ? 'ok' : 'bad'}">${st.ok ? '✓ Funcionando' : '✗ Não funcionou'} · ${esc(st.msg)} · ${fmtDate(st.at)}</div>`;
 }
-function vAjustes() {
-  const s = DB.settings, c = DB.crypto;
-  const tsum = CLASSES.reduce((a, k) => a + num(s.targets[k.k]), 0);
-  $('#view').innerHTML = `
-  <div class="grid split">
-  <div class="grid" style="align-content:start">
-   <div class="card"><h2>Meta e projeção</h2>
-     ${fieldRow('Meta de patrimônio (R$)', 's.meta', s.meta)}
-     ${fieldRow('Aporte mensal planejado (£)', 's.aportePlanGBP', s.aportePlanGBP)}
-     ${fieldRow('Retorno anual esperado (%)', 's.retornoAnual', Math.round(s.retornoAnual * 1000) / 10)}</div>
-   <div class="card"><h2>Metas de alocação (%)</h2>
-     ${CLASSES.map((k) => fieldRow(k.n, 't.' + k.k, Math.round(num(s.targets[k.k]) * 1000) / 10)).join('')}
-     <div class="small ${Math.abs(tsum - 1) > 1e-6 ? 'neg' : 'pos'}">Soma: ${pct(tsum)} ${Math.abs(tsum - 1) > 1e-6 ? '— precisa somar 100%' : '✓'}</div></div>
-   <div class="card"><h2>Chaves de preço (grátis)</h2>
-     <div class="small muted">Só precisa se usar a aba Ativos. Ficam guardadas criptografadas neste aparelho.</div>
-     <div class="field"><label>Google Sheets (FIIs e ações B3)<small>link da planilha "Rumo – Preços B3" (Compartilhar → qualquer pessoa com o link)</small></label><input id="k-sheet" value="${esc(s.keys?.sheet || '')}" autocomplete="off" style="text-align:left" placeholder="https://docs.google.com/spreadsheets/d/…"></div>
-     ${keyBadge('sheet')}
-     <div class="field"><label>brapi.dev (B3 só ações)<small>brapi.dev → criar conta → copiar token</small></label><input id="k-brapi" value="${esc(s.keys?.brapi || '')}" autocomplete="off" style="text-align:left"></div>
-     ${keyBadge('brapi')}
-     ${(() => { const u = DB.settings.brapiUse; return u && u.m === ym() ? `<div class="small muted" style="margin:-4px 0 10px">Uso este mês: <b>${nf0.format(u.n)}</b> de 15.000 · hoje ${nf0.format(u.d === today() ? u.dn : 0)} (o app para em 14.000 / 450 por dia)</div>` : ''; })()}
-     <div class="field"><label>Finnhub (EUA)<small>finnhub.io → Get free API key</small></label><input id="k-finn" value="${esc(s.keys?.finnhub || '')}" autocomplete="off" style="text-align:left"></div>
-     ${keyBadge('finnhub')}
-     <div class="field"><label>Alpha Vantage (Londres/Europa)<small>alphavantage.co → Get free API key</small></label><input id="k-alpha" value="${esc(s.keys?.alpha || '')}" autocomplete="off" style="text-align:left"></div>
-     ${keyBadge('alpha')}
-     <button class="btn block" id="k-test">Testar chaves</button>
-     <div class="small muted" style="margin-top:6px">O teste do Alpha Vantage usa 1 das ~25 consultas grátis do dia.</div></div>
-   <div class="card"><h2>Cripto — saldos de antes do registro</h2>
-     <div class="small">Pessoas (separe por vírgula):</div>
-     <div class="field"><label>Pessoas</label><input id="a-people" value="${esc(c.people.join(', '))}" style="text-align:left"></div>
-     ${COINS.map((co) => c.people.map((w) => fieldRow(`${co.k} — ${esc(w)}`, `pre.${co.k}.${w}`, c.pre?.[co.k]?.[w] ?? 0)).join('') + fieldRow(`${co.k} — taxas de transferência`, `fee.${co.k}`, c.fees?.[co.k] ?? 0)).join('')}</div>
-  </div>
-  <div class="grid" style="align-content:start">
-   <div class="card"><h2>Backup e segurança</h2>
-     <div class="small">Último backup: <b>${s.lastBackup ? fmtDate(s.lastBackup) : 'nunca'}</b>. Seus dados existem só neste aparelho — faça backup todo mês e guarde o arquivo no iCloud Drive ou OneDrive.</div>
-     <button class="btn primary block" id="a-export">💾 Exportar backup (criptografado)</button>
-     <button class="btn block" id="a-excel">📄 Exportar para Excel</button>
-     <button class="btn block" id="a-import">Importar backup</button>
-     ${getMeta()?.open
-       ? `<div class="small" style="margin-top:10px">🔓 O app abre <b>sem PIN</b>. Os dados ficam protegidos só pelo bloqueio do iPhone.</div>
-          <button class="btn block" id="a-lockon">🔒 Pedir PIN (e Face ID) ao abrir</button>`
-       : `<button class="btn block" id="a-pin">Trocar PIN</button>
-          <button class="btn block" id="a-face">${getMeta()?.face ? '✓ Face ID ativado — desativar' : '🙂 Ativar Face ID'}</button>
-          <button class="btn block" id="a-lockoff">🔓 Abrir sem PIN</button>`}
-     <button class="btn block" id="a-rec">Gerar novo código de recuperação</button>
-     <button class="btn danger block" id="a-wipe">Apagar todos os dados deste aparelho</button></div>
-   <div class="card"><h2>Versão do app</h2>
-     <div class="small">Você está usando a versão <b>${APP_VERSION}</b>.</div>
-     <button class="btn block" id="a-update">⟳ Buscar atualização</button></div>
-   <div class="card"><h2>Rentabilidade</h2>
-     <div class="small" style="margin-bottom:8px">Meses antes deste ficam no Histórico (com seus aportes), mas não entram no cálculo de crescimento. Use quando não tem certeza dos aportes antigos.</div>
-     <div class="month-row"><label>Medir a partir de</label><button class="month-btn" id="a-rstart"><span>${DB.settings.rentStart ? ymLong(DB.settings.rentStart) : 'Todo o histórico'}</span><span class="mb-chev">▾</span></button></div>
-     ${DB.settings.rentStart ? '<button class="btn block" id="a-rstart-x" style="margin-top:6px">Usar todo o histórico</button>' : ''}</div>
-   <div class="card"><h2>Aparência</h2>
-     <div class="field"><label>Tema</label><select id="a-theme">${[['auto', 'Automático (igual ao iPhone)'], ['light', 'Claro'], ['dark', 'Escuro']].map(([v, l]) => `<option value="${v}" ${getTheme() === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
-   <div class="card"><h2>Privacidade</h2><div class="small">
-     • Nenhum dado seu sai do aparelho. Ficam guardados criptografados com o seu PIN.<br>
-     • A internet só é usada para buscar preços (CoinGecko para cripto, Frankfurter/BCE para câmbio, Google Sheets, brapi, Finnhub e Alpha Vantage para ações e FIIs). Esses serviços recebem apenas os nomes (tickers), nunca quantidades ou valores.<br>
-     • ${getMeta()?.open ? 'O app está sem PIN (abre direto).' : 'O app trava sozinho após 2 minutos fora da tela.'}<br>
-     • Face ID usa uma "chave de acesso" (passkey) do iPhone: o app só abre depois que o Face ID confirma que é você.</div></div>
-  </div></div>`;
-  $$('#view input[data-k]').forEach((inp) => inp.addEventListener('change', async () => {
+const ICO = {   // small line icons for the settings rows
+  target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>', plus: '<path d="M12 5v14M5 12h14"/>', trend: '<path d="M4 18 10 12l4 4 6-8"/>',
+  pie: '<path d="M12 3v9l7 4"/><circle cx="12" cy="12" r="9"/>', down: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>', up: '<path d="M12 21V9M7 14l5-5 5 5M5 3h14"/>',
+  grid: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M10 4v16"/>', plug: '<path d="M7 7h10v10H7z"/><path d="M3 12h4M17 12h4M12 3v4M12 17v4"/>',
+  coin: '<circle cx="12" cy="12" r="8"/><path d="M9.5 8h3.5a2 2 0 0 1 0 4H9.5zm0 4h4a2 2 0 0 1 0 4h-4zM9.5 6v12"/>', lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  face: '<path d="M8 4H6a2 2 0 0 0-2 2v2M16 4h2a2 2 0 0 1 2 2v2M8 20H6a2 2 0 0 1-2-2v-2M16 20h2a2 2 0 0 0 2-2v-2M9 10v1M15 10v1M10 15c1 .7 3 .7 4 0"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l8-8M16 7l2 2"/>', pin: '<rect x="4" y="6" width="16" height="12" rx="2"/><path d="M8 12h.01M12 12h.01M16 12h.01"/>',
+  moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>', sync: '<path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3M18 3v4h-4M6 21v-4h4"/>',
+  shield: '<path d="M12 3 5 6v5c0 4.5 3 8.5 7 10 4-1.5 7-5.5 7-10V6z"/>', trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+};
+const srow = (id, ico, bg, title, sub, right = '', cls = '') => `<div class="srow click ${cls}" id="${id}"><span class="sic" style="background:${bg}"><svg viewBox="0 0 24 24">${ICO[ico]}</svg></span>
+  <span class="srt"><b>${title}</b>${sub ? `<span>${sub}</span>` : ''}</span>${right}<span class="schev">›</span></div>`;
+const stog = (id, ico, bg, title, on, sub = '') => `<div class="srow click" id="${id}"><span class="sic" style="background:${bg}"><svg viewBox="0 0 24 24">${ICO[ico]}</svg></span>
+  <span class="srt"><b>${title}</b>${sub ? `<span>${sub}</span>` : ''}</span><span class="stog ${on ? 'on' : ''}"></span></div>`;
+function bindSettingInputs(root, after) {   // numbers typed in a settings sheet
+  const c = DB.crypto;
+  $$('input[data-k]', root).forEach((inp) => { liveFormat(inp); inp.addEventListener('change', async () => {
     const parts = inp.dataset.k.split('.'); const v = parsePT(inp.value) ?? 0;
     if (parts[0] === 's') DB.settings[parts[1]] = parts[1] === 'retornoAnual' ? v / 100 : v;
     else if (parts[0] === 't') DB.settings.targets[parts[1]] = v / 100;
     else if (parts[0] === 'pre') { (c.pre[parts[1]] ||= {})[parts.slice(2).join('.')] = v; }
     else if (parts[0] === 'fee') c.fees[parts[1]] = v;
-    await save(); render();
-  }));
-  $('#a-people').onchange = async (e) => { const ps = e.target.value.split(',').map((x) => x.trim()).filter(Boolean); if (ps.length) { c.people = ps; await save(); render(); } };
-  $('#k-brapi').onchange = async (e) => { DB.settings.keys.brapi = e.target.value.trim(); delete DB.settings.keyStatus.brapi; await save(); render(); };
-  $('#k-finn').onchange = async (e) => { DB.settings.keys.finnhub = e.target.value.trim(); delete DB.settings.keyStatus.finnhub; await save(); render(); };
-  $('#k-sheet').onchange = async (e) => { DB.settings.keys.sheet = e.target.value.trim(); delete DB.settings.keyStatus.sheet; await save(); render(); };
-  $('#k-alpha').onchange = async (e) => { DB.settings.keys.alpha = e.target.value.trim(); delete DB.settings.keyStatus.alpha; await save(); render(); };
-  $('#k-test').onclick = async () => {
-    const K = DB.settings.keys; K.brapi = $('#k-brapi').value.trim(); K.finnhub = $('#k-finn').value.trim(); K.alpha = $('#k-alpha').value.trim(); K.sheet = $('#k-sheet').value.trim();
-    toast('Testando…'); for (const k in LASTERR) delete LASTERR[k];
-    const sh = K.sheet ? await sheetQuotes(['HGLG11'], K.sheet) : null;
-    if (sh) await setKeyStatus('sheet', (sheetQuotes.count || 0) > 0, `${sheetQuotes.count} tickers com preço${sh.HGLG11 ? ' · HGLG11 R$ ' + nf2.format(sh.HGLG11) : ''}`);
-    const [b, f, a] = await Promise.all([K.brapi ? brapiQuotes(['PETR4'], K.brapi) : null, K.finnhub ? finnhubQuotes(['AAPL'], K.finnhub) : null, K.alpha ? alphaQuotes(['TSCO.LON'], K.alpha) : null]);
-    if (b) await setKeyStatus('brapi', !!b.PETR4, 'PETR4 R$ ' + nf2.format(b.PETR4 || 0));
-    if (f) await setKeyStatus('finnhub', !!f.AAPL, 'AAPL US$ ' + nf2.format(f.AAPL || 0));
-    if (a) await setKeyStatus('alpha', !!a['TSCO.LON'], 'TSCO.LON ' + nf2.format(a['TSCO.LON'] || 0) + 'p');
-    await save(); render(); toast('Teste concluído');
-  };
+    await save(); after && after();
+  }); });
+}
+function keysSheet() {
+  const s = DB.settings;
+  openSheet(`<h3>Fontes de preço</h3><div class="small muted" style="margin-bottom:8px">Grátis. Ficam guardadas criptografadas neste aparelho e entram no backup.</div>
+     <div class="field"><label>Google Sheets<small>link da sua planilha (Compartilhar → qualquer pessoa com o link)</small></label><input id="k-sheet" value="${esc(s.keys?.sheet || '')}" autocomplete="off" style="text-align:left" placeholder="https://docs.google.com/…"></div>
+     ${keyBadge('sheet')}
+     <div class="field"><label>brapi.dev (B3 ações)<small>brapi.dev → criar conta → copiar token</small></label><input id="k-brapi" value="${esc(s.keys?.brapi || '')}" autocomplete="off" style="text-align:left"></div>
+     ${keyBadge('brapi')}
+     ${(() => { const u = s.brapiUse; return u && u.m === ym() ? `<div class="small muted" style="margin:-4px 0 10px">Uso este mês: <b>${nf0.format(u.n)}</b> de 15.000 · hoje ${nf0.format(u.d === today() ? u.dn : 0)}</div>` : ''; })()}
+     <div class="field"><label>Finnhub (EUA)<small>finnhub.io → Get free API key</small></label><input id="k-finn" value="${esc(s.keys?.finnhub || '')}" autocomplete="off" style="text-align:left"></div>
+     ${keyBadge('finnhub')}
+     <div class="field"><label>Alpha Vantage (opcional)<small>alphavantage.co → Get free API key</small></label><input id="k-alpha" value="${esc(s.keys?.alpha || '')}" autocomplete="off" style="text-align:left"></div>
+     ${keyBadge('alpha')}
+     <button class="btn primary block" id="k-test">Testar chaves</button>
+     <button class="btn block" onclick="closeSheet()">Fechar</button>`, (el) => {
+    const set = (id, k) => ($(id, el).onchange = async (e) => { DB.settings.keys[k] = e.target.value.trim(); delete DB.settings.keyStatus[k]; await save(); });
+    set('#k-sheet', 'sheet'); set('#k-brapi', 'brapi'); set('#k-finn', 'finnhub'); set('#k-alpha', 'alpha');
+    $('#k-test', el).onclick = async () => {
+      const K = DB.settings.keys; K.brapi = $('#k-brapi', el).value.trim(); K.finnhub = $('#k-finn', el).value.trim(); K.alpha = $('#k-alpha', el).value.trim(); K.sheet = $('#k-sheet', el).value.trim();
+      toast('Testando…'); for (const k in LASTERR) delete LASTERR[k];
+      const sh = K.sheet ? await sheetQuotes(['HGLG11'], K.sheet) : null;
+      if (sh) await setKeyStatus('sheet', (sheetQuotes.count || 0) > 0, `${sheetQuotes.count} tickers com preço${sh.HGLG11 ? ' · HGLG11 R$ ' + nf2.format(sh.HGLG11) : ''}`);
+      const [b, f, a] = await Promise.all([K.brapi ? brapiQuotes(['PETR4'], K.brapi) : null, K.finnhub ? finnhubQuotes(['AAPL'], K.finnhub) : null, K.alpha ? alphaQuotes(['TSCO.LON'], K.alpha) : null]);
+      if (b) await setKeyStatus('brapi', !!b.PETR4, 'PETR4 R$ ' + nf2.format(b.PETR4 || 0));
+      if (f) await setKeyStatus('finnhub', !!f.AAPL, 'AAPL US$ ' + nf2.format(f.AAPL || 0));
+      if (a) await setKeyStatus('alpha', !!a['TSCO.LON'], 'TSCO.LON ' + nf2.format(a['TSCO.LON'] || 0) + 'p');
+      await save(); render(); keysSheet(); toast('Teste concluído');
+    };
+  });
+}
+function vAjustes() {
+  const s = DB.settings, c = DB.crypto, meta = getMeta();
+  const tsum = CLASSES.reduce((a, k) => a + num(s.targets[k.k]), 0);
+  const allT = CLASSES.every((k) => Math.abs(num(s.targets[k.k]) - num(s.targets[CLASSES[0].k])) < 1e-9);
+  const bOld = !s.lastBackup || Date.now() - new Date(s.lastBackup) > 30 * 864e5;
+  const ks = ['sheet', 'brapi', 'finnhub', 'alpha'].filter((k) => s.keys?.[k]), kOk = ks.filter((k) => s.keyStatus?.[k]?.ok).length, kBad = ks.filter((k) => s.keyStatus?.[k] && !s.keyStatus[k].ok).length;
+  const thN = { auto: 'Automático', light: 'Claro', dark: 'Escuro' }[getTheme()] || 'Automático';
+  $('#view').innerHTML = `<div class="sets">
+   <div class="ssec">Metas</div><div class="sgrp">
+     ${srow('a-meta', 'target', '#2563EB', 'Meta de patrimônio', '', `<span class="srv">${brl(s.meta)}</span>`)}
+     ${srow('a-plan', 'plus', '#0EA5A4', 'Aporte planejado', '', `<span class="srv">${gbp(s.aportePlanGBP)}/mês</span>`)}
+     ${srow('a-ret', 'trend', '#8B5CF6', 'Retorno esperado', '', `<span class="srv">${pct(s.retornoAnual)} a.a.</span>`)}
+     ${srow('a-tgt', 'pie', '#F59E0B', 'Alocação alvo', allT ? pct(num(s.targets[CLASSES[0].k])) + ' em cada classe' : CLASSES.map((k) => k.n + ' ' + pct(num(s.targets[k.k]))).join(' · '), Math.abs(tsum - 1) > 1e-6 ? '<span class="sbad w">soma ≠ 100%</span>' : '')}
+   </div>
+   <div class="ssec">Seus dados</div><div class="sgrp">
+     ${srow('a-export', 'down', '#16A34A', 'Fazer backup', s.lastBackup ? 'último: ' + fmtDate(s.lastBackup) : 'arquivo criptografado', bOld ? `<span class="sbad w">${s.lastBackup ? 'há +30 dias' : 'nunca feito'}</span>` : '<span class="sbad ok">em dia</span>')}
+     ${srow('a-import', 'up', '#475569', 'Importar backup', 'substitui os dados deste aparelho')}
+     ${srow('a-excel', 'grid', '#15803D', 'Exportar Excel', 'cópia legível, não criptografada')}
+   </div>
+   <div class="ssec">Preços</div><div class="sgrp">
+     ${srow('a-keys', 'plug', '#0284C7', 'Fontes de preço', ks.length ? ks.map((k) => ({ sheet: 'Google Sheets', brapi: 'brapi', finnhub: 'Finnhub', alpha: 'Alpha Vantage' })[k]).join(' · ') : 'nenhuma configurada', ks.length ? `<span class="sbad ${kBad ? 'w' : 'ok'}">${kBad ? kBad + ' com erro' : kOk + ' ✓'}</span>` : '')}
+     ${srow('a-crypto', 'coin', '#F97316', 'Cripto', 'pessoas e saldos de antes do registro')}
+   </div>
+   <div class="ssec">Segurança</div><div class="sgrp">
+     ${stog('a-pinT', 'lock', '#334155', 'Pedir PIN ao abrir', !meta?.open, meta?.open ? 'desligado — qualquer pessoa com o iPhone desbloqueado vê o app' : 'trava sozinho após 2 min fora da tela')}
+     ${!meta?.open ? stog('a-face', 'face', '#334155', 'Face ID', !!meta?.face) + srow('a-pin', 'pin', '#334155', 'Trocar PIN', '') : ''}
+     ${srow('a-rec', 'key', '#334155', 'Código de recuperação', 'gerar um novo (se esquecer o PIN)')}
+   </div>
+   <div class="ssec">App</div><div class="sgrp">
+     ${srow('a-theme', 'moon', '#4F46E5', 'Tema', '', `<span class="srv">${thN}</span>`)}
+     ${srow('a-update', 'sync', '#2563EB', 'Buscar atualização', 'versão ' + APP_VERSION)}
+     ${srow('a-priv', 'shield', '#475569', 'Privacidade', 'seus dados nunca saem do iPhone')}
+   </div>
+   <div class="sgrp" style="margin-top:14px">${srow('a-wipe', 'trash', '#B91C1C', 'Apagar todos os dados', '', '', 'sdanger')}</div>
+  </div>`;
+  const one = (title, key, val, note) => openSheet(`<h3>${title}</h3>${fieldRow(title, key, val, note)}<button class="btn primary block" onclick="closeSheet()" style="margin-top:12px">Pronto</button>`, (el) => { bindSettingInputs(el, render); setTimeout(() => $('input', el)?.focus(), 250); });
+  $('#a-meta').onclick = () => one('Meta de patrimônio (R$)', 's.meta', s.meta);
+  $('#a-plan').onclick = () => one('Aporte mensal planejado (£)', 's.aportePlanGBP', s.aportePlanGBP, 'usado nas projeções da meta');
+  $('#a-ret').onclick = () => one('Retorno anual esperado (%)', 's.retornoAnual', Math.round(s.retornoAnual * 1000) / 10, 'usado no cenário da meta');
+  $('#a-tgt').onclick = () => { const draw = () => openSheet(`<h3>Alocação alvo (%)</h3>${CLASSES.map((k) => fieldRow(k.n, 't.' + k.k, Math.round(num(DB.settings.targets[k.k]) * 1000) / 10)).join('')}
+      <div class="small" id="t-sum" style="margin:8px 0"></div><button class="btn primary block" onclick="closeSheet()">Pronto</button>`, (el) => { const upd = () => { const t = CLASSES.reduce((a, k) => a + num(DB.settings.targets[k.k]), 0); $('#t-sum', el).innerHTML = `<span class="${Math.abs(t - 1) > 1e-6 ? 'neg' : 'pos'}">Soma: ${pct(t)} ${Math.abs(t - 1) > 1e-6 ? '— precisa somar 100%' : '✓'}</span>`; }; upd(); bindSettingInputs(el, () => { upd(); render(); }); }); draw(); };
+  $('#a-keys').onclick = keysSheet;
+  $('#a-crypto').onclick = () => openSheet(`<h3>Cripto — saldos de antes do registro</h3>
+      <div class="field"><label>Pessoas<small>separe por vírgula</small></label><input id="a-people" value="${esc(c.people.join(', '))}" style="text-align:left"></div>
+      ${COINS.map((co) => c.people.map((w) => fieldRow(`${co.k} — ${esc(w)}`, `pre.${co.k}.${w}`, c.pre?.[co.k]?.[w] ?? 0)).join('') + fieldRow(`${co.k} — taxas de transferência`, `fee.${co.k}`, c.fees?.[co.k] ?? 0)).join('')}
+      <button class="btn primary block" onclick="closeSheet()" style="margin-top:10px">Pronto</button>`, (el) => {
+      bindSettingInputs(el, render);
+      $('#a-people', el).onchange = async (e) => { const ps = e.target.value.split(',').map((x) => x.trim()).filter(Boolean); if (ps.length) { c.people = ps; await save(); render(); $('#a-crypto').click(); } };
+    });
   $('#a-export').onclick = exportBackup;
   $('#a-excel').onclick = exportExcel;
-  $('#a-update').onclick = forceUpdate;
-  $('#a-rstart').onclick = () => pickMonth(DB.settings.rentStart || ym(), async (m) => { DB.settings.rentStart = m; await save(); render(); toast('Rentabilidade medida a partir de ' + ymLong(m)); });
-  $('#a-rstart-x') && ($('#a-rstart-x').onclick = async () => { delete DB.settings.rentStart; await save(); render(); toast('Usando todo o histórico'); });
-  $('#a-theme').onchange = (e) => { try { localStorage.setItem('rumo.theme', e.target.value); } catch {} applyTheme(); render(); };
   $('#a-import').onclick = () => pickImport(false);
-  $('#a-lockoff') && ($('#a-lockoff').onclick = async () => {
+  $('#a-update').onclick = forceUpdate;
+  $('#a-theme').onclick = () => openSheet(`<h3>Tema</h3>${[['auto', 'Automático (igual ao iPhone)'], ['light', 'Claro'], ['dark', 'Escuro']].map(([v, l]) => `<button class="btn block ${getTheme() === v ? 'primary' : ''}" data-th="${v}">${l}</button>`).join('')}`, (el) => $$('[data-th]', el).forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.theme', b.dataset.th); } catch {} applyTheme(); closeSheet(); render(); })));
+  $('#a-priv').onclick = () => openSheet(`<h3>Privacidade</h3><div class="small" style="line-height:1.6">
+     • Nenhum dado seu sai do aparelho. Ficam guardados criptografados (AES-256) com o seu PIN.<br>
+     • A internet só é usada para buscar preços: CoinGecko (cripto), Frankfurter/BCE e open.er-api (câmbio), Google Sheets, brapi, Finnhub e Alpha Vantage (ações e FIIs). Eles recebem apenas os tickers, nunca quantidades ou valores.<br>
+     • ${getMeta()?.open ? 'O app está sem PIN (abre direto).' : 'O app trava sozinho após 2 minutos fora da tela.'}<br>
+     • Face ID usa uma chave de acesso (passkey) do iPhone.<br>
+     • O backup é um arquivo criptografado com senha. O Excel NÃO é criptografado.</div><button class="btn block" onclick="closeSheet()" style="margin-top:12px">Fechar</button>`);
+  $('#a-pinT').onclick = async () => {
+    if (getMeta()?.open) return showLock('setup');
     if (!(await ask('Abrir o app sem PIN?\n\nQualquer pessoa com o seu iPhone desbloqueado poderá ver seus investimentos. Você pode voltar a pedir PIN aqui quando quiser.'))) return;
     const m = getMeta(); m.open = b64(DKRAW); m.face = null; setMeta(m); render(); toast('🔓 O app agora abre sem PIN');
-  });
-  $('#a-lockon') && ($('#a-lockon').onclick = () => showLock('setup'));
+  };
   $('#a-pin') && ($('#a-pin').onclick = () => showLock('setup'));
   $('#a-face') && ($('#a-face').onclick = async () => {
     const m = getMeta();
