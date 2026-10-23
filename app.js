@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.38';
+const APP_VERSION = '4.39';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -482,9 +482,12 @@ function editDiv(id) {
       dd.innerHTML = L.length ? L.slice(0, 5).map((t) => `<button type="button" data-tk="${t}"><b>${t.slice(0, t.indexOf(q))}<u>${q}</u>${t.slice(t.indexOf(q) + q.length)}</b><span>${DTYPES[$('#dv-t', el).value].n}</span></button>`).join('')
         : '<div class="tk-none">Nenhum ativo seu com esse nome — pode salvar assim mesmo</div>';
       dd.classList.remove('hidden');
-      $$('[data-tk]', dd).forEach((b) => (b.onpointerdown = (e) => { e.preventDefault(); box.value = b.dataset.tk; dd.classList.add('hidden'); box.blur(); }));
+      $$('[data-tk]', dd).forEach((b) => {   // keep the keyboard open while tapping, choose on the finished tap (so nothing underneath gets it)
+        b.onpointerdown = (e) => e.preventDefault();
+        b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); box.value = b.dataset.tk; dd.classList.add('hidden'); box.blur(); };
+      });
     };
-    box.addEventListener('input', fill); box.addEventListener('focus', fill); box.addEventListener('blur', () => setTimeout(() => dd.classList.add('hidden'), 150));
+    box.addEventListener('input', fill); box.addEventListener('focus', fill); box.addEventListener('blur', () => setTimeout(() => dd.classList.add('hidden'), 250));
     $('#dv-t', el).onchange = () => { $('#dv-c', el).value = DTYPES[$('#dv-t', el).value].cur; fill(); }; fill();
     if (!id) setTimeout(() => $('#dv-a', el).focus(), 250);
     $('#dv-save', el).onclick = async () => {

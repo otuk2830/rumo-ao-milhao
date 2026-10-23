@@ -282,7 +282,7 @@ html.priv .pv, html.priv .ring > div, html.priv .mfal, html.priv .dchip, html.pr
 .tk-field label{display:block; font-size:14px; margin-bottom:6px} .tk-field label small{color:var(--muted); font-size:11px}
 .tk-field input{width:100%; padding:10px 12px; border:1px solid var(--input-border); background:var(--blue-xl); border-radius:10px; color:var(--blue); font-weight:700; text-align:left}
 html.dark .tk-field input{color:#93C5FD}
-.tk-dd{position:absolute; left:0; right:0; top:calc(100% - 6px); z-index:5; background:var(--card); border:1px solid var(--input-border); border-radius:12px; box-shadow:0 10px 26px rgba(0,0,0,.3); overflow:hidden}
+.tk-dd{position:static; margin-top:6px; background:var(--card); border:1px solid var(--input-border); border-radius:12px; box-shadow:0 10px 26px rgba(0,0,0,.3); overflow:hidden}
 .tk-dd button{display:flex; justify-content:space-between; align-items:center; width:100%; border:0; border-bottom:1px solid var(--line); background:transparent; color:var(--ink); padding:12px 14px; font-size:16px; text-align:left}
 .tk-dd button:last-child{border-bottom:0} .tk-dd button:active{background:var(--soft)}
 .tk-dd u{text-decoration:none; color:var(--blue)} html.dark .tk-dd u{color:#93C5FD} .tk-dd span{font-size:12px; color:var(--muted)}
