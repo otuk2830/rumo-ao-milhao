@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.39';
+const APP_VERSION = '4.40';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1011,7 +1011,8 @@ function editAsset(id, cls) {
       if (changed && m === 'GS') $('#ea-cur', el).value = !t.includes(':') ? (a.cls === 'stocks' ? 'GBP' : 'BRL') : t.startsWith('LON:') ? 'GBP' : /^(NYSE|NASDAQ|NYSEARCA|BATS):/.test(t) ? 'USD' : 'EUR';
     };
     const avgHint = () => { const ac = $('#ea-avgcur', el)?.value, c = $('#ea-cur', el).value, m = $('#ea-m', el).value;
-      const cc = m === 'US' ? 'USD' : m === 'B3' ? 'BRL' : c; $('#ea-avg-h', el).textContent = 'por unidade, em ' + (ac === 'GBP' ? '£' : cc === 'GBX' ? 'pence' : curSym(cc)) + ' — mostra lucro/prejuízo'; };
+      const cc = m === 'US' ? 'USD' : m === 'B3' ? 'BRL' : c; $('#ea-avg-h', el).innerHTML = ac === 'GBP' && cc !== 'GBP' ? '<b style="color:var(--amber)">em £</b> — no Trading 212 é o valor <b>entre parênteses</b> em "Average price", ex.: $99,94 <b>(£74,60)</b>'
+        : 'por unidade, em ' + (ac === 'GBP' ? '£' : cc === 'GBX' ? 'pence' : curSym(cc)) + ' — mostra lucro/prejuízo'; };
     ['#ea-avgcur', '#ea-cur', '#ea-m'].forEach((k) => $(k, el)?.addEventListener('change', avgHint)); setTimeout(avgHint, 0);
     $('#ea-m', el).onchange = () => curRow(true); $('#ea-t', el).addEventListener('change', () => curRow(true)); curRow(false);
     $('#ea-save', el).onclick = async () => {
@@ -1020,6 +1021,12 @@ function editAsset(id, cls) {
         qty: parsePT($('#ea-qty', el).value) ?? 0, avg: parsePT($('#ea-avg', el).value), avgCur: $('#ea-avgcur', el)?.value || a.avgCur || 'ASSET', manualPrice: parsePT($('#ea-man', el).value) };
       if (o.ticker !== a.ticker || o.market !== a.market) { o.price = null; o.priceAt = null; }
       if (o.market === 'MANUAL' && !o.manualPrice) return toast('Digite o preço manual');
+      // safety check: an average in £ that matches the price in $/€ (not in £) was probably typed in the wrong currency
+      { const cur = curOf(o), px = o.price || a.price || o.manualPrice;
+        if (o.avg && px && o.avgCur === 'GBP' && cur !== 'GBP' && cur !== 'BRL') {
+          const pxGBP = px * FXOF(cur) / FXOF('GBP'), off = o.avg / pxGBP, near = Math.abs(o.avg / px - 1) < 0.25;
+          if ((off > 1.2 || off < 0.8) && near && !(await ask(`O preço médio ${nf2.format(o.avg)} parece estar em ${cur === 'GBX' ? 'pence' : curSym(cur)}, não em £.\n\nHoje ${o.ticker} vale ${fmtPx(cur, px)} ≈ £ ${nf2.format(pxGBP)}. No Trading 212 use o valor em £ entre parênteses.\n\nSalvar assim mesmo?`, { yes: 'Salvar assim', no: 'Corrigir' }))) return;
+        } }
       if (!DB.assets.find((x) => x.id === o.id) && DB.assets.find((x) => x.ticker === o.ticker && x.cls === o.cls)) return toast(o.ticker + ' já está na lista — edite ele');
       const i = DB.assets.findIndex((x) => x.id === o.id); if (i > -1) DB.assets[i] = o; else DB.assets.push(o);
       await save(); closeSheet(); render();
