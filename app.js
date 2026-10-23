@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.33';
+const APP_VERSION = '4.35';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1023,7 +1023,9 @@ $('#btn-lock').onclick = lockNow;
   });
 })();
 // 👁 hides all amounts on screen (handy in public); the choice is remembered on this phone only
-const setPriv = (on) => { document.documentElement.classList.toggle('priv', on); try { localStorage.setItem('rumo.hide', on ? '1' : '0'); } catch {} const b = $('#btn-eye'); b.textContent = on ? '🙈' : '👁'; b.setAttribute('aria-label', on ? 'Mostrar valores' : 'Esconder valores'); };
+const EYE_ON = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
+const EYE_OFF = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" opacity=".55"/><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2" opacity=".55"/><path d="M4 20 20 4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>';
+const setPriv = (on) => { document.documentElement.classList.toggle('priv', on); try { localStorage.setItem('rumo.hide', on ? '1' : '0'); } catch {} const b = $('#btn-eye'); b.innerHTML = on ? EYE_OFF : EYE_ON; b.setAttribute('aria-label', on ? 'Mostrar valores' : 'Esconder valores'); };
 $('#btn-eye').onclick = () => { const on = !document.documentElement.classList.contains('priv'); setPriv(on); toast(on ? 'Valores escondidos' : 'Valores visíveis'); };
 setPriv(document.documentElement.classList.contains('priv'));
 $('#btn-refresh').onclick = () => refreshPrices(false);
@@ -1051,6 +1053,7 @@ function returnsData() {
   const H = DB.history, months = [];
   for (let i = 1; i < H.length; i++) {
     const a = H[i - 1], b = H[i];
+    if (DB.settings.rentStart && b.month < DB.settings.rentStart) continue;   // user chose to start measuring later
     if (typeof a.pat !== 'number' || typeof b.pat !== 'number' || ymDiff(a.month, b.month) !== 1) continue;
     const dm = b.month < ym() ? dailyMonth(b.month) : null; if (dm) { months.push(dm); continue; }   // daily data covers it → exact
     if (b.aporteGBP === null || b.aporteGBP === undefined) continue; // aporte unknown → month can't be measured
@@ -1093,6 +1096,30 @@ function vPainel() {
   const c24 = (() => { let now = 0, before = 0, any = false; for (const x of cs.coins) { const ch = DB.prices[x.k + '_24h']; if (typeof ch !== 'number' || !x.valUSD) continue; any = true; now += x.valUSD; before += x.valUSD / (1 + ch / 100); } return any && before ? now / before - 1 : null; })();
   const aportesYearGBP = DB.history.filter((h) => h.month.startsWith(st.year) && h.aporteGBP).reduce((a, h) => a + h.aporteGBP, 0);
   const aportesYear = DB.history.filter((h) => h.month.startsWith(st.year) && h.aporteGBP && h.fx).reduce((a, h) => a + h.aporteGBP * h.fx, 0);
+
+  // ---- extras for the new layout
+  const yest = [...(DB.daily || [])].filter((x) => x.d < today()).pop() || null, dChg = yest ? P.total - yest.v : null;
+  const spark = (() => {   // last 30 days of daily values (+ now); falls back to the last 12 saved months
+    const cut = Date.now() - 30 * 864e5; let pts = (DB.daily || []).filter((x) => new Date(x.d + 'T12:00') >= cut && x.d < today()).map((x) => x.v), lbl = 'últimos 30 dias';
+    if (pts.length < 2) { pts = DB.history.filter((h) => typeof h.pat === 'number').slice(-12).map((h) => h.pat); lbl = 'últimos 12 meses'; }
+    pts = [...pts, P.total]; if (pts.length < 2) return '';
+    const mn = Math.min(...pts), mx = Math.max(...pts), W = 300, H = 50, y = (v) => (mx === mn ? H / 2 : H - 4 - ((v - mn) / (mx - mn)) * (H - 8));
+    const d = pts.map((v, k) => `${k ? 'L' : 'M'}${((k / (pts.length - 1)) * W).toFixed(1)} ${y(v).toFixed(1)}`).join(' ');
+    return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#60A5FA" stop-opacity=".35"/><stop offset="1" stop-color="#60A5FA" stop-opacity="0"/></linearGradient></defs>
+      <path d="${d} L${W} ${H} L0 ${H} Z" fill="url(#sg)"/><path d="${d}" fill="none" stroke="#93C5FD" stroke-width="2" vector-effect="non-scaling-stroke"/></svg><div class="spark-l">${lbl} · toque para ver as categorias</div>`;
+  })();
+  const bars = (() => {   // last 12 months of real growth; current month live (lighter)
+    const byM = Object.fromEntries(R.months.map((m) => [m.month, m.r])), L = [];
+    for (let k = 11; k >= 0; k--) { const m = ymAdd(ym(), -k); L.push({ m, r: m === ym() ? mReal : byM[m] ?? null, live: m === ym() }); }
+    const mx = Math.max(0.005, ...L.filter((x) => x.r !== null).map((x) => Math.abs(x.r)));
+    return `<div class="pbars">${L.map((x) => { if (x.r === null) return '<div class="pb"><i class="na"></i></div>';
+      const h = Math.max(3, (Math.abs(x.r) / mx) * 26); return `<div class="pb" title="${ymLabel(x.m)} ${signed(pct, x.r)}"><i class="${x.r < 0 ? 'neg' : 'pos'}${x.live ? ' live' : ''}" style="height:${h}px;${x.r < 0 ? 'top:28px' : 'bottom:28px'}"></i></div>`; }).join('')}<div class="pzero"></div></div>
+      <div class="plab"><span>${ymLabel(L[0].m)}</span><span>últimos 12 meses</span><span>${ymLabel(L[11].m)}</span></div>`;
+  })();
+  const nLogM = (DB.divLog || []).filter((e) => e.date.slice(0, 7) === ym()), lastD = nLogM.length ? [...nLogM].sort((a, b) => b.date.localeCompare(a.date))[0] : null;
+  const nextDiv = (Math.floor(st.divLife / 10000) + 1) * 10000, divProg = (st.divLife % 10000) / 10000;
+  const nextMs = ms.find((m) => !m.hit), etaMs = nextMs && st.cresc12 > 0 ? ymAdd(ym(), Math.ceil(Math.max(0, nextMs.v - P.total) / st.cresc12)) : null;
+  const tile = (ico, bg, lab, val, sub, go, extra = '') => `<div class="card kpi t2 click" onclick="location.hash='${go}'"><span class="ico" style="background:${bg}">${ico}</span><div class="lab">${lab}</div><div class="val">${val}</div><div class="sub">${sub}</div>${extra}</div>`;
   $('#view').innerHTML = `
   ${backupOld ? `<div class="banner" onclick="location.hash='#ajustes'">💾 Faça um backup — ${s.lastBackup ? 'o último foi há mais de 30 dias' : 'você ainda não fez nenhum'}. Toque aqui.</div>` : ''}
   <div class="grid split">
@@ -1100,33 +1127,35 @@ function vPainel() {
     <div class="card hero kpi click" id="hero-tap">
       <div class="lab" style="display:flex;justify-content:space-between;align-items:center">Patrimônio hoje <span style="display:flex;gap:10px;align-items:center"><button class="cur-swap" id="cur-swap" aria-label="Trocar moeda">⇄ ${heroCur === 'BRL' ? 'R$' : heroCur === 'GBP' ? '£' : 'US$'}</button><span class="chev">${heroOpen() ? '▴' : '▾'}</span></span></div>
       <div class="val">${HM[heroCur](P.total)}</div>
+      ${dChg !== null ? `<span class="dchip ${dChg < 0 ? 'neg' : 'pos'}">${dChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(dChg))}</span> hoje · ${signed(pct, yest.v ? dChg / yest.v : 0)}</span>` : ''}
       <div class="sub">${['BRL', 'GBP', 'USD'].filter((c) => c !== heroCur).map((c) => HM[c](P.total)).join(' · ')}</div>
+      ${spark}
       ${heroOpen() ? `<div class="hero-list">${[...P.alloc.map((a) => [a.n, a.v, a.c]), ['Caixa', num(DB.balances.caixa), '#94A3B8']].map(([n, v, c]) =>
         `<div><span><i style="background:${c}"></i>${n}</span><b>${HM[heroCur](v)}</b><em>${pct(P.total ? v / P.total : 0)}</em></div>`).join('')}</div>` : ''}
     </div>
+    <div class="card kpi click" id="k-perf">
+      <div style="display:flex;justify-content:space-between;align-items:center"><span class="lab">Desempenho · sem aportes</span><span class="small muted">ⓘ de onde veio</span></div>
+      <div class="perf2">
+        <div><div class="small muted">${MONTHS[new Date().getMonth()]}</div>
+          ${prevM && mReal !== null ? `<div class="pv ${mReal < 0 ? 'neg' : 'pos'}">${signed(pct, mReal)}</div><div class="small muted"><span class="money">${signed(CV, mRealV)}</span></div>`
+            : `<div class="pv">–</div><div class="small muted">${prevM ? 'informe o aporte do mês' : 'precisa de um mês salvo'}</div>`}</div>
+        <div><div class="small muted">${st.year}</div>
+          ${Ry ? `<div class="pv ${Ry.r < 0 ? 'neg' : 'pos'}">${signed(pct, Ry.r)}</div><div class="small muted">${Ry.n} ${Ry.n === 1 ? 'mês' : 'meses'} · <span class="money">${signed(CV, Ry.gain)}</span></div>`
+            : '<div class="pv">–</div><div class="small muted">começa com os aportes</div>'}</div>
+      </div>
+      ${bars}
+    </div>
     <div class="grid g2">
-      <div class="card kpi click" onclick="location.hash='#graficos'"><div class="lab">Rentabilidade ${st.year}</div>
-        <div class="val ${Ry ? (Ry.r < 0 ? 'neg' : 'pos') : ''}">${Ry ? signed(pct, Ry.r) : '–'}</div>
-        <div class="sub">${Ry ? `${Ry.n} ${Ry.n === 1 ? 'mês' : 'meses'} · ${signed(CV, Ry.gain)}` : 'começa com os aportes'}</div></div>
-      <div class="card kpi click" id="k-month"><div class="lab">Crescimento ${MON3[new Date().getMonth()].toLowerCase()} <span class="chev" style="color:var(--muted)">ⓘ</span></div>
-        ${prevM ? (mReal !== null ? `<div class="val ${mReal < 0 ? 'neg' : 'pos'}">${signed(pct, mReal)}</div><div class="sub">${signed(CV, mRealV)} real · total ${signed(CV, mChg)}</div>`
-            : `<div class="val ${mChg < 0 ? 'neg' : 'pos'}">${signed(CV, mChg)}</div><div class="sub">informe o aporte do mês para ver o real</div>`)
-          : '<div class="val">–</div><div class="sub">precisa de um mês salvo</div>'}</div>
-      <div class="card kpi click" onclick="location.hash='#dividendos'"><div class="lab">Dividendos ${MONTHS[new Date().getMonth()].toLowerCase()}</div>
-        <div class="val">${CV(divNow)}</div><div class="sub">${st.year}: ${CV(st.divYear)} · média ${CV(st.monthsWithDiv ? st.divYear / st.monthsWithDiv : 0)}/mês</div></div>
-      <div class="card kpi click" onclick="location.hash='#dividendos'"><div class="lab">Dividendos na vida</div>
-        <div class="val">${CV(st.divLife)}</div><div class="sub">próx. marco ${brl((Math.floor(st.divLife / 10000) + 1) * 10000)}</div></div>
-      <div class="card kpi click" onclick="location.hash='#historico'"><div class="lab">Aportes ${st.year}</div>
-        <div class="val">${heroCur === 'GBP' ? gbp(aportesYearGBP) : CV(aportesYear)}</div><div class="sub">dinheiro novo no ano</div></div>
-      <div class="card kpi click" onclick="location.hash='#cripto'"><div class="lab">Cripto hoje</div>
-        <div class="val">${CV(cs.totalBRL)}</div><div class="sub">${typeof c24 === 'number' ? `<span class="${c24 < 0 ? 'neg' : 'pos'}">${c24 < 0 ? '▼' : '▲'} ${pct(Math.abs(c24))} 24h</span> · ` : ''}BTC ${usd(DB.prices.BTC)}</div></div>
+      ${tile('💰', 'rgba(14,165,164,.18)', 'Dividendos ' + MONTHS[new Date().getMonth()].toLowerCase(), CV(divNow), lastD ? `${nLogM.length} ${nLogM.length === 1 ? 'pagamento' : 'pagamentos'} · último ${dmy(lastD.date)}` : `${st.year}: ${CV(st.divYear)}`, '#dividendos')}
+      ${tile('🏆', 'rgba(251,191,36,.16)', 'Dividendos na vida', CV(st.divLife), `faltam ${brl(nextDiv - st.divLife)} p/ ${nf0.format(nextDiv / 1000)} mil`, '#dividendos', `<div class="pbar2"><i style="width:${(divProg * 100).toFixed(1)}%"></i></div>`)}
+      ${tile('₿', 'rgba(247,147,26,.18)', 'Cripto hoje', CV(cs.totalBRL), `${typeof c24 === 'number' ? `<span class="${c24 < 0 ? 'neg' : 'pos'}">${c24 < 0 ? '▼' : '▲'} ${pct(Math.abs(c24))}</span> 24h · ` : ''}BTC ${usd(DB.prices.BTC)}`, '#cripto')}
+      ${tile('📥', 'rgba(59,130,246,.18)', 'Aportes ' + st.year, heroCur === 'GBP' ? gbp(aportesYearGBP) : CV(aportesYear), heroCur === 'GBP' ? `<span class="money">${brl(aportesYear)}</span> · plano ${gbp(s.aportePlanGBP)}/mês` : `${gbp(aportesYearGBP)} · plano ${gbp(s.aportePlanGBP)}/mês`, '#historico')}
     </div>
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:baseline"><div class="small"><b>META ${brl(meta)}</b></div><b style="font-size:20px;color:var(--title)">${pct(prog)}</b></div>
-      <div class="bar"><div style="width:${(prog * 100).toFixed(1)}%"></div></div>
-      <div><b>Faltam <span class="money">${CV(pr.falta)}</span></b></div>
-      <div class="small">No ritmo atual: <b>${pr.ritmo ? ymLabel(pr.ritmo) : '–'}</b> · Cenário (<span class="money">${gbp(s.aportePlanGBP)}</span>/mês, ${pct(s.retornoAnual)} a.a.): <b>${pr.cenario ? ymLabel(pr.cenario) : '–'}</b></div>
-    </div>
+    <div class="card kpi"><div class="meta2">
+      <div class="ring" style="--p:${(prog * 100).toFixed(1)}"><div>${pct(prog)}<small>da meta</small></div></div>
+      <div style="min-width:0"><div class="lab">Meta ${brl(meta)}</div><div class="mfal">Faltam <span class="money">${CV(pr.falta)}</span></div>
+        <div class="small muted">No ritmo atual: <b style="color:var(--ink)">${pr.ritmo ? ymLabel(pr.ritmo) : '–'}</b><br>Cenário <span class="money">${gbp(s.aportePlanGBP)}</span>/mês, ${pct(s.retornoAnual)} a.a.: <b style="color:var(--ink)">${pr.cenario ? ymLabel(pr.cenario) : '–'}</b></div></div>
+    </div></div>
    </div>
    <div class="grid" style="align-content:start">
     <div class="card click" onclick="location.hash='#atualizar'">
@@ -1137,15 +1166,16 @@ function vPainel() {
       <div class="small" style="margin-top:6px">Barra = atual · traço = meta · laranja = falta para a meta · caixa <span class="money">${CV(num(DB.balances.caixa))}</span> fora das metas</div>
     </div>
     <div class="card"><h2>Marcos do patrimônio</h2>
-      <div class="mile">${ms.map((m) => `<div class="${m.hit ? 'ok' : ''}">${m.v >= 1e6 ? nf0.format(m.v / 1e6) + ' mi' : nf0.format(m.v / 1000) + 'k'}<b>${m.hit ? ymLabel(m.hit) : '–'}</b></div>`).join('')}</div>
-      <div class="small" style="margin-top:6px">Verde = atingido (2 meses seguidos acima). Os marcos seguem a sua meta.</div>
+      <div class="mrow" id="mrow">${ms.map((m) => `<div class="${m.hit ? 'ok' : m === nextMs ? 'next' : ''}">${m.v >= 1e6 ? nf0.format(m.v / 1e6) + ' mi' : nf0.format(m.v / 1000) + 'k'}<b>${m.hit ? ymLabel(m.hit) : m === nextMs && etaMs ? '~' + ymLabel(etaMs) : '–'}</b></div>`).join('')}</div>
+      <div class="small" style="margin-top:6px">Verde = atingido (2 meses seguidos acima) · contorno = próximo, com data estimada no ritmo atual.</div>
     </div>
     <a class="card click goto" href="#graficos"><span>📈 Ver gráficos</span><span>›</span></a>
    </div>
   </div>`;
+  { const r = $('#mrow'), k = ms.indexOf(nextMs); if (r && k > 0) r.scrollLeft = Math.max(0, (k - 2) * 70); }   // show the last 2 reached + the next one
   $('#cur-swap').onclick = (e) => { e.stopPropagation(); const nx = { BRL: 'GBP', GBP: 'USD', USD: 'BRL' }[heroCur]; try { localStorage.setItem('rumo.cur', nx); } catch {} render(); };
   $('#hero-tap').onclick = () => { try { localStorage.setItem('rumo.hero', heroOpen() ? '0' : '1'); } catch {} render(); };
-  $('#k-month').onclick = () => {
+  $('#k-perf').onclick = () => {
     if (!prevM) return;
     const from = { v: prevM.pat, c: prevM.cat || null }, D = DB.daily || [], base = [...D].filter((x) => x.d < ym() + '-01').pop();
     const fromB = base && base.c && (new Date(ym() + '-01') - new Date(base.d)) / 864e5 <= 7 ? { v: base.v, c: base.c } : from;
@@ -1599,6 +1629,10 @@ function vAjustes() {
    <div class="card"><h2>Versão do app</h2>
      <div class="small">Você está usando a versão <b>${APP_VERSION}</b>.</div>
      <button class="btn block" id="a-update">⟳ Buscar atualização</button></div>
+   <div class="card"><h2>Rentabilidade</h2>
+     <div class="small" style="margin-bottom:8px">Meses antes deste ficam no Histórico (com seus aportes), mas não entram no cálculo de crescimento. Use quando não tem certeza dos aportes antigos.</div>
+     <div class="month-row"><label>Medir a partir de</label><button class="month-btn" id="a-rstart"><span>${DB.settings.rentStart ? ymLong(DB.settings.rentStart) : 'Todo o histórico'}</span><span class="mb-chev">▾</span></button></div>
+     ${DB.settings.rentStart ? '<button class="btn block" id="a-rstart-x" style="margin-top:6px">Usar todo o histórico</button>' : ''}</div>
    <div class="card"><h2>Aparência</h2>
      <div class="field"><label>Tema</label><select id="a-theme">${[['auto', 'Automático (igual ao iPhone)'], ['light', 'Claro'], ['dark', 'Escuro']].map(([v, l]) => `<option value="${v}" ${getTheme() === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
    <div class="card"><h2>Privacidade</h2><div class="small">
@@ -1634,6 +1668,8 @@ function vAjustes() {
   $('#a-export').onclick = exportBackup;
   $('#a-excel').onclick = exportExcel;
   $('#a-update').onclick = forceUpdate;
+  $('#a-rstart').onclick = () => pickMonth(DB.settings.rentStart || ym(), async (m) => { DB.settings.rentStart = m; await save(); render(); toast('Rentabilidade medida a partir de ' + ymLong(m)); });
+  $('#a-rstart-x') && ($('#a-rstart-x').onclick = async () => { delete DB.settings.rentStart; await save(); render(); toast('Usando todo o histórico'); });
   $('#a-theme').onchange = (e) => { try { localStorage.setItem('rumo.theme', e.target.value); } catch {} applyTheme(); render(); };
   $('#a-import').onclick = () => pickImport(false);
   $('#a-lockoff') && ($('#a-lockoff').onclick = async () => {
