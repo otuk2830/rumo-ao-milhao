@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.45';
+const APP_VERSION = '4.46';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -189,7 +189,13 @@ function portfolio() {
   const next = alloc.reduce((a, c) => (c.gap > a.gap ? c : a), alloc[0]);
   return { v, invested, total, alloc, next, cs };
 }
-const divTotal = (h) => num(h.divFII) + num(h.divAcoes) + (h.fx ? num(h.divStocks) * h.fx : 0);
+// a month's dividends in R$: logged payments keep the R$ value of the day they were paid; typed totals use the month's saved rate
+const divTotal = (h) => {
+  const L = (DB.divLog || []).filter((e) => e.date.slice(0, 7) === h.month), byF = {};
+  for (const e of L) { const f = DTYPES[e.type].f; byF[f] = (byF[f] || 0) + divInField(e, 'divFII'); }
+  const part = (f, typed) => (f in byF ? byF[f] : typed);
+  return part('divFII', num(h.divFII)) + part('divAcoes', num(h.divAcoes)) + part('divStocks', h.fx ? num(h.divStocks) * h.fx : 0);
+};
 function historyStats() {
   const H = DB.history, withPat = H.filter((h) => typeof h.pat === 'number');
   const last = withPat[withPat.length - 1] || null;
@@ -504,7 +510,7 @@ function editDiv(id) {
       const old = DB.divLog.find((e) => e.id === o.id)?.date.slice(0, 7);
       const i = DB.divLog.findIndex((e) => e.id === o.id); if (i > -1) DB.divLog[i] = o; else DB.divLog.push(o);
       applyDivLog(m); if (old && old !== m) applyDivLog(old);
-      await save(); closeSheet(); render(); toast(`✓ ${divLabel(o)}${o.ticker ? ' · ' + o.ticker : ''} em ${ymLong(m)}`);
+      await save(); closeSheet(); render(); fillMissingFx(); toast(`✓ ${divLabel(o)}${o.ticker ? ' · ' + o.ticker : ''} em ${ymLong(m)}`);
     };
     if (id) $('#dv-del', el).onclick = async () => {
       if (!(await ask('Apagar este dividendo?', { yes: 'Sim, apagar', danger: true }))) return;
@@ -591,12 +597,22 @@ async function fxOn(date) {   // official GBP/BRL of a past day (ECB via Frankfu
   }
   return null;
 }
+async function fxPair(date, cur) {   // USD/BRL or EUR/BRL of a past day
+  for (const u of ['https://api.frankfurter.dev/v1/' + date + '?base=' + cur + '&symbols=BRL', 'https://api.frankfurter.app/' + date + '?from=' + cur + '&to=BRL']) {
+    try { const j = await fetchJSON(u); if (j?.rates?.BRL) return j.rates.BRL; } catch (e) { console.warn('fx hist', u, e); }
+  }
+  return null;
+}
 async function fillMissingFx() {
   if (!DB || !navigator.onLine) return; let changed = false;
   for (const h of DB.history) {
     if (h.fx || h.aporteGBP === null || h.aporteGBP === undefined || !num(h.aporteGBP)) continue;
     const [y, m] = h.month.split('-').map(Number), last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
     const rate = await fxOn(last); if (rate) { h.fx = rate; h.fxAuto = true; changed = true; }
+  }
+  for (const e of DB.divLog || []) {   // dividends paid in £/US$/€ on a past day get that day's rate
+    if (e.cur === 'BRL' || e.gFixed || e.date >= today()) continue;
+    const g = await fxOn(e.date); if (g) { const k = e.cur === 'GBP' ? null : await fxPair(e.date, e.cur); e.g = g; if (e.cur === 'USD' && k) e.u = k; if (e.cur === 'EUR' && k) e.e = k; e.gFixed = true; changed = true; }
   }
   for (const e of DB.apLog || []) {   // aportes logged with a past date get that day's rate
     if (e.gFixed || e.date >= today()) continue;
@@ -1081,6 +1097,7 @@ function render() {
   $('#top-title').textContent = TITLES[r];
   $('#top-sub').textContent = 'Preços: ' + (DB.prices.updatedAt ? fmtDate(DB.prices.updatedAt) : 'ainda não buscados') + (navigator.onLine ? '' : ' · offline');
   $$('.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === (r === 'cripto' ? 'ativos' : r)));
+  requestAnimationFrame(() => { const maxY = Math.max(0, document.documentElement.scrollHeight - innerHeight); if (scrollY > maxY) scrollTo(0, maxY); });
   ({ painel: vPainel, graficos: vGraficos, atualizar: vAtualizar, historico: vHistorico, dividendos: vDividendos, cripto: vCripto, ativos: vAtivos, ajustes: vAjustes })[r]();
 }
 $('#btn-settings').onclick = () => { location.hash = '#ajustes'; };
@@ -1166,8 +1183,7 @@ function vPainel() {
   let heroCur = 'BRL'; try { heroCur = HM[localStorage.getItem('rumo.cur')] ? localStorage.getItem('rumo.cur') : 'BRL'; } catch {}
   const heroOpen = () => { try { return localStorage.getItem('rumo.hero') === '1'; } catch { return false; } };
   const CV = (v) => HM[heroCur](v);
-  const divNow = (() => { const m = ym(), h = DB.draft.month === m ? DB.draft : DB.history.find((x) => x.month === m) || {}, sl = divSums(m);
-    const f = (k) => (k in sl ? sl[k] : num(h[k])); return f('divFII') + f('divAcoes') + f('divStocks') * num(DB.prices.gbpbrl); })();   // every amount on the Painel follows the ⇄ currency
+  const divNow = (() => { const m = ym(), h = DB.draft.month === m ? DB.draft : DB.history.find((x) => x.month === m) || {}; return divTotal({ ...h, month: m, fx: h.fx || DB.prices.gbpbrl }); })();   // every amount on the Painel follows the ⇄ currency
   // "Este mês": live patrimônio vs the last month saved before this calendar month
   const prevM = DB.history.filter((h) => typeof h.pat === 'number' && h.month < ym()).slice(-1)[0] || null, mChg = prevM ? P.total - prevM.pat : 0;
   // real growth this month (aportes taken out): exact daily chain when possible, otherwise vs last saved month
@@ -1628,7 +1644,7 @@ function editMonth(m) {
 function vDividendos() {
   const yrs = yearsList(), H = DB.history, thisY = String(new Date().getFullYear()), lastY = String(Number(thisY) - 1);
   const monthDiv = (m) => { const h = H.find((x) => x.month === m); if (h) return divTotal(h);
-    if (DB.draft.month === m) { const sl = divSums(m), f = (k) => (k in sl ? sl[k] : num(DB.draft[k])); return f('divFII') + f('divAcoes') + f('divStocks') * num(DB.prices.gbpbrl); } return 0; };
+    if (DB.draft.month === m) return divTotal({ ...DB.draft, month: m, fx: DB.prices.gbpbrl }); return 0; };
   const cell = (y, mi) => monthDiv(`${y}-${String(mi + 1).padStart(2, '0')}`);
   let max = 0; yrs.forEach((y) => { for (let i = 0; i < 12; i++) max = Math.max(max, cell(y, i)); });
   const tot = yrs.map((y) => Array.from({ length: 12 }, (_, i) => cell(y, i)).reduce((a, b) => a + b, 0));

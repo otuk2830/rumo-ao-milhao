@@ -354,3 +354,9 @@ html.priv .dvbars, html.priv .dv-big{filter:blur(8px)}
 .yt{display:grid; grid-template-columns:52px 1fr 1fr 40px; gap:6px; padding:9px 0; border-bottom:1px solid var(--line); font-size:14px; align-items:center}
 .yt.h{font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.04em} .yt b{color:var(--title)} .yt span{text-align:right}
 html.priv .pstats b{filter:blur(7px)}
+
+/* v4.46 — page always fills the screen, so the fixed tab bar can't float up on short pages */
+html, body{min-height:100%}
+#app{min-height:100vh; min-height:100dvh}
+main{min-height:calc(100vh - 70px); min-height:calc(100dvh - 70px); box-sizing:border-box}
+.tabs{transform:translateZ(0)}
