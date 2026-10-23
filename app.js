@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.35';
+const APP_VERSION = '4.38';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -465,18 +465,26 @@ function editDiv(id) {
     <div class="field"><label>Moeda</label><select id="dv-c">${[['BRL', 'R$'], ['GBP', '£'], ['USD', 'US$'], ['EUR', '€']].map(([v, l]) => `<option value="${v}" ${x.cur === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <div class="field"><label>Valor recebido</label><input id="dv-a" class="pt" inputmode="decimal" value="${fmtN(x.amount, 2)}"></div>
     <div class="field"><label>Data</label><input type="date" id="dv-d" value="${x.date}"></div>
-    <div class="field"><label>Ticker<small>opcional — digite ou toque</small></label><input id="dv-k" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" value="${esc(x.ticker || '')}" style="text-align:left" placeholder="ex.: HGLG11"></div>
-    <div class="tk-sug" id="dv-sug"></div>
+    <div class="tk-field"><label>Ticker <small>opcional — comece a digitar</small></label>
+      <input id="dv-k" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" value="${esc(x.ticker || '')}" placeholder="ex.: HGLG11">
+      <div class="tk-dd hidden" id="dv-sug"></div></div>
     <button class="btn primary block" id="dv-save">Salvar</button>
     ${id ? '<button class="btn danger block" id="dv-del">Apagar</button>' : ''}
     <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
     $$('input.pt', el).forEach(liveFormat);
-    const fill = () => {   // your own tickers of this type, narrowed as you type
-      const q = $('#dv-k', el).value.trim().toUpperCase(), all = tickers($('#dv-t', el).value), L = all.filter((t) => !q || t.includes(q));
-      $('#dv-sug', el).innerHTML = (L.length === 1 && L[0] === q) ? '' : L.slice(0, 12).map((t) => `<button type="button" data-tk="${t}" class="${t.startsWith(q) && q ? 'hit' : ''}">${t}</button>`).join('') || (all.length && q ? '<span class="small muted">nenhum ativo seu com esse nome — pode salvar assim mesmo</span>' : '');
-      $$('[data-tk]', el).forEach((b) => (b.onclick = () => { $('#dv-k', el).value = b.dataset.tk; fill(); }));
+    // dropdown under the box: only while typing, at most 5 of your own tickers of this type
+    const dd = $('#dv-sug', el), box = $('#dv-k', el);
+    const fill = () => {
+      const q = box.value.trim().toUpperCase(), all = tickers($('#dv-t', el).value);
+      if (!q || document.activeElement !== box) { dd.classList.add('hidden'); return; }
+      const L = [...all.filter((t) => t.startsWith(q)), ...all.filter((t) => !t.startsWith(q) && t.includes(q))];
+      if (L.length === 1 && L[0] === q) { dd.classList.add('hidden'); return; }
+      dd.innerHTML = L.length ? L.slice(0, 5).map((t) => `<button type="button" data-tk="${t}"><b>${t.slice(0, t.indexOf(q))}<u>${q}</u>${t.slice(t.indexOf(q) + q.length)}</b><span>${DTYPES[$('#dv-t', el).value].n}</span></button>`).join('')
+        : '<div class="tk-none">Nenhum ativo seu com esse nome — pode salvar assim mesmo</div>';
+      dd.classList.remove('hidden');
+      $$('[data-tk]', dd).forEach((b) => (b.onpointerdown = (e) => { e.preventDefault(); box.value = b.dataset.tk; dd.classList.add('hidden'); box.blur(); }));
     };
-    $('#dv-k', el).addEventListener('input', fill);
+    box.addEventListener('input', fill); box.addEventListener('focus', fill); box.addEventListener('blur', () => setTimeout(() => dd.classList.add('hidden'), 150));
     $('#dv-t', el).onchange = () => { $('#dv-c', el).value = DTYPES[$('#dv-t', el).value].cur; fill(); }; fill();
     if (!id) setTimeout(() => $('#dv-a', el).focus(), 250);
     $('#dv-save', el).onclick = async () => {
@@ -526,6 +534,7 @@ function editAp(id) {
     <div class="small muted" style="margin-bottom:8px">Dinheiro NOVO que entrou nos investimentos. Para uma retirada, use um valor negativo (ex.: -200).</div>
     <div class="field"><label>Valor (£)</label><input id="ap-v" class="pt" inputmode="decimal" value="${fmtN(x.gbp, 2)}"></div>
     <div class="field"><label>Data</label><input type="date" id="ap-d" value="${x.date}"></div>
+    <div class="field"><label>Para onde foi</label><select id="ap-to">${Object.entries(BLK).map(([k, v]) => `<option value="${k}" ${(x.dest || 'gbp') === k ? 'selected' : ''}>${v.n} (${v.cur})</option>`).join('')}</select></div>
     <div class="field"><label>Nota<small>opcional</small></label><input id="ap-n" value="${esc(x.note || '')}" style="text-align:left" placeholder="ex.: salário"></div>
     <button class="btn primary block" id="ap-save">Salvar</button>
     ${id ? '<button class="btn danger block" id="ap-del">Apagar</button>' : ''}
@@ -534,7 +543,7 @@ function editAp(id) {
     $('#ap-save', el).onclick = async () => {
       const raw = $('#ap-v', el).value.trim(), neg = raw.startsWith('-'), v = parsePT(raw.replace(/^-/, ''));
       if (!v) return toast('Digite o valor');
-      const o = { ...x, gbp: neg ? -v : v, date: $('#ap-d', el).value || today(), note: $('#ap-n', el).value.trim(), at: new Date().toISOString(), g: DB.prices.gbpbrl };
+      const o = { ...x, gbp: neg ? -v : v, date: $('#ap-d', el).value || today(), dest: $('#ap-to', el).value, note: $('#ap-n', el).value.trim(), at: new Date().toISOString(), g: DB.prices.gbpbrl };
       const m = o.date.slice(0, 7), first = !(DB.apLog || []).some((e) => e.id !== o.id && e.date.slice(0, 7) === m);
       const typed = DB.draft.month === m ? DB.draft.aporteGBP : DB.history.find((h) => h.month === m)?.aporteGBP;
       if (first && typed) {
@@ -589,20 +598,66 @@ async function fillMissingFx() {
 // ---- daily snapshot: today's patrimônio, saved quietly after prices load (later the same day replaces it)
 const today = () => { const t = new Date(); return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0'); };
 const CAT_N = { acoes: 'Ações', fiis: 'FIIs', rf: 'Renda fixa', stocks: 'Exterior', crypto: 'Cripto', caixa: 'Caixa' };
+// three blocks, each in its own currency: Brazil (R$), Trading 212 (£), Cripto (US$)
+const natNow = (P) => { const b = DB.balances, pr = DB.prices, r2 = (v) => Math.round(v * 100) / 100;
+  return { brl: r2(P.v.acoes + P.v.fiis + num(b.rfBrasil) + num(b.caixa)), gbp: r2(P.v.stocks / (pr.gbpbrl || 1) + num(b.t212cash)), usd: r2(P.v.crypto / (pr.usdbrl || 1)) }; };
+const BLK = { brl: { n: 'Brasil', cur: 'R$' }, gbp: { n: 'Trading 212', cur: '£' }, usd: { n: 'Cripto', cur: 'US$' } };
+const rateOf = (k, g, u) => (k === 'brl' ? 1 : k === 'gbp' ? g : u);
+// new money of a period, split by where it went, in each block's own currency
+function flowsBetween(d1, d2, mode) {   // mode 'day': (d1, d2]  ·  mode 'month': whole month d1
+  const L = (DB.apLog || []).filter((e) => (mode === 'month' ? e.date.slice(0, 7) === d1 : e.date > d1 && e.date <= d2)), f = { brl: 0, gbp: 0, usd: 0 };
+  for (const e of L) { const g = e.g || DB.prices.gbpbrl || 1, k = e.dest || 'gbp'; f[k] += k === 'gbp' ? e.gbp : k === 'brl' ? e.gbp * g : (e.gbp * g) / (DB.prices.usdbrl || 1); }
+  return { f, any: L.length > 0 };
+}
+// return without exchange-rate effect for one period: each block in its own currency, weighted by its size at the start
+function localPeriod(a, b, f, half) {
+  let num_ = 0, den = 0, gainEnd = 0;
+  for (const k of Object.keys(BLK)) {
+    const Va = num(a.n[k]), Vb = num(b.n[k]), cf = num(f[k]), ra = rateOf(k, a.g || 1, a.u || 1), rb = rateOf(k, b.g || 1, b.u || 1);
+    const base = Va + (half ? 0.5 * cf : 0); if (base > 0) { num_ += ((Vb - Va - cf) / base) * base * ra; den += base * ra; }
+    gainEnd += (Vb - Va - cf) * rb;   // investment gain valued at today's rates (R$)
+  }
+  return { r: den ? num_ / den : 0, gainR: gainEnd };
+}
+function liveLocal(P) {
+  const now = { d: today(), n: natNow(P), g: DB.prices.gbpbrl, u: DB.prices.usdbrl }, start = ym() + '-01';
+  const D = (DB.daily || []).filter((x) => x.n && x.d < today()), base = [...D].filter((x) => x.d < start).pop();
+  if (base && (new Date(start) - new Date(base.d)) / 864e5 <= 7) {
+    const pts = [base, ...D.filter((x) => x.d >= start), now]; let f = 1, gR = 0;
+    for (let i = 1; i < pts.length; i++) { const L = localPeriod(pts[i - 1], pts[i], flowsBetween(pts[i - 1].d, pts[i].d, 'day').f, false); f *= 1 + L.r; gR += L.gainR; }
+    return { r: f - 1, gainR: gR };
+  }
+  const prev = DB.history.filter((h) => h.month < ym() && h.nat).slice(-1)[0];
+  if (!prev || ymDiff(prev.month, ym()) !== 1) return null;
+  const fl = flowsBetween(ym(), null, 'month'); const L = localPeriod({ n: prev.nat, g: prev.fx, u: prev.usd }, now, fl.f, true); return { r: L.r, gainR: L.gainR };
+}
+function localMonth(month) {   // exact daily chain when snapshots allow, otherwise saved month vs saved month
+  const D = (DB.daily || []).filter((x) => x.n), start = month + '-01', base = [...D].filter((x) => x.d < start).pop();
+  const pts = base && (new Date(start) - new Date(base.d)) / 864e5 <= 7 ? [base, ...D.filter((x) => x.d.slice(0, 7) === month)] : null;
+  if (pts && pts.length >= 2) { let f = 1, gR = 0; for (let i = 1; i < pts.length; i++) { const L = localPeriod(pts[i - 1], pts[i], flowsBetween(pts[i - 1].d, pts[i].d, 'day').f, false); f *= 1 + L.r; gR += L.gainR; } return { r: f - 1, gainR: gR }; }
+  const H = DB.history, i = H.findIndex((h) => h.month === month), a = H[i - 1], h = H[i];
+  if (!h || !a || !h.nat || !a.nat || ymDiff(a.month, h.month) !== 1) return null;
+  const fl = flowsBetween(month, null, 'month'); let f = fl.f;
+  if (!fl.any) { if (h.aporteGBP === null || h.aporteGBP === undefined) return null; f = { brl: 0, gbp: num(h.aporteGBP), usd: 0 }; }   // typed aporte → Trading 212
+  const L = localPeriod({ n: a.nat, g: a.fx, u: a.usd }, { n: h.nat, g: h.fx, u: h.usd }, f, true); return { r: L.r, gainR: L.gainR };
+}
 const catNow = (P) => { const o = {}; for (const k in P.v) o[k] = Math.round(P.v[k] * 100) / 100; o.caixa = Math.round(num(DB.balances.caixa) * 100) / 100; return o; };
 // "where did the growth come from": total change − aportes = real growth; split into dividends + price/FX, and by category when both ends have it
-function growthBreak(from, to, apBRLv, divBRL) {
+function growthBreak(from, to, apBRLv, divBRL, loc) {
   const chg = to.v - from.v, real = chg - apBRLv, cats = from.c && to.c ? Object.keys(CAT_N).map((k) => ({ k, n: CAT_N[k], d: num(to.c[k]) - num(from.c[k]) })) : null;
-  return { chg, ap: apBRLv, real, div: divBRL, val: real - divBRL, pct: from.v ? real / (from.v + 0.5 * apBRLv) : 0, cats };
+  const inv = loc ? loc.gainR : real, fx = loc ? real - loc.gainR : null;   // investment result (no FX) and the exchange-rate part
+  return { chg, ap: apBRLv, real, div: divBRL, val: inv - divBRL, fx, rl: loc ? loc.r : null, pct: from.v ? real / (from.v + 0.5 * apBRLv) : 0, cats };
 }
 function breakHtml(B, title, sub) {
   const ln = (l, v, cls = '', b = false) => `<div class="mc-row"><span>${l}</span>${b ? '<b' : '<span'} class="${cls}" style="text-align:right">${v}${b ? '</b>' : '</span>'}</div>`;
   const sg = (v) => signed((x) => brl(x), v), cl = (v) => (v < 0 ? 'neg' : 'pos');
   return `<div class="mc"><div class="mc-top"><div class="small muted">${sub}</div><h3 style="margin:2px 0 0">${title}</h3>
-    <div class="mc-big ${cl(B.real)}">${sg(B.real)}</div><div style="font-weight:700" class="${cl(B.real)}">${signed(pct, B.pct)} de crescimento real</div></div>
+    <div class="mc-big ${cl(B.real)}">${sg(B.real)}</div>
+    ${B.rl !== null ? `<div style="font-weight:700" class="${cl(B.rl)}">${signed(pct, B.rl)} dos investimentos (sem câmbio)</div><div class="small muted">em R$, com câmbio: ${signed(pct, B.pct)}</div>` : `<div style="font-weight:700" class="${cl(B.real)}">${signed(pct, B.pct)} de crescimento real</div>`}</div>
     ${ln('Variação do patrimônio', sg(B.chg))}${ln('− Aportes (dinheiro novo)', B.ap ? '−' + brl(B.ap) : brl(0))}${ln('= Crescimento real', sg(B.real), cl(B.real), true)}
     <div class="small muted" style="margin:12px 0 2px;font-weight:700;letter-spacing:.03em">DE ONDE VEIO</div>
-    ${ln('💰 Dividendos recebidos', sg(B.div), cl(B.div))}${ln('📈 Preços e câmbio', sg(B.val), cl(B.val))}
+    ${ln('💰 Dividendos recebidos', sg(B.div), cl(B.div))}${B.fx !== null ? ln('📈 Preços (valorização)', sg(B.val), cl(B.val)) + ln('💱 Câmbio (libra/dólar × real)', sg(B.fx), cl(B.fx)) : ln('📈 Preços e câmbio', sg(B.val), cl(B.val))}
+    ${B.fx === null ? '<div class="small muted" style="margin-top:6px">Preços e câmbio aparecem separados a partir do próximo mês (o app começou a guardar o valor de cada moeda agora).</div>' : ''}
     ${B.cats ? `<div class="small muted" style="margin:12px 0 2px;font-weight:700;letter-spacing:.03em">POR CATEGORIA (inclui aportes e dividendos que ficaram lá)</div>${B.cats.map((c) => ln(c.n, sg(c.d), Math.abs(c.d) < 0.5 ? '' : cl(c.d))).join('')}`
       : '<div class="small muted" style="margin-top:10px">A divisão por categoria aparece a partir do próximo mês salvo (o app começou a guardar o valor de cada categoria agora).</div>'}
     <button class="btn block" onclick="closeSheet()" style="margin-top:14px">Fechar</button></div>`;
@@ -610,7 +665,7 @@ function breakHtml(B, title, sub) {
 async function dailySnap() {
   if (!DB || !DB.prices.updatedAt || Date.now() - new Date(DB.prices.updatedAt) > 2 * 3600 * 1000) return;   // only with fresh prices
   const P = portfolio(); if (!(P.total > 0)) return;
-  const e = { d: today(), v: Math.round(P.total * 100) / 100, g: DB.prices.gbpbrl || null, u: DB.prices.usdbrl || null, c: catNow(P) };
+  const e = { d: today(), v: Math.round(P.total * 100) / 100, g: DB.prices.gbpbrl || null, u: DB.prices.usdbrl || null, c: catNow(P), n: natNow(P) };
   const D = (DB.daily ||= []), last = D[D.length - 1];
   if (last && last.d === e.d) D[D.length - 1] = e; else D.push(e);
   await save();
@@ -1055,19 +1110,20 @@ function returnsData() {
     const a = H[i - 1], b = H[i];
     if (DB.settings.rentStart && b.month < DB.settings.rentStart) continue;   // user chose to start measuring later
     if (typeof a.pat !== 'number' || typeof b.pat !== 'number' || ymDiff(a.month, b.month) !== 1) continue;
-    const dm = b.month < ym() ? dailyMonth(b.month) : null; if (dm) { months.push(dm); continue; }   // daily data covers it → exact
+    const lm = localMonth(b.month), rl = lm ? lm.r : null;
+    const dm = b.month < ym() ? dailyMonth(b.month) : null; if (dm) { months.push({ ...dm, rl }); continue; }   // daily data covers it → exact
     if (b.aporteGBP === null || b.aporteGBP === undefined) continue; // aporte unknown → month can't be measured
     const fx = b.fx || (num(b.aporteGBP) === 0 ? 1 : null); if (!fx) continue;   // rate is fetched in the background for old months
     const C = num(b.aporteGBP) * fx, den = a.pat + 0.5 * C;
     if (den <= 0) continue;
-    months.push({ month: b.month, gain: b.pat - a.pat - C, r: (b.pat - a.pat - C) / den, aporte: C });
+    months.push({ month: b.month, gain: b.pat - a.pat - C, r: (b.pat - a.pat - C) / den, aporte: C, rl });
   }
   const years = {};
   for (const m of months) {
-    const y = m.month.slice(0, 4); const Y = (years[y] ||= { year: y, f: 1, gain: 0, aporte: 0, n: 0 });
-    Y.f *= 1 + m.r; Y.gain += m.gain; Y.aporte += m.aporte; Y.n++;
+    const y = m.month.slice(0, 4); const Y = (years[y] ||= { year: y, f: 1, gain: 0, aporte: 0, n: 0, fl: 1, nl: 0 });
+    Y.f *= 1 + m.r; Y.gain += m.gain; Y.aporte += m.aporte; Y.n++; if (m.rl !== null && m.rl !== undefined) { Y.fl *= 1 + m.rl; Y.nl++; }
   }
-  const list = Object.values(years).map((Y) => ({ ...Y, r: Y.f - 1 })).sort((a, b) => a.year.localeCompare(b.year));
+  const list = Object.values(years).map((Y) => ({ ...Y, r: Y.f - 1, rl: Y.nl ? Y.fl - 1 : null, full: Y.nl === Y.n })).sort((a, b) => a.year.localeCompare(b.year));
   const total = months.reduce((f, m) => f * (1 + m.r), 1) - 1;
   return { months, years: list, total, since: months[0]?.month || null };
 }
@@ -1098,6 +1154,7 @@ function vPainel() {
   const aportesYear = DB.history.filter((h) => h.month.startsWith(st.year) && h.aporteGBP && h.fx).reduce((a, h) => a + h.aporteGBP * h.fx, 0);
 
   // ---- extras for the new layout
+  const mLoc = prevM ? liveLocal(P) : null;
   const yest = [...(DB.daily || [])].filter((x) => x.d < today()).pop() || null, dChg = yest ? P.total - yest.v : null;
   const spark = (() => {   // last 30 days of daily values (+ now); falls back to the last 12 saved months
     const cut = Date.now() - 30 * 864e5; let pts = (DB.daily || []).filter((x) => new Date(x.d + 'T12:00') >= cut && x.d < today()).map((x) => x.v), lbl = 'últimos 30 dias';
@@ -1109,8 +1166,8 @@ function vPainel() {
       <path d="${d} L${W} ${H} L0 ${H} Z" fill="url(#sg)"/><path d="${d}" fill="none" stroke="#93C5FD" stroke-width="2" vector-effect="non-scaling-stroke"/></svg><div class="spark-l">${lbl} · toque para ver as categorias</div>`;
   })();
   const bars = (() => {   // last 12 months of real growth; current month live (lighter)
-    const byM = Object.fromEntries(R.months.map((m) => [m.month, m.r])), L = [];
-    for (let k = 11; k >= 0; k--) { const m = ymAdd(ym(), -k); L.push({ m, r: m === ym() ? mReal : byM[m] ?? null, live: m === ym() }); }
+    const byM = Object.fromEntries(R.months.map((m) => [m.month, m.rl ?? m.r])), L = [];   // bars: no-FX return when known
+    for (let k = 11; k >= 0; k--) { const m = ymAdd(ym(), -k); L.push({ m, r: m === ym() ? (mLoc ? mLoc.r : mReal) : byM[m] ?? null, live: m === ym() }); }
     const mx = Math.max(0.005, ...L.filter((x) => x.r !== null).map((x) => Math.abs(x.r)));
     return `<div class="pbars">${L.map((x) => { if (x.r === null) return '<div class="pb"><i class="na"></i></div>';
       const h = Math.max(3, (Math.abs(x.r) / mx) * 26); return `<div class="pb" title="${ymLabel(x.m)} ${signed(pct, x.r)}"><i class="${x.r < 0 ? 'neg' : 'pos'}${x.live ? ' live' : ''}" style="height:${h}px;${x.r < 0 ? 'top:28px' : 'bottom:28px'}"></i></div>`; }).join('')}<div class="pzero"></div></div>
@@ -1134,13 +1191,15 @@ function vPainel() {
         `<div><span><i style="background:${c}"></i>${n}</span><b>${HM[heroCur](v)}</b><em>${pct(P.total ? v / P.total : 0)}</em></div>`).join('')}</div>` : ''}
     </div>
     <div class="card kpi click" id="k-perf">
-      <div style="display:flex;justify-content:space-between;align-items:center"><span class="lab">Desempenho · sem aportes</span><span class="small muted">ⓘ de onde veio</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center"><span class="lab">Desempenho · sem aportes${mLoc ? ' e sem câmbio' : ''}</span><span class="small muted">ⓘ</span></div>
       <div class="perf2">
         <div><div class="small muted">${MONTHS[new Date().getMonth()]}</div>
-          ${prevM && mReal !== null ? `<div class="pv ${mReal < 0 ? 'neg' : 'pos'}">${signed(pct, mReal)}</div><div class="small muted"><span class="money">${signed(CV, mRealV)}</span></div>`
+          ${mLoc && mReal !== null ? `<div class="pv ${mLoc.r < 0 ? 'neg' : 'pos'}">${signed(pct, mLoc.r)}</div><div class="small muted"><span class="money">${signed(CV, mLoc.gainR)}</span> · em R$ ${signed(pct, mReal)}</div>`
+          : prevM && mReal !== null ? `<div class="pv ${mReal < 0 ? 'neg' : 'pos'}">${signed(pct, mReal)}</div><div class="small muted"><span class="money">${signed(CV, mRealV)}</span> · em R$</div>`
             : `<div class="pv">–</div><div class="small muted">${prevM ? 'informe o aporte do mês' : 'precisa de um mês salvo'}</div>`}</div>
         <div><div class="small muted">${st.year}</div>
-          ${Ry ? `<div class="pv ${Ry.r < 0 ? 'neg' : 'pos'}">${signed(pct, Ry.r)}</div><div class="small muted">${Ry.n} ${Ry.n === 1 ? 'mês' : 'meses'} · <span class="money">${signed(CV, Ry.gain)}</span></div>`
+          ${Ry && Ry.full && Ry.rl !== null ? `<div class="pv ${Ry.rl < 0 ? 'neg' : 'pos'}">${signed(pct, Ry.rl)}</div><div class="small muted">${Ry.n} ${Ry.n === 1 ? 'mês' : 'meses'} · em R$ ${signed(pct, Ry.r)}</div>`
+          : Ry ? `<div class="pv ${Ry.r < 0 ? 'neg' : 'pos'}">${signed(pct, Ry.r)}</div><div class="small muted">${Ry.n} ${Ry.n === 1 ? 'mês' : 'meses'} · em R$${Ry.rl !== null ? ` · sem câmbio ${signed(pct, Ry.rl)} (${Ry.nl} m)` : ''}</div>`
             : '<div class="pv">–</div><div class="small muted">começa com os aportes</div>'}</div>
       </div>
       ${bars}
@@ -1179,7 +1238,7 @@ function vPainel() {
     if (!prevM) return;
     const from = { v: prevM.pat, c: prevM.cat || null }, D = DB.daily || [], base = [...D].filter((x) => x.d < ym() + '-01').pop();
     const fromB = base && base.c && (new Date(ym() + '-01') - new Date(base.d)) / 864e5 <= 7 ? { v: base.v, c: base.c } : from;
-    const B = growthBreak(fromB, { v: P.total, c: catNow(P) }, num(apNowGBP) * num(DB.prices.gbpbrl), divNow);
+    const B = growthBreak(fromB, { v: P.total, c: catNow(P) }, num(apNowGBP) * num(DB.prices.gbpbrl), divNow, mLoc);
     openSheet(breakHtml(B, MONTHS[new Date().getMonth()] + ' até agora', 'desde ' + ymLong(prevM.month) + ' · ao vivo'));
   };
 }
@@ -1205,7 +1264,7 @@ function vGraficos() {
     <div class="card"><h2>Rentabilidade (sem aportes)</h2>
       ${R.years.length ? `
       <div class="row"><span class="l small"><b>Ano</b></span><span class="r small">Meses · Ganho · <b>Retorno</b></span></div>
-      ${[...R.years].reverse().map((y) => `<div class="row"><span class="l"><b>${y.year}</b></span><span class="r">${y.n} · ${signed(brl, y.gain)} · <b class="${y.r < 0 ? 'neg' : 'pos'}">${signed(pct, y.r)}</b></span></div>`).join('')}
+      ${[...R.years].reverse().map((y) => `<div class="row"><span class="l"><b>${y.year}</b>${y.rl !== null ? `<div class="small">sem câmbio${y.full ? '' : ' (' + y.nl + ' m)'}: <b class="${y.rl < 0 ? 'neg' : 'pos'}">${signed(pct, y.rl)}</b></div>` : ''}</span><span class="r">${y.n} · ${signed(brl, y.gain)} · <b class="${y.r < 0 ? 'neg' : 'pos'}">${signed(pct, y.r)}</b></span></div>`).join('')}
       <div class="row"><span class="l">Desde ${ymLabel(R.since)}</span><span class="r"><b class="${R.total < 0 ? 'neg' : 'pos'}">${signed(pct, R.total)}</b></span></div>
       <div class="small" style="margin-top:10px">Mês a mês — últimos 12 meses</div><div class="chart-box" style="height:200px;margin-top:4px"><canvas id="ch-ret"></canvas></div>`
       : '<p class="small">Ainda sem dados. A rentabilidade começa a ser calculada a partir do primeiro mês salvo com aporte (mesmo que seja £0).</p>'}
@@ -1381,7 +1440,7 @@ function vAtualizar() {
       if (!(await ask('Você não preencheu o aporte. Salvar como £0 (nenhum dinheiro novo este mês)?'))) return;
       d2.aporteGBP = 0;
     }
-    const entry = { month: d2.month, pat: Math.round(P2.total * 100) / 100, aporteGBP: d2.aporteGBP, divFII: d2.divFII, divAcoes: d2.divAcoes, divStocks: d2.divStocks, fx: DB.prices.gbpbrl || null, cat: catNow(P2) };
+    const entry = { month: d2.month, pat: Math.round(P2.total * 100) / 100, aporteGBP: d2.aporteGBP, divFII: d2.divFII, divAcoes: d2.divAcoes, divStocks: d2.divStocks, fx: DB.prices.gbpbrl || null, usd: DB.prices.usdbrl || null, cat: catNow(P2), nat: natNow(P2) };
     const i = DB.history.findIndex((h) => h.month === d2.month);
     if (i > -1) { if (!(await ask(`${ymLong(d2.month)} já existe. Substituir?`))) return; entry.note = DB.history[i].note; DB.history[i] = entry; }
     else DB.history.push(entry);
@@ -1432,7 +1491,7 @@ function monthCard(m) {
     ${prev && typeof prev.pat === 'number' && typeof h.pat === 'number' && ap !== null ? '<button class="btn block" id="mc-why" style="margin-top:14px">📊 De onde veio o crescimento</button>' : ''}
     <button class="btn primary block" id="mc-edit" style="margin-top:${prev && ap !== null ? 8 : 14}px">✎ Editar mês</button>
     <button class="btn block" onclick="closeSheet()">Fechar</button></div>`, (el) => { $('#mc-edit', el).onclick = () => { closeSheet(); editMonth(m); };
-    $('#mc-why', el) && ($('#mc-why', el).onclick = () => openSheet(breakHtml(growthBreak({ v: prev.pat, c: prev.cat }, { v: h.pat, c: h.cat }, ap, divTotal(h)), ymLong(m), 'vs ' + ymLong(prev.month)))); });
+    $('#mc-why', el) && ($('#mc-why', el).onclick = () => openSheet(breakHtml(growthBreak({ v: prev.pat, c: prev.cat }, { v: h.pat, c: h.cat }, ap, divTotal(h), localMonth(m)), ymLong(m), 'vs ' + ymLong(prev.month)))); });
 }
 function editMonth(m) {
   const h = m ? DB.history.find((x) => x.month === m) : { month: ym(), pat: null, aporteGBP: null, divFII: null, divAcoes: null, divStocks: null, fx: null, note: '' };
