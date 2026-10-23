@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.41';
+const APP_VERSION = '4.43';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1165,7 +1165,10 @@ function vPainel() {
 
   // ---- extras for the new layout
   const mLoc = prevM ? liveLocal(P) : null;
-  const yest = [...(DB.daily || [])].filter((x) => x.d < today()).pop() || null, dChg = yest ? P.total - yest.v : null;
+  // "hoje": investments only — each block in its own currency vs yesterday's snapshot, aportes of today taken out (no exchange-rate effect)
+  const yest = [...(DB.daily || [])].filter((x) => x.d < today() && x.n).pop() || null;
+  const dLoc = yest ? localPeriod(yest, { n: natNow(P), g: DB.prices.gbpbrl, u: DB.prices.usdbrl }, flowsBetween(yest.d, today(), 'day').f, false) : null;
+  const dChg = dLoc ? dLoc.gainR : null;
   const spark = (() => {   // last 30 days of daily values (+ now); falls back to the last 12 saved months
     const cut = Date.now() - 30 * 864e5; let pts = (DB.daily || []).filter((x) => new Date(x.d + 'T12:00') >= cut && x.d < today()).map((x) => x.v), lbl = 'últimos 30 dias';
     if (pts.length < 2) { pts = DB.history.filter((h) => typeof h.pat === 'number').slice(-12).map((h) => h.pat); lbl = 'últimos 12 meses'; }
@@ -1194,7 +1197,7 @@ function vPainel() {
     <div class="card hero kpi click" id="hero-tap">
       <div class="lab" style="display:flex;justify-content:space-between;align-items:center">Patrimônio hoje <span style="display:flex;gap:10px;align-items:center"><button class="cur-swap" id="cur-swap" aria-label="Trocar moeda">⇄ ${heroCur === 'BRL' ? 'R$' : heroCur === 'GBP' ? '£' : 'US$'}</button><span class="chev">${heroOpen() ? '▴' : '▾'}</span></span></div>
       <div class="val">${HM[heroCur](P.total)}</div>
-      ${dChg !== null ? `<span class="dchip ${dChg < 0 ? 'neg' : 'pos'}">${dChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(dChg))}</span> hoje · ${signed(pct, yest.v ? dChg / yest.v : 0)}</span>` : ''}
+      ${dLoc ? `<span class="dchip ${dChg < 0 ? 'neg' : 'pos'}">${dChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(dChg))}</span> hoje · ${signed(pct, dLoc.r)}</span>` : ''}
       <div class="sub">${['BRL', 'GBP', 'USD'].filter((c) => c !== heroCur).map((c) => HM[c](P.total)).join(' · ')}</div>
       ${spark}
       ${heroOpen() ? `<div class="hero-list">${[...P.alloc.map((a) => [a.n, a.v, a.c]), ['Caixa', num(DB.balances.caixa), '#94A3B8']].map(([n, v, c]) =>
@@ -1388,7 +1391,9 @@ function vAtualizar() {
   const balAt = (DB.settings.balAt ||= {}), mStart = d.month + '-01';
   const fresh = (k) => balAt[k] && balAt[k].slice(0, 10) >= mStart;   // updated (or confirmed) in/after the month being closed
   const last = (k) => (balAt[k] ? new Date(balAt[k]).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : 'nunca');
-  const balRow = (lab, key, val, conv) => fieldRow(lab, 'b.' + key, val, `<span class="${fresh(key) ? '' : 'warn'}">${fresh(key) ? 'atualizado ' + last(key) + ' ✓' : 'última vez: ' + last(key)}</span>`, conv);
+  const mName = MONTHS[Number(d.month.slice(5)) - 1].toLowerCase();
+  const balRow = (lab, key, val, conv) => fieldRow(lab, 'b.' + key, val, fresh(key) ? `<span class="okt">✓ conferido em ${last(key)}</span>`
+    : `<span class="warn">conferir para ${mName}${balAt[key] ? ' · último em ' + last(key) : ''}</span>`, conv);
   // ---- step states
   const apN = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === d.month).length;
   const s1 = apN > 0 || (d.aporteGBP !== null && d.aporteGBP !== undefined);
@@ -1399,8 +1404,8 @@ function vAtualizar() {
   const nonAuto = [!au.acoes && 'acoes', !au.fiis && 'fiis', ...(!au.stocks ? ['pieStocks', 'pieReits', 'pieEtfs'] : [])].filter(Boolean);
   const s4 = nonAuto.every(fresh);
   const pxAge = p.updatedAt ? Date.now() - new Date(p.updatedAt) : Infinity, s5 = pxAge < 6 * 3600e3;
-  const done = [s1, s2, s3, s4, s5], nDone = done.filter(Boolean).length;
-  if (ATU.open === undefined) { const k = done.findIndex((x) => !x); ATU.open = k > -1 ? k + 1 : 0; }
+  const need = [s1, s2, s3, ...(nonAuto.length ? [s4] : [])], nNeed = need.length, nDone = need.filter(Boolean).length;
+  if (ATU.open === undefined) ATU.open = 0;   // 2. every step starts closed
   const stepH = (k, ok, auto, title, sub, body) => `<div class="cs ${ATU.open === k ? 'open' : ''}">
       <div class="cs-h" data-step="${k}"><div class="ck ${ok ? (auto ? 'auto' : 'ok') : 'todo'}">${ok ? (auto ? 'AUTO' : '✓') : k}</div><div class="cs-t"><b>${title}</b><span>${sub}</span></div><span class="cs-c">${ATU.open === k ? '⌄' : '›'}</span></div>
       ${ATU.open === k ? `<div class="cs-b">${body}</div>` : ''}</div>`;
@@ -1411,8 +1416,8 @@ function vAtualizar() {
    <div class="card kpi at-head">
      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span class="lab">Fechamento do mês</span>
        <button class="month-btn" id="f-month"><svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>${ymLong(d.month)}</span><span class="mb-chev">▾</span></button></div>
-     <div class="at-prog"><i style="width:${nDone * 20}%"></i></div>
-     <div class="at-st"><span><b>${nDone} de 5</b> ${nDone === 5 ? 'prontos — pode salvar' : 'prontos'}</span><span>${exists ? 'já salvo' + (exists.savedAt ? ' em ' + new Date(exists.savedAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '') + ' · salvar de novo substitui' : 'ainda não salvo'}</span></div>
+     <div class="at-prog"><i style="width:${(nDone / nNeed) * 100}%"></i></div>
+     <div class="at-st"><span><b>${nDone} de ${nNeed}</b> ${nDone === nNeed ? 'prontos — pode salvar' : 'prontos'}</span><span>${exists ? 'já salvo' + (exists.savedAt ? ' em ' + new Date(exists.savedAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '') + ' · salvar de novo substitui' : 'ainda não salvo'}</span></div>
    </div>
    <div class="card cl">
     ${stepH(1, s1, false, 'Aporte do mês', apN ? `${gbp(d.aporteGBP || 0, 2)} · ${apN} ${apN === 1 ? 'lançamento' : 'lançamentos'}${ae && ae.date.slice(0, 7) === d.month ? ' · ' + dmy(ae.date) + ' → ' + BLK[ae.dest || 'gbp'].n : ''}` : s1 ? `${gbp(d.aporteGBP, 2)}${num(d.aporteGBP) ? '' : ' · sem aporte'}` : 'ainda não informado',
@@ -1428,12 +1433,12 @@ function vAtualizar() {
          return `<div class="field click" onclick="location.hash='#dividendos'"><label>${lab}<small>${L.length} ${L.length === 1 ? 'lançamento' : 'lançamentos'} ›</small></label><div class="calc">${fm(d[f] || 0)}</div></div>`;
        }).join('')}
        ${!dvN ? '<button class="btn block" id="f-div0" style="margin-top:8px">✓ Pronto</button>' : ''}`)}
-    ${stepH(3, s3, false, 'Saldos que você digita', s3 ? 'todos atualizados este mês' : `<span class="warn">${manual.filter((k) => !fresh(k)).length} não atualizados este mês</span>`,
+    ${stepH(3, s3, false, 'Saldos que você digita', s3 ? 'todos conferidos' : `<span class="warn">${manual.filter((k) => !fresh(k)).length} de 3 para conferir</span>`,
       `${balRow('Trading 212 cash (£)', 't212cash', b.t212cash, brl(b.t212cash * p.gbpbrl))}
        ${balRow('Renda fixa Brasil (R$)', 'rfBrasil', b.rfBrasil)}
        ${balRow('Caixa (R$)', 'caixa', b.caixa)}
        <button class="btn block" id="f-bal-ok" style="margin-top:8px">✓ Pronto — nada mudou nos outros</button>`)}
-    ${stepH(4, s4, !nonAuto.length, 'Ações, FIIs e Exterior', nonAuto.length ? (s4 ? 'atualizados este mês' : `<span class="warn">${nonAuto.filter((k) => !fresh(k)).length} valores para atualizar</span>`) : `automático pelos ativos · ${brl(autoVal)}`,
+    ${stepH(4, s4, !nonAuto.length, 'Ações, FIIs e Exterior', nonAuto.length ? (s4 ? 'todos conferidos' : `<span class="warn">${nonAuto.filter((k) => !fresh(k)).length} para conferir</span>`) : `automático pelos ativos · ${brl(autoVal)}`,
       `${au.acoes ? calcRow('Ações', 'acoes') : balRow('Ações (R$)', 'acoes', b.acoes)}
        ${au.fiis ? calcRow('FIIs', 'fiis') : balRow('FIIs (R$)', 'fiis', b.fiis)}
        ${au.stocks ? calcRow('Exterior (Trading 212)', 'stocks') : `${balRow('Pie Stocks (£)', 'pieStocks', b.pieStocks, brl(b.pieStocks * p.gbpbrl))}${balRow('Pie REITs (£)', 'pieReits', b.pieReits, brl(b.pieReits * p.gbpbrl))}${balRow("Pie ETF's (£)", 'pieEtfs', b.pieEtfs, brl(b.pieEtfs * p.gbpbrl))}`}
@@ -1457,10 +1462,10 @@ function vAtualizar() {
   </div></div>`;
   $$('#view [data-step]').forEach((h) => (h.onclick = () => { const k = Number(h.dataset.step); ATU.open = ATU.open === k ? 0 : k; render(); }));
   const stamp = async (keys) => { const t = new Date().toISOString(); for (const k of keys) balAt[k] = t; await save(); };
-  $('#f-bal-ok') && ($('#f-bal-ok').onclick = async () => { await stamp(manual); ATU.open = 4; render(); });
-  $('#f-cls-ok') && ($('#f-cls-ok').onclick = async () => { await stamp(nonAuto); ATU.open = 5; render(); });
-  $('#f-ap0') && ($('#f-ap0').onclick = async () => { d.aporteGBP = 0; await save(); ATU.open = 2; render(); });
-  $('#f-div0') && ($('#f-div0').onclick = async () => { d.divOk = true; await save(); ATU.open = 3; render(); });
+  $('#f-bal-ok') && ($('#f-bal-ok').onclick = async () => { await stamp(manual); ATU.open = 0; render(); });
+  $('#f-cls-ok') && ($('#f-cls-ok').onclick = async () => { await stamp(nonAuto); ATU.open = 0; render(); });
+  $('#f-ap0') && ($('#f-ap0').onclick = async () => { d.aporteGBP = 0; await save(); ATU.open = 0; render(); });
+  $('#f-div0') && ($('#f-div0').onclick = async () => { d.divOk = true; await save(); ATU.open = 0; render(); });
   $('#f-div') && ($('#f-div').onclick = () => editDiv(null));
   $('#f-ap') && ($('#f-ap').onclick = () => editAp(null));
   $('#f-ap-all') && ($('#f-ap-all').onclick = (e) => { e.preventDefault(); openSheet(`<h3>Aportes</h3>${apList()}<button class="btn block" onclick="closeSheet()" style="margin-top:10px">Fechar</button>`, (el) => $$('[data-ap]', el).forEach((x) => (x.onclick = () => editAp(x.dataset.ap)))); });

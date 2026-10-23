@@ -309,3 +309,4 @@ html.dark .tk-field input{color:#93C5FD}
 .cs-b{padding:0 16px 14px 58px}
 .at-tot{font-size:26px; color:var(--title)}
 @media (max-width:380px){ .cs-b{padding-left:16px} }
+.okt{color:var(--green)}
