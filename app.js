@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.25';
+const APP_VERSION = '4.26';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -541,18 +541,24 @@ function brapiParse(j) {
   }
   return out;
 }
+// brapi free plan: 15.000 calls/month, 1 ticker per call. Count every call and stop before the limit.
+const BRAPI_MONTH = 14000, BRAPI_DAY = 450;
+function brapiUse() { const u = (DB.settings.brapiUse ||= {}); const m = ym(), d = today(); if (u.m !== m) { u.m = m; u.n = 0; } if (u.d !== d) { u.d = d; u.dn = 0; } return u; }
+function brapiCanCall(k = 1) { const u = brapiUse(); return u.n + k <= BRAPI_MONTH && u.dn + k <= BRAPI_DAY; }
+function brapiCount() { const u = brapiUse(); u.n++; u.dn++; }
 async function brapiQuotes(syms, key) {
+  if (!brapiCanCall(syms.length)) { LASTERR.brapi = `limite de segurança atingido (${brapiUse().n} chamadas este mês) — use Google Sheets para as ações`; return {}; }
   const got = {}, list = syms.join(',');
   const tries = [
-    () => fetchJSONo('https://brapi.dev/api/v2/stocks/quote?symbols=' + encodeURIComponent(list), key ? { headers: { Authorization: 'Bearer ' + key } } : {}),
-    () => fetchJSONo('https://brapi.dev/api/quote/' + encodeURIComponent(list) + (key ? '?token=' + encodeURIComponent(key) : '')),
+    () => { brapiCount(); return fetchJSONo('https://brapi.dev/api/v2/stocks/quote?symbols=' + encodeURIComponent(list), key ? { headers: { Authorization: 'Bearer ' + key } } : {}); },
+    () => { brapiCount(); return fetchJSONo('https://brapi.dev/api/quote/' + encodeURIComponent(list) + (key ? '?token=' + encodeURIComponent(key) : '')); },
   ];
   const mode = DB?.settings?.brapiMode;   // remembers what works with your plan, so refused requests aren't repeated
   if (mode !== 'single') for (const [i, t] of tries.entries()) { if (mode === 'v1' && i === 0) continue;
     try { Object.assign(got, brapiParse(await t())); if (syms.every((s) => got[s])) { if (DB) DB.settings.brapiMode = i ? 'v1' : 'v2'; return got; } } catch (e) { console.warn('brapi', e); LASTERR.brapi = e.message; } }
   const single = syms.filter((x) => !got[x]);
   await pool(single, 3, async (s) => {   // free plans allow only one ticker per request
-    try { Object.assign(got, brapiParse(await fetchRetry('https://brapi.dev/api/quote/' + encodeURIComponent(s) + (key ? '?token=' + encodeURIComponent(key) : '')))); } catch (e) { console.warn('brapi one', s, e); LASTERR.brapi = e.message; }
+    brapiCount(); try { Object.assign(got, brapiParse(await fetchRetry('https://brapi.dev/api/quote/' + encodeURIComponent(s) + (key ? '?token=' + encodeURIComponent(key) : '')))); } catch (e) { console.warn('brapi one', s, e); LASTERR.brapi = e.message; }
   });
   if (DB && single.length && single.every((x) => got[x]) && !Object.keys(got).some((k) => !single.includes(k))) DB.settings.brapiMode = 'single';
   return got;
@@ -631,13 +637,13 @@ async function refreshAssetPrices(force) {
   assetBusy = true;
   try {
     const keys = DB.settings.keys || {};
-    const usDue = !DB.prices.usAt || Date.now() - new Date(DB.prices.usAt) > 60 * 1000, b3Due = !DB.prices.b3At || Date.now() - new Date(DB.prices.b3At) > 60 * 1000;
+    const usDue = !DB.prices.usAt || Date.now() - new Date(DB.prices.usAt) > 60 * 1000, b3Due = !DB.prices.b3At || Date.now() - new Date(DB.prices.b3At) > (force ? 5 : 30) * 60 * 1000;
     const b3 = b3Due ? [...new Set(A.filter((a) => a.market === 'B3').map((a) => a.ticker))] : [], us = usDue ? [...new Set(A.filter((a) => a.market === 'US').map((a) => a.ticker))] : [];
     if (us.length) DB.prices.usAt = new Date().toISOString(); if (b3.length) DB.prices.b3At = new Date().toISOString();
     const euDue = force || !DB.prices.euAt || Date.now() - new Date(DB.prices.euAt) > 20 * 3600 * 1000;   // saves the small daily allowance
     const eu = euDue ? [...new Set(A.filter((a) => a.market === 'EU').map((a) => a.ticker))] : [];
     const gsDue = force || !DB.prices.gsAt || Date.now() - new Date(DB.prices.gsAt) > 15 * 60 * 1000,
-      gs = gsDue ? [...new Set(A.filter((a) => a.market === 'GS').map((a) => a.ticker))] : [];
+      gs = gsDue ? [...new Set(A.filter((a) => a.market === 'GS' || (a.market === 'B3' && keys.sheet)).map((a) => a.ticker))] : [];
     if (gs.length) DB.prices.gsAt = new Date().toISOString();
     const [pb, pu, pe, pg] = await Promise.all([b3.length ? brapiQuotes(b3, keys.brapi) : {}, us.length ? finnhubQuotes(us, keys.finnhub) : {}, eu.length ? alphaQuotes(eu, keys.alpha) : {}, gs.length ? sheetQuotes(gs, keys.sheet) : {}]);
     if (gs.length && keys.sheet) await setKeyStatus('sheet', Object.keys(pg).length > 0, `${Object.keys(pg).length}/${gs.length} preços`);
@@ -647,12 +653,13 @@ async function refreshAssetPrices(force) {
     let ok = 0, fail = [];
     for (const a of A) {
       if (a.market === 'MANUAL') continue;
+      if (a.market === 'B3' && !b3Due && gsDue && pg[a.ticker]) { a.price = pg[a.ticker]; a.priceAt = new Date().toISOString(); a.priceErr = null; ok++; continue; }   // brapi resting: sheet price
       if ((a.market === 'EU' && !euDue) || (a.market === 'GS' && !gsDue) || (a.market === 'US' && !usDue) || (a.market === 'B3' && !b3Due)) {
         if (a.priceAt && !a.priceErr) ok++;   // fetched moments ago — still fresh, counted as up to date
         else if (!a.price) fail.push(a.ticker);
         continue;
       }
-      const px = (a.market === 'B3' ? pb : a.market === 'US' ? pu : a.market === 'GS' ? pg : pe)[a.ticker];
+      const px = (a.market === 'B3' ? pb[a.ticker] || pg[a.ticker] : (a.market === 'US' ? pu : a.market === 'GS' ? pg : pe)[a.ticker]);
       if (px) { a.price = px; a.priceAt = new Date().toISOString(); a.priceErr = null; ok++; if (a.market === 'GS' && sheetQuotes.cur?.[a.ticker]) a.currency = sheetQuotes.cur[a.ticker]; }
       else { a.priceErr = 'não atualizou'; fail.push(a.ticker); }   // keeps the last good price
     }
@@ -689,6 +696,7 @@ function vAtivos() {
       <button class="btn block" id="at-refresh">⟳ Atualizar preços agora</button>
       ${needGS ? '<div class="banner" style="margin:10px 0 0">Para preços de FIIs, cole o link da sua planilha do Google em ⚙︎ Ajustes → Chaves de preço → Google Sheets.</div>' : ''}
       ${needB3 ? '<div class="banner" style="margin:10px 0 0">Para preços da B3, crie a chave grátis em <b>brapi.dev</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
+      ${cls === 'acoes' && keys.sheet && rows.some((r) => r.a.market === 'B3') ? `<div class="banner info" style="margin:10px 0 0">💡 A brapi grátis tem 15.000 chamadas/mês. Coloque estas ações na sua planilha do Google (coluna A) e use a planilha — sem limite.<button class="btn block" id="at-all-gs" style="margin-top:8px">Usar Google Sheets em todas as ações</button></div>` : ''}
       ${needUS ? '<div class="banner" style="margin:10px 0 0">Para preços dos EUA, crie a chave grátis em <b>finnhub.io</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
       ${needEU ? '<div class="banner" style="margin:10px 0 0">Para Londres/Europa, crie a chave grátis em <b>alphavantage.co</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
     </div>
@@ -724,6 +732,13 @@ function vAtivos() {
   };
   $('#at-refresh').onclick = async () => { toast('Buscando preços…'); $('#btn-refresh').classList.add('spin'); setTimeout(() => $('#btn-refresh')?.classList.remove('spin'), 1200); const r = await refreshAssetPrices(true); render(); if (r) toast(r.fail.length ? `${r.ok} atualizados · não atualizaram: ${r.fail.join(', ')}` : `✓ ${r.ok} preços em dia`, 4500); else toast('Sem internet ou sem ativos'); };
   $('#at-add').onclick = () => editAsset(null, cls);
+  $('#at-all-gs') && ($('#at-all-gs').onclick = async () => {
+    const L = DB.assets.filter((a) => a.cls === 'acoes' && a.market === 'B3');
+    if (!(await ask(`Mudar ${L.length} ações de brapi para Google Sheets?\n\nAntes, confira que estes tickers estão na coluna A da planilha:\n${L.map((a) => a.ticker).join(', ')}`))) return;
+    for (const a of L) { a.market = 'GS'; a.currency = 'BRL'; }
+    await save(); render(); const r = await refreshAssetPrices(true); render();
+    toast(r?.fail.length ? `Não estão na planilha: ${r.fail.join(', ')}` : '✓ Ações agora vêm da planilha', 5000);
+  });
   $$('#view .item').forEach((el) => (el.onclick = () => editAsset(el.dataset.id)));
   // tap a pie to open/close its shares (remembered on this phone)
   $$('#view .pie-h').forEach((el) => (el.onclick = () => { let o = []; try { o = JSON.parse(localStorage.getItem('rumo.pies') || '[]'); } catch {}
@@ -1295,6 +1310,7 @@ function vAjustes() {
      ${keyBadge('sheet')}
      <div class="field"><label>brapi.dev (B3 só ações)<small>brapi.dev → criar conta → copiar token</small></label><input id="k-brapi" value="${esc(s.keys?.brapi || '')}" autocomplete="off" style="text-align:left"></div>
      ${keyBadge('brapi')}
+     ${(() => { const u = DB.settings.brapiUse; return u && u.m === ym() ? `<div class="small muted" style="margin:-4px 0 10px">Uso este mês: <b>${nf0.format(u.n)}</b> de 15.000 · hoje ${nf0.format(u.d === today() ? u.dn : 0)} (o app para em 14.000 / 450 por dia)</div>` : ''; })()}
      <div class="field"><label>Finnhub (EUA)<small>finnhub.io → Get free API key</small></label><input id="k-finn" value="${esc(s.keys?.finnhub || '')}" autocomplete="off" style="text-align:left"></div>
      ${keyBadge('finnhub')}
      <div class="field"><label>Alpha Vantage (Londres/Europa)<small>alphavantage.co → Get free API key</small></label><input id="k-alpha" value="${esc(s.keys?.alpha || '')}" autocomplete="off" style="text-align:left"></div>
