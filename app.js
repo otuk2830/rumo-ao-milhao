@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.43';
+const APP_VERSION = '4.44';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1505,19 +1505,29 @@ function vAtualizar() {
 
 /* ----- Histórico ----- */
 function vHistorico() {
-  const H = [...DB.history].reverse();
-  const rows = H.map((h) => {
-    const i = DB.history.indexOf(h), prev = DB.history[i - 1];
-    const varP = prev && typeof prev.pat === 'number' && typeof h.pat === 'number' && ymDiff(prev.month, h.month) === 1 ? h.pat - prev.pat : null;
-    const rend = varP !== null && h.aporteGBP !== null && h.aporteGBP !== undefined && h.fx ? varP - h.aporteGBP * h.fx : null;
-    return `<div class="item click" data-m="${h.month}"><div><div class="t">${ymLong(h.month)}</div>
-      <div class="s">Div ${brl(divTotal(h))}${h.aporteGBP ? ' · aporte ' + gbp(h.aporteGBP) : ''}${h.note ? ' · ' + esc(h.note) : ''}</div></div>
-      <div class="r"><div class="t">${typeof h.pat === 'number' ? brl(h.pat) : '–'}</div>
-      <div class="s ${varP > 0 ? 'pos' : varP < 0 ? 'neg' : ''}">${varP === null ? '' : signed(brl, varP)}${rend !== null ? ' · rend. ' + signed(brl, rend) : ''}</div></div></div>`;
-  }).join('');
-  $('#view').innerHTML = `<div class="card"><div class="small" style="margin-bottom:6px">Toque num mês para editar. Novos meses entram pela aba Atualizar → Salvar.</div>${rows || '<p class="muted">Nenhum mês salvo ainda.</p>'}
-    <button class="btn block" id="h-add">+ Adicionar mês manualmente</button></div>`;
-  $$('#view .item').forEach((el) => (el.onclick = () => monthCard(el.dataset.m)));
+  const H = DB.history, R = returnsData(), rByM = Object.fromEntries(R.months.map((m) => [m.month, m])), rByY = Object.fromEntries(R.years.map((y) => [y.year, y]));
+  const years = [...new Set(H.map((h) => h.month.slice(0, 4)))].sort().reverse(), thisY = years[0];
+  let open = {}; try { open = JSON.parse(localStorage.getItem('rumo.hy') || '{}'); } catch {}
+  const isOpen = (y) => (y in open ? open[y] : y === thisY);
+  const yearHtml = (y) => {
+    const M = H.filter((h) => h.month.startsWith(y)), lastM = [...M].reverse().find((h) => typeof h.pat === 'number'), prevEnd = [...H].filter((h) => h.month < y + '-01' && typeof h.pat === 'number').pop();
+    const ap = M.reduce((a, h) => a + num(h.aporteGBP), 0), dv = M.reduce((a, h) => a + divTotal(h), 0), Y = rByY[y];
+    const chg = lastM && prevEnd ? lastM.pat - prevEnd.pat : null, ro = Y ? (Y.full && Y.rl !== null ? Y.rl : Y.r) : null;
+    const rows = isOpen(y) ? [...M].reverse().map((h) => {
+      const i = H.indexOf(h), prev = H[i - 1], varP = prev && typeof prev.pat === 'number' && typeof h.pat === 'number' && ymDiff(prev.month, h.month) === 1 ? h.pat - prev.pat : null, rm = rByM[h.month];
+      const r = rm ? rm.rl ?? rm.r : null, w = r === null ? 0 : Math.min(50, (Math.abs(r) / 0.05) * 50);
+      return `<div class="mo click" data-m="${h.month}"><span class="n">${MONTHS[Number(h.month.slice(5)) - 1]}</span><span class="v">${typeof h.pat === 'number' ? brl(h.pat) : '–'}</span>
+        <span class="s"><span class="gb">${r !== null ? `<i style="${r < 0 ? 'right:50%' : 'left:50%'};width:${w}%;background:${r < 0 ? 'var(--red)' : 'var(--green)'}"></i>` : ''}</span>
+        ${r !== null ? `<b class="${r < 0 ? 'neg' : 'pos'}">${signed(pct, r)}</b>` : '<span>sem aporte</span>'}
+        ${h.aporteGBP !== null && h.aporteGBP !== undefined ? ` · 📥 ${gbp(h.aporteGBP)}` : ''} · 💰 ${brl(divTotal(h))}${r === null && varP !== null ? ` · <span class="${varP < 0 ? 'neg' : ''}">${signed(brl, varP)}</span>` : ''}${h.note ? ' · ' + esc(h.note) : ''}</span></div>`;
+    }).join('') : '';
+    return `<div class="yr click" data-y="${y}"><div><b>${isOpen(y) ? '▾' : '▸'} ${y}</b><div class="small muted">${M.length} ${M.length === 1 ? 'mês' : 'meses'}${ap ? ' · aportes ' + gbp(ap) : ''} · div ${brl(dv)}</div></div>
+      <div class="r"><b>${lastM ? brl(lastM.pat) : '–'}</b><div class="small muted">${ro !== null ? `<span class="${ro < 0 ? 'neg' : 'pos'}">${signed(pct, ro)}</span> real · ${Y.n} ${Y.n === 1 ? 'mês medido' : 'meses medidos'}` : chg !== null ? `${signed(brl, chg)} no ano` : ''}</div></div></div>${rows}`;
+  };
+  $('#view').innerHTML = `<div class="card list">${years.map(yearHtml).join('') || '<p class="muted" style="padding:16px">Nenhum mês salvo ainda.</p>'}</div>
+    <button class="btn block" id="h-add" style="margin-top:12px">+ Adicionar mês manualmente</button>`;
+  $$('#view .yr').forEach((el) => (el.onclick = () => { open[el.dataset.y] = !isOpen(el.dataset.y); try { localStorage.setItem('rumo.hy', JSON.stringify(open)); } catch {} render(); }));
+  $$('#view .mo').forEach((el) => (el.onclick = () => monthCard(el.dataset.m)));
   $('#h-add').onclick = () => editMonth(null);
 }
 // tap a month in Histórico → summary card; tap outside to close, "Editar mês" for the form
@@ -1570,36 +1580,65 @@ function editMonth(m) {
 
 /* ----- Dividendos ----- */
 function vDividendos() {
-  const yrs = yearsList(), H = DB.history;
-  const cell = (y, mi) => { const h = H.find((x) => x.month === `${y}-${String(mi + 1).padStart(2, '0')}`); return h ? divTotal(h) : 0; };
+  const yrs = yearsList(), H = DB.history, thisY = String(new Date().getFullYear()), lastY = String(Number(thisY) - 1);
+  const monthDiv = (m) => { const h = H.find((x) => x.month === m); if (h) return divTotal(h);
+    if (DB.draft.month === m) { const sl = divSums(m), f = (k) => (k in sl ? sl[k] : num(DB.draft[k])); return f('divFII') + f('divAcoes') + f('divStocks') * num(DB.prices.gbpbrl); } return 0; };
+  const cell = (y, mi) => monthDiv(`${y}-${String(mi + 1).padStart(2, '0')}`);
   let max = 0; yrs.forEach((y) => { for (let i = 0; i < 12; i++) max = Math.max(max, cell(y, i)); });
   const tot = yrs.map((y) => Array.from({ length: 12 }, (_, i) => cell(y, i)).reduce((a, b) => a + b, 0));
   const cnt = yrs.map((y) => Array.from({ length: 12 }, (_, i) => cell(y, i)).filter((v) => v > 0).length);
-  const st = historyStats();
-  const life = st.divLife, step = 10000;
+  const st = historyStats(), life = st.divLife, step = 10000;
   const mile = []; let acc = 0, k = 1, prevM = H[0]?.month;
   for (const h of H) { acc += divTotal(h); while (acc >= k * step) { mile.push({ v: k * step, m: h.month, n: ymDiff(prevM, h.month) }); prevM = h.month; k++; } }
-  const last12 = H.filter((h) => st.last && ymDiff(h.month, st.last.month) >= 0 && ymDiff(h.month, st.last.month) < 12).reduce((s, h) => s + divTotal(h), 0);
+  const last12 = Array.from({ length: 12 }, (_, i) => monthDiv(ymAdd(ym(), -i))).reduce((a, b) => a + b, 0);
+  // this year vs the same months of last year
+  const ty = Array.from({ length: 12 }, (_, i) => cell(thisY, i)), ly = Array.from({ length: 12 }, (_, i) => cell(lastY, i));
+  const upTo = Math.max(0, ...ty.map((v, i) => (v > 0 ? i + 1 : 0))), tySum = ty.slice(0, upTo).reduce((a, b) => a + b, 0), lySum = ly.slice(0, upTo).reduce((a, b) => a + b, 0);
+  const vs = lySum ? tySum / lySum - 1 : null, best = ty.reduce((b2, v, i) => (v > ty[b2] ? i : b2), 0), bMax = Math.max(1, ...ty, ...ly);
+  // ranking by ticker
+  let rk = 'mes'; try { rk = localStorage.getItem('rumo.rk') || 'mes'; } catch {}
+  const from = rk === 'mes' ? ym() + '-01' : rk === '12m' ? ymAdd(ym(), -11) + '-01' : '0000';
+  const byT = {}; for (const e of DB.divLog || []) { if (e.date < from) continue; const t = e.ticker || '(sem ticker)'; byT[t] = (byT[t] || 0) + divInField(e, 'divFII'); }
+  const rank = Object.entries(byT).sort((a, b) => b[1] - a[1]), rMax = rank[0]?.[1] || 1;
+  const rankRow = ([t, v], n) => `<div class="rk"><em>${n + 1}</em><b>${esc(t)}</b><div class="rkb"><i style="width:${(v / rMax) * 100}%"></i></div><span class="money">${brl(v, 2)}</span></div>`;
   const ld = lastDiv();
+  let tblOpen = false; try { tblOpen = localStorage.getItem('rumo.dtbl') === '1'; } catch {}
   $('#view').innerHTML = `
-  <div class="card" style="margin-bottom:12px"><button class="btn primary block" id="dv-add">＋ Recebi dividendos</button>
-    ${ld ? `<div class="small muted" style="margin-top:8px">Último lançamento: <b>${new Date(ld.date + 'T12:00').toLocaleDateString('pt-BR')}</b> · ${divLabel(ld)}${ld.ticker ? ' (' + esc(ld.ticker) + ')' : ''}</div>` : '<div class="small muted" style="margin-top:8px">Lance cada pagamento quando ele cair — o total do mês soma sozinho em Atualizar.</div>'}</div>
-  <div class="grid g2" style="margin-bottom:12px">
-    <div class="card kpi"><div class="lab">Total na vida</div><div class="val">${brl(life)}</div><div class="sub">próx. marco ${brl((Math.floor(life / step) + 1) * step)}</div></div>
-    <div class="card kpi"><div class="lab">Últimos 12 meses</div><div class="val">${brl(last12)}</div><div class="sub">≈ ${brl(last12 / 12)}/mês</div></div>
+  <div class="grid split"><div class="grid" style="align-content:start">
+  <div class="card"><button class="btn primary block" id="dv-add">＋ Recebi dividendos</button>
+    ${ld ? `<div class="small muted" style="margin-top:8px">Último: <b>${new Date(ld.date + 'T12:00').toLocaleDateString('pt-BR')}</b> · ${divLabel(ld)}${ld.ticker ? ' (' + esc(ld.ticker) + ')' : ''}</div>` : '<div class="small muted" style="margin-top:8px">Lance cada pagamento quando ele cair — o total do mês soma sozinho.</div>'}</div>
+  <div class="card kpi">
+    <div class="lab">${thisY} até ${upTo ? MONTHS[upTo - 1].toLowerCase() : '–'}</div><div class="dv-big money">${brl(tySum)}</div>
+    ${vs !== null ? `<span class="dchip ${vs < 0 ? 'neg' : 'pos'}">${vs < 0 ? '▼' : '▲'} ${pct(Math.abs(vs))} vs ${lastY} no mesmo período</span>` : ''}
+    <div class="small muted" style="margin-top:8px">média <span class="money">${brl(upTo ? tySum / upTo : 0)}</span>/mês · melhor mês: ${MON3[best]} <span class="money">${brl(ty[best])}</span></div>
+    <div class="dvbars">${ty.map((v, i) => `<div title="${MONTHS[i]}"><i class="ly" style="height:${(ly[i] / bMax) * 100}%"></i>${v ? `<i class="ty" style="height:${(v / bMax) * 100}%"></i>` : ''}</div>`).join('')}</div>
+    <div class="plab"><span>Jan</span><span><span style="color:#14B8A6">■</span> ${thisY} · <span style="color:var(--muted)">■</span> ${lastY}</span><span>Dez</span></div>
+    <div class="small muted" style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">Na vida: <b class="money" style="color:var(--title)">${brl(life)}</b> · últimos 12 meses <span class="money">${brl(last12)}</span> (≈ <span class="money">${brl(last12 / 12)}</span>/mês)</div>
   </div>
-  <div class="card"><h2>Dividendos por mês (R$)</h2><div class="tbl-wrap"><table>
+  <div class="card kpi"><div class="lab">Quem mais paga</div>
+    <div class="seg rk-seg">${[['mes', 'Este mês'], ['12m', '12 meses'], ['all', 'Sempre']].map(([v, l]) => `<button class="${rk === v ? 'on' : ''}" data-rk="${v}">${l}</button>`).join('')}</div>
+    ${rank.length ? rank.slice(0, 5).map(rankRow).join('') + (rank.length > 5 ? `<button class="btn block" id="rk-all" style="margin-top:8px">Ver todos (${rank.length})</button>` : '') : '<p class="small muted">Nenhum dividendo lançado neste período. O ranking usa os tickers dos lançamentos.</p>'}
+  </div>
+  </div><div class="grid" style="align-content:start">
+  <div class="card"><h2>Últimos lançamentos</h2>${divLogList(5)}${(DB.divLog || []).length > 5 ? `<button class="btn block" id="dv-all" style="margin-top:8px">Ver todos (${DB.divLog.length})</button>` : ''}</div>
+  <div class="card"><div class="cs-h" id="tbl-tog" style="padding:0"><div class="cs-t"><b>Tabela completa (${yrs[0]}–${yrs[yrs.length - 1]})</b><span>dividendos por mês, em R$</span></div><span class="cs-c">${tblOpen ? '⌄' : '›'}</span></div>
+    ${tblOpen ? `<div class="tbl-wrap" style="margin-top:10px"><table>
     <tr><th></th>${yrs.map((y) => `<th>${y}</th>`).join('')}</tr>
     ${MONTHS.map((mn, i) => `<tr><td>${mn}</td>${yrs.map((y) => { const v = cell(y, i); return `<td class="${v > 0 && v === max ? 'max' : ''}">${v ? nf0.format(v) : ''}</td>`; }).join('')}</tr>`).join('')}
     <tr class="tot"><td>Total do ano</td>${tot.map((v) => `<td>${nf0.format(v)}</td>`).join('')}</tr>
     <tr><td>Média mensal</td>${tot.map((v, i) => `<td>${cnt[i] ? nf0.format(v / cnt[i]) : ''}</td>`).join('')}</tr>
     <tr><td>Crescimento</td>${tot.map((v, i) => { const g = i && tot[i - 1] && cnt[i] === 12 ? v / tot[i - 1] - 1 : null; return `<td class="${g > 0 ? 'pos' : g < 0 ? 'neg' : ''}">${g === null ? '' : pct(g)}</td>`; }).join('')}</tr>
-  </table></div><div class="small" style="margin-top:6px">Azul = maior dividendo mensal de todos. Arraste a tabela para o lado. Crescimento só para anos completos. Stocks entram convertidos pelo câmbio do mês (a partir de out/2026).</div></div>
-  <div class="card" style="margin-top:12px"><h2>Últimos lançamentos</h2>${divLogList(5)}${(DB.divLog || []).length > 5 ? `<button class="btn block" id="dv-all" style="margin-top:8px">Ver todos (${DB.divLog.length})</button>` : ''}</div>
-  <div class="card" style="margin-top:12px"><h2>Marcos de R$ 10 mil</h2>
-    ${mile.map((x) => `<div class="row"><span class="l">✓ ${brl(x.v)}</span><span class="r">${ymLabel(x.m)} <span class="small">(${x.n} meses)</span></span></div>`).join('') || '<p class="muted">Ainda nenhum.</p>'}</div>`;
+    </table></div><div class="small" style="margin-top:6px">Azul = maior dividendo mensal de todos. Arraste para o lado. Crescimento só para anos completos.</div>` : ''}</div>
+  <div class="card"><h2>Marcos de R$ 10 mil</h2>
+    <div class="mrow" id="dmrow">${mile.map((x) => `<div class="ok">${nf0.format(x.v / 1000)}k<b>${ymLabel(x.m)}</b></div>`).join('')}<div class="next">${nf0.format((Math.floor(life / step) + 1) * step / 1000)}k<b>faltam ${nf0.format(Math.ceil(((Math.floor(life / step) + 1) * step - life)))}</b></div></div>
+    <div class="small" style="margin-top:6px">Data em que o total recebido passou de cada marco.</div></div>
+  </div></div>`;
   const tw = $('#view .tbl-wrap'); if (tw) tw.scrollLeft = tw.scrollWidth;
+  const dm = $('#dmrow'); if (dm) dm.scrollLeft = dm.scrollWidth;
   $('#dv-add').onclick = () => editDiv(null); wireDivList();
+  $$('#view [data-rk]').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.rk', b.dataset.rk); } catch {} render(); }));
+  $('#tbl-tog').onclick = () => { try { localStorage.setItem('rumo.dtbl', tblOpen ? '0' : '1'); } catch {} render(); };
+  $('#rk-all') && ($('#rk-all').onclick = () => openSheet(`<h3>Quem mais paga</h3>${rank.map(rankRow).join('')}<button class="btn block" onclick="closeSheet()" style="margin-top:10px">Fechar</button>`));
   $('#dv-all') && ($('#dv-all').onclick = () => openSheet(`<h3>Todos os dividendos</h3>${divLogList(100000)}<button class="btn block" onclick="closeSheet()" style="margin-top:10px">Fechar</button>`, (el) => $$('[data-div]', el).forEach((x) => (x.onclick = () => editDiv(x.dataset.div)))));
 }
 
