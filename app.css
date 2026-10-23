@@ -287,3 +287,25 @@ html.dark .tk-field input{color:#93C5FD}
 .tk-dd button:last-child{border-bottom:0} .tk-dd button:active{background:var(--soft)}
 .tk-dd u{text-decoration:none; color:var(--blue)} html.dark .tk-dd u{color:#93C5FD} .tk-dd span{font-size:12px; color:var(--muted)}
 .tk-none{padding:12px 14px; font-size:13px; color:var(--muted)}
+
+/* v4.41 — Atualizar as a month-end checklist */
+.warn{color:var(--amber)}
+.at-head{background:linear-gradient(160deg,#16305A,#0E1E3A); border:0; color:#E2E8F0}
+.at-head .lab{color:#CBD5E1}
+.at-head .month-btn{border-color:rgba(255,255,255,.25); background:rgba(255,255,255,.08); color:#fff}
+.at-prog{height:8px; background:rgba(255,255,255,.12); border-radius:5px; margin:14px 0 8px; overflow:hidden}
+.at-prog i{display:block; height:100%; background:#4ADE80; border-radius:5px; transition:width .3s}
+.at-st{display:flex; justify-content:space-between; gap:10px; font-size:12px; color:#CBD5E1} .at-st b{color:#fff}
+.cl{padding:0; overflow:hidden}
+.cs + .cs{border-top:1px solid var(--line)}
+.cs.open{background:var(--soft)}
+.cs-h{display:flex; gap:12px; align-items:center; padding:14px 16px; cursor:pointer}
+.cs-h:active{opacity:.7}
+.ck{width:30px; height:30px; border-radius:15px; display:flex; align-items:center; justify-content:center; flex:0 0 auto; font-weight:800; font-size:14px}
+.ck.ok{background:var(--green-l); color:var(--green)} .ck.todo{border:2px solid var(--faint); color:var(--muted)}
+.ck.auto{background:var(--blue-xl); color:var(--blue); font-size:9px; letter-spacing:.02em} html.dark .ck.auto{color:#93C5FD}
+.cs-t{flex:1; min-width:0} .cs-t b{display:block; color:var(--title); font-size:16px} .cs-t span{font-size:13px; color:var(--muted)}
+.cs-c{color:var(--muted); font-size:18px}
+.cs-b{padding:0 16px 14px 58px}
+.at-tot{font-size:26px; color:var(--title)}
+@media (max-width:380px){ .cs-b{padding-left:16px} }

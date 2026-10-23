@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.40';
+const APP_VERSION = '4.41';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1381,76 +1381,110 @@ function calcRow(label, cls) {
   return `<div class="field click" onclick="ATV.seg='${cls}';location.hash='#ativos'"><label>${label} <small>calculado em Ativos (preços ao vivo) ›</small></label><div class="calc">${brl(classTotal(cls))}</div></div>`;
 }
 let FXEDIT = false;   // exchange rates / coin prices are locked unless you tap ✎ Corrigir à mão
+const ATU = { open: undefined };   // which checklist step is open (this session)
 function vAtualizar() {
   const b = DB.balances, p = DB.prices, d = DB.draft, P = portfolio(), au = DB.settings.auto || {};
   const exists = DB.history.find((h) => h.month === d.month);
+  const balAt = (DB.settings.balAt ||= {}), mStart = d.month + '-01';
+  const fresh = (k) => balAt[k] && balAt[k].slice(0, 10) >= mStart;   // updated (or confirmed) in/after the month being closed
+  const last = (k) => (balAt[k] ? new Date(balAt[k]).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : 'nunca');
+  const balRow = (lab, key, val, conv) => fieldRow(lab, 'b.' + key, val, `<span class="${fresh(key) ? '' : 'warn'}">${fresh(key) ? 'atualizado ' + last(key) + ' ✓' : 'última vez: ' + last(key)}</span>`, conv);
+  // ---- step states
+  const apN = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === d.month).length;
+  const s1 = apN > 0 || (d.aporteGBP !== null && d.aporteGBP !== undefined);
+  const dvN = (DB.divLog || []).filter((e) => e.date.slice(0, 7) === d.month).length;
+  const dvTot = num(d.divFII) + num(d.divAcoes) + num(d.divStocks) * num(p.gbpbrl);
+  const s2 = dvN > 0 || d.divOk || ['divFII', 'divAcoes', 'divStocks'].some((f) => d[f] !== null && d[f] !== undefined);
+  const manual = ['t212cash', 'rfBrasil', 'caixa'], s3 = manual.every(fresh);
+  const nonAuto = [!au.acoes && 'acoes', !au.fiis && 'fiis', ...(!au.stocks ? ['pieStocks', 'pieReits', 'pieEtfs'] : [])].filter(Boolean);
+  const s4 = nonAuto.every(fresh);
+  const pxAge = p.updatedAt ? Date.now() - new Date(p.updatedAt) : Infinity, s5 = pxAge < 6 * 3600e3;
+  const done = [s1, s2, s3, s4, s5], nDone = done.filter(Boolean).length;
+  if (ATU.open === undefined) { const k = done.findIndex((x) => !x); ATU.open = k > -1 ? k + 1 : 0; }
+  const stepH = (k, ok, auto, title, sub, body) => `<div class="cs ${ATU.open === k ? 'open' : ''}">
+      <div class="cs-h" data-step="${k}"><div class="ck ${ok ? (auto ? 'auto' : 'ok') : 'todo'}">${ok ? (auto ? 'AUTO' : '✓') : k}</div><div class="cs-t"><b>${title}</b><span>${sub}</span></div><span class="cs-c">${ATU.open === k ? '⌄' : '›'}</span></div>
+      ${ATU.open === k ? `<div class="cs-b">${body}</div>` : ''}</div>`;
+  const ae = lastAp(), de = lastDiv();
+  const autoVal = (au.acoes ? P.v.acoes : 0) + (au.fiis ? P.v.fiis : 0) + (au.stocks ? P.v.stocks : 0);
   $('#view').innerHTML = `
-  <div class="grid split">
-  <div class="grid">
-   <div class="card"><div class="step"><b>1</b><h2>Mês de referência</h2></div>
-     <div class="month-row"><label>Mês que você está atualizando</label><button class="month-btn" id="f-month"><svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>${ymLong(d.month)}</span><span class="mb-chev">▾</span></button></div>
-     <div class="small">${exists ? '⚠ Este mês já está no Histórico — salvar vai substituir.' : 'Este mês ainda não foi salvo.'}</div></div>
-   <div class="card"><div class="step"><b>2</b><h2>Câmbio e preços</h2></div>
-     <div class="small" style="margin-bottom:6px">Buscados automaticamente (${p.updatedAt ? fmtDate(p.updatedAt) : 'ainda não buscados'}).</div>
-     <div id="fx-box" class="${FXEDIT ? '' : 'locked'}">
-     ${fieldRow('Libra → Real (GBP/BRL)', 'p.gbpbrl', p.gbpbrl)}
-     ${fieldRow('Dólar → Real (USD/BRL)', 'p.usdbrl', p.usdbrl)}
-     ${COINS.map((c) => fieldRow(c.k + ' (US$)', 'p.' + c.k, p[c.k])).join('')}</div>
-     <button class="btn primary block" id="f-prices">⟳ Buscar preços agora</button>
-     <button class="btn block" id="f-fxedit" style="margin-top:8px">${FXEDIT ? '✓ Pronto' : '✎ Corrigir à mão'}</button></div>
-   <div class="card"><div class="step"><b>3</b><h2>Saldos de hoje</h2></div>
-     ${au.acoes ? calcRow('Ações', 'acoes') : fieldRow('Ações (R$)', 'b.acoes', b.acoes, 'Corretora no Brasil')}
-     ${au.fiis ? calcRow('FIIs', 'fiis') : fieldRow('FIIs (R$)', 'b.fiis', b.fiis, 'Corretora no Brasil')}
-     ${au.stocks ? calcRow('Exterior (Trading 212)', 'stocks') : `${fieldRow('Trading 212 — pie Stocks (£)', 'b.pieStocks', b.pieStocks, null, brl(b.pieStocks * p.gbpbrl))}
-     ${fieldRow('Trading 212 — pie REITs (£)', 'b.pieReits', b.pieReits, null, brl(b.pieReits * p.gbpbrl))}
-     ${fieldRow("Trading 212 — pie ETF's (£)", 'b.pieEtfs', b.pieEtfs, null, brl(b.pieEtfs * p.gbpbrl))}`}
-     ${fieldRow('Renda fixa — Trading 212 cash (£)', 'b.t212cash', b.t212cash, null, brl(b.t212cash * p.gbpbrl))}
-     ${fieldRow('Renda fixa — Brasil (R$)', 'b.rfBrasil', b.rfBrasil)}
-     ${fieldRow('Caixa (R$)', 'b.caixa', b.caixa, 'Conta no total, fora das metas')}
-     <div class="field"><label>Cripto <small>calculado na aba Cripto</small></label><div class="calc">${brl(P.cs.totalBRL)}</div></div>
-     <div class="total-line"><span>Patrimônio total</span><b id="f-total">${brl(P.total)}</b></div></div>
-  </div>
-  <div class="grid" style="align-content:start">
-   <div class="card"><div class="step"><b>4</b><h2>Dividendos e aporte do mês</h2></div>
-     <button class="btn primary block" id="f-div" style="margin:4px 0 6px">＋ Recebi dividendos</button>
-     ${(() => { const e = lastDiv(); return e ? `<div class="small muted" style="margin-bottom:8px">Último lançamento: <b>${dmy(e.date)}</b> · ${divLabel(e)}${e.ticker ? ' (' + esc(e.ticker) + ')' : ''}</div>` : ''; })()}
-     ${[['Dividendos FIIs (R$)', 'divFII', (v) => brl(v, 2)], ['Dividendos Ações (R$)', 'divAcoes', (v) => brl(v, 2)], ['Dividendos Stocks + REITs (£)', 'divStocks', (v) => gbp(v, 2)]].map(([lab, f, fm]) => {
-       const L = (DB.divLog || []).filter((e) => e.date.slice(0, 7) === d.month && DTYPES[e.type].f === f);
-       if (!L.length) return fieldRow(lab, 'd.' + f, d[f], null, f === 'divStocks' && d[f] ? brl(d[f] * p.gbpbrl) : '');
-       return `<div class="field click" onclick="location.hash='#dividendos'"><label>${lab}<small>${L.length} ${L.length === 1 ? 'lançamento' : 'lançamentos'} · somado sozinho ›</small></label><div class="calc">${fm(d[f] || 0)}</div></div>`;
-     }).join('')}
-     <div style="border-top:1px solid var(--line); margin-top:6px; padding-top:10px"><button class="btn primary block" id="f-ap">＋ Fiz um aporte</button>
-     ${(() => { const e = lastAp(); return e ? `<div class="small muted" style="margin:8px 0">Último aporte: <b>${dmy(e.date)}</b> · ${gbp(e.gbp, 2)}${e.note ? ' (' + esc(e.note) + ')' : ''} · <a href="#" id="f-ap-all">ver todos</a></div>` : ''; })()}</div>
-     ${(() => { const n = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === d.month).length;
-       return n ? `<div class="field"><label>Aporte do mês (£)<small>${n} ${n === 1 ? 'lançamento' : 'lançamentos'} · somado sozinho</small></label><div class="calc">${gbp(d.aporteGBP || 0, 2)}<div class="small">${brl((d.aporteGBP || 0) * p.gbpbrl)}</div></div></div>`
-         : fieldRow('Aporte do mês (£)', 'd.aporteGBP', d.aporteGBP, 'Dinheiro NOVO que você colocou', d.aporteGBP ? brl(d.aporteGBP * p.gbpbrl) : ''); })()}</div>
-   <div class="card"><div class="step"><b>5</b><h2>Salvar o mês</h2></div>
-     <div class="small">Guarda no Histórico: patrimônio total, aporte, dividendos e o câmbio de hoje. Pode salvar de novo quantas vezes quiser — substitui o mês.</div>
-     <button class="btn primary block" id="f-save">Salvar ${ymLong(d.month)} no Histórico</button></div>
+  <div class="grid split"><div class="grid" style="align-content:start">
+   <div class="card kpi at-head">
+     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span class="lab">Fechamento do mês</span>
+       <button class="month-btn" id="f-month"><svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>${ymLong(d.month)}</span><span class="mb-chev">▾</span></button></div>
+     <div class="at-prog"><i style="width:${nDone * 20}%"></i></div>
+     <div class="at-st"><span><b>${nDone} de 5</b> ${nDone === 5 ? 'prontos — pode salvar' : 'prontos'}</span><span>${exists ? 'já salvo' + (exists.savedAt ? ' em ' + new Date(exists.savedAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '') + ' · salvar de novo substitui' : 'ainda não salvo'}</span></div>
+   </div>
+   <div class="card cl">
+    ${stepH(1, s1, false, 'Aporte do mês', apN ? `${gbp(d.aporteGBP || 0, 2)} · ${apN} ${apN === 1 ? 'lançamento' : 'lançamentos'}${ae && ae.date.slice(0, 7) === d.month ? ' · ' + dmy(ae.date) + ' → ' + BLK[ae.dest || 'gbp'].n : ''}` : s1 ? `${gbp(d.aporteGBP, 2)}${num(d.aporteGBP) ? '' : ' · sem aporte'}` : 'ainda não informado',
+      `<button class="btn primary block" id="f-ap">＋ Fiz um aporte</button>
+       ${ae ? `<div class="small muted" style="margin:8px 0">Último: <b>${dmy(ae.date)}</b> · ${gbp(ae.gbp, 2)}${ae.note ? ' (' + esc(ae.note) + ')' : ''} · <a href="#" id="f-ap-all">ver todos</a></div>` : ''}
+       ${apN ? `<div class="field"><label>Aporte do mês (£)<small>somado sozinho</small></label><div class="calc">${gbp(d.aporteGBP || 0, 2)}<div class="small">${brl((d.aporteGBP || 0) * p.gbpbrl)}</div></div></div>`
+         : `${fieldRow('Ou digite o total (£)', 'd.aporteGBP', d.aporteGBP, 'dinheiro NOVO que entrou', d.aporteGBP ? brl(d.aporteGBP * p.gbpbrl) : '')}<button class="btn block" id="f-ap0" style="margin-top:8px">Não houve aporte este mês (£0)</button>`}`)}
+    ${stepH(2, s2, false, 'Dividendos', dvN ? `${brl(dvTot, 2)} · ${dvN} ${dvN === 1 ? 'lançamento' : 'lançamentos'}${de && de.date.slice(0, 7) === d.month ? ' · último ' + dmy(de.date) : ''}` : s2 ? brl(dvTot, 2) : 'nenhum lançado ainda',
+      `<button class="btn primary block" id="f-div">＋ Recebi dividendos</button>
+       ${[['FIIs (R$)', 'divFII', (v) => brl(v, 2)], ['Ações (R$)', 'divAcoes', (v) => brl(v, 2)], ['Stocks + REITs (£)', 'divStocks', (v) => gbp(v, 2)]].map(([lab, f, fm]) => {
+         const L = (DB.divLog || []).filter((e) => e.date.slice(0, 7) === d.month && DTYPES[e.type].f === f);
+         if (!L.length) return fieldRow(lab, 'd.' + f, d[f], null, f === 'divStocks' && d[f] ? brl(d[f] * p.gbpbrl) : '');
+         return `<div class="field click" onclick="location.hash='#dividendos'"><label>${lab}<small>${L.length} ${L.length === 1 ? 'lançamento' : 'lançamentos'} ›</small></label><div class="calc">${fm(d[f] || 0)}</div></div>`;
+       }).join('')}
+       ${!dvN ? '<button class="btn block" id="f-div0" style="margin-top:8px">✓ Pronto</button>' : ''}`)}
+    ${stepH(3, s3, false, 'Saldos que você digita', s3 ? 'todos atualizados este mês' : `<span class="warn">${manual.filter((k) => !fresh(k)).length} não atualizados este mês</span>`,
+      `${balRow('Trading 212 cash (£)', 't212cash', b.t212cash, brl(b.t212cash * p.gbpbrl))}
+       ${balRow('Renda fixa Brasil (R$)', 'rfBrasil', b.rfBrasil)}
+       ${balRow('Caixa (R$)', 'caixa', b.caixa)}
+       <button class="btn block" id="f-bal-ok" style="margin-top:8px">✓ Pronto — nada mudou nos outros</button>`)}
+    ${stepH(4, s4, !nonAuto.length, 'Ações, FIIs e Exterior', nonAuto.length ? (s4 ? 'atualizados este mês' : `<span class="warn">${nonAuto.filter((k) => !fresh(k)).length} valores para atualizar</span>`) : `automático pelos ativos · ${brl(autoVal)}`,
+      `${au.acoes ? calcRow('Ações', 'acoes') : balRow('Ações (R$)', 'acoes', b.acoes)}
+       ${au.fiis ? calcRow('FIIs', 'fiis') : balRow('FIIs (R$)', 'fiis', b.fiis)}
+       ${au.stocks ? calcRow('Exterior (Trading 212)', 'stocks') : `${balRow('Pie Stocks (£)', 'pieStocks', b.pieStocks, brl(b.pieStocks * p.gbpbrl))}${balRow('Pie REITs (£)', 'pieReits', b.pieReits, brl(b.pieReits * p.gbpbrl))}${balRow("Pie ETF's (£)", 'pieEtfs', b.pieEtfs, brl(b.pieEtfs * p.gbpbrl))}`}
+       <div class="small muted" style="margin-top:8px">Comprou ou vendeu algo? Ajuste a quantidade em Ativos (“Comprei mais”).</div>
+       ${nonAuto.length ? '<button class="btn block" id="f-cls-ok" style="margin-top:8px">✓ Pronto — nada mudou</button>' : ''}`)}
+    ${stepH(5, s5, true, 'Câmbio, cripto e preços', s5 ? `£1 = R$ ${nf2.format(p.gbpbrl || 0)} · BTC ${usd(p.BTC)} · ${fmtDate(p.updatedAt).split(' ')[1] || ''}` : '<span class="warn">preços antigos — toque para buscar</span>',
+      `<div id="fx-box" class="${FXEDIT ? '' : 'locked'}">
+       ${fieldRow('Libra → Real (GBP/BRL)', 'p.gbpbrl', p.gbpbrl)}
+       ${fieldRow('Dólar → Real (USD/BRL)', 'p.usdbrl', p.usdbrl)}
+       ${COINS.map((c) => fieldRow(c.k + ' (US$)', 'p.' + c.k, p[c.k])).join('')}</div>
+       <div class="small muted" style="margin:6px 0">Buscados em ${p.updatedAt ? fmtDate(p.updatedAt) : '–'}. Cripto: quantidades na aba Cripto.</div>
+       <button class="btn primary block" id="f-prices">⟳ Buscar preços agora</button>
+       <button class="btn block" id="f-fxedit" style="margin-top:8px">${FXEDIT ? '✓ Pronto' : '✎ Corrigir à mão'}</button>`)}
+   </div>
+   <div class="card">
+     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><span class="lab">Patrimônio de ${MONTHS[Number(d.month.slice(5)) - 1]}</span><b id="f-total" class="at-tot">${brl(P.total)}</b></div>
+     <div class="small muted" style="margin:4px 0 12px">${P.alloc.map((a) => a.n + ' ' + brl(a.v)).join(' · ')} · Caixa ${brl(num(b.caixa))}</div>
+     <button class="btn primary block" id="f-save">Salvar ${MONTHS[Number(d.month.slice(5)) - 1]} no Histórico</button>
+     <div class="small muted" style="text-align:center;margin-top:8px">Pode salvar quantas vezes quiser — vale o último.</div>
+   </div>
   </div></div>`;
-  $('#f-div').onclick = () => editDiv(null);
-  $('#f-ap').onclick = () => editAp(null);
+  $$('#view [data-step]').forEach((h) => (h.onclick = () => { const k = Number(h.dataset.step); ATU.open = ATU.open === k ? 0 : k; render(); }));
+  const stamp = async (keys) => { const t = new Date().toISOString(); for (const k of keys) balAt[k] = t; await save(); };
+  $('#f-bal-ok') && ($('#f-bal-ok').onclick = async () => { await stamp(manual); ATU.open = 4; render(); });
+  $('#f-cls-ok') && ($('#f-cls-ok').onclick = async () => { await stamp(nonAuto); ATU.open = 5; render(); });
+  $('#f-ap0') && ($('#f-ap0').onclick = async () => { d.aporteGBP = 0; await save(); ATU.open = 2; render(); });
+  $('#f-div0') && ($('#f-div0').onclick = async () => { d.divOk = true; await save(); ATU.open = 3; render(); });
+  $('#f-div') && ($('#f-div').onclick = () => editDiv(null));
+  $('#f-ap') && ($('#f-ap').onclick = () => editAp(null));
   $('#f-ap-all') && ($('#f-ap-all').onclick = (e) => { e.preventDefault(); openSheet(`<h3>Aportes</h3>${apList()}<button class="btn block" onclick="closeSheet()" style="margin-top:10px">Fechar</button>`, (el) => $$('[data-ap]', el).forEach((x) => (x.onclick = () => editAp(x.dataset.ap)))); });
   $('#f-month').onclick = () => pickMonth(d.month, async (m) => {
     const h = DB.history.find((x) => x.month === m);
     DB.draft = { month: m, divFII: h?.divFII ?? null, divAcoes: h?.divAcoes ?? null, divStocks: h?.divStocks ?? null, aporteGBP: h?.aporteGBP ?? null };
-    applyDivLog(m); applyApLog(m); await save(); render();
+    applyDivLog(m); applyApLog(m); ATU.open = undefined; await save(); render();
   });
   $$('#view input[data-k]').forEach((inp) => inp.addEventListener('change', async () => {
     const [grp, key] = inp.dataset.k.split('.'); const v = parsePT(inp.value);
     const target = grp === 'p' ? DB.prices : grp === 'b' ? DB.balances : DB.draft;
     target[key] = grp === 'd' ? v : (v ?? 0);
+    if (grp === 'b') balAt[key] = new Date().toISOString();   // remember when each balance was last updated
     await save(); render();
   }));
-  $('#f-prices').onclick = () => refreshPrices(false);
-  $('#f-fxedit').onclick = () => { FXEDIT = !FXEDIT; render(); if (FXEDIT) setTimeout(() => $('#fx-box input')?.focus(), 50); };
+  $('#f-prices') && ($('#f-prices').onclick = () => refreshPrices(false));
+  $('#f-fxedit') && ($('#f-fxedit').onclick = () => { FXEDIT = !FXEDIT; render(); if (FXEDIT) setTimeout(() => $('#fx-box input')?.focus(), 50); });
   $('#f-save').onclick = async () => {
     const P2 = portfolio(), d2 = DB.draft;
     if (d2.aporteGBP === null || d2.aporteGBP === undefined) {
       if (!(await ask('Você não preencheu o aporte. Salvar como £0 (nenhum dinheiro novo este mês)?'))) return;
       d2.aporteGBP = 0;
     }
-    const entry = { month: d2.month, pat: Math.round(P2.total * 100) / 100, aporteGBP: d2.aporteGBP, divFII: d2.divFII, divAcoes: d2.divAcoes, divStocks: d2.divStocks, fx: DB.prices.gbpbrl || null, usd: DB.prices.usdbrl || null, cat: catNow(P2), nat: natNow(P2) };
+    const entry = { month: d2.month, pat: Math.round(P2.total * 100) / 100, aporteGBP: d2.aporteGBP, divFII: d2.divFII, divAcoes: d2.divAcoes, divStocks: d2.divStocks, fx: DB.prices.gbpbrl || null, usd: DB.prices.usdbrl || null, cat: catNow(P2), nat: natNow(P2), savedAt: new Date().toISOString() };
     const i = DB.history.findIndex((h) => h.month === d2.month);
     if (i > -1) { if (!(await ask(`${ymLong(d2.month)} já existe. Substituir?`))) return; entry.note = DB.history[i].note; DB.history[i] = entry; }
     else DB.history.push(entry);
@@ -1458,7 +1492,7 @@ function vAtualizar() {
     const nextM = ymAdd(d2.month, 1);
     await save(); toast(`✓ ${ymLong(d2.month)} salvo`);
     if (await ask(`Começar ${ymLong(nextM)} agora? (os campos de dividendos e aporte ficam vazios)`)) {
-      DB.draft = { month: nextM, divFII: null, divAcoes: null, divStocks: null, aporteGBP: null }; applyDivLog(nextM); applyApLog(nextM); await save();
+      DB.draft = { month: nextM, divFII: null, divAcoes: null, divStocks: null, aporteGBP: null }; applyDivLog(nextM); applyApLog(nextM); ATU.open = undefined; await save();
     }
     render();
   };
