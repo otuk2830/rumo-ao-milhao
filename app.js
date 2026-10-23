@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.30';
+const APP_VERSION = '4.32';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -23,7 +23,7 @@ const CLASSES = [
   { k: 'crypto', n: 'Crypto', c: 'var(--c5)', hex: '#EC4899' },
 ];
 const MONTHS = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
-const MON3 = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+const MON3 = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
 
 let DB = null, KEY = null, hiddenAt = 0, charts = [];
 const $ = (s, el = document) => el.querySelector(s);
@@ -110,6 +110,7 @@ function emptyDB() {
     history: [],
     daily: [],
     divLog: [],
+    apLog: [],
   };
 }
 function normalize(d) {
@@ -127,6 +128,7 @@ function normalize(d) {
   d.settings.keyStatus = d.settings.keyStatus || {};
   d.assets = (d.assets || []).map((a) => ({ id: a.id || uid(), ...a }));
   d.history = (d.history || []).filter((h) => h && h.month).sort((a, b) => a.month.localeCompare(b.month));
+  d.apLog = (d.apLog || []).filter((x) => x && x.date && typeof x.gbp === 'number');
   d.divLog = (d.divLog || []).filter((x) => x && x.date && typeof x.amount === 'number');
   d.daily = (d.daily || []).filter((x) => x && x.d && typeof x.v === 'number').sort((a, b) => a.d.localeCompare(b.d));
   d.crypto.log = (d.crypto.log || []).map((x) => ({ id: x.id || uid(), ...x })).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
@@ -463,12 +465,18 @@ function editDiv(id) {
     <div class="field"><label>Moeda</label><select id="dv-c">${[['BRL', 'R$'], ['GBP', '£'], ['USD', 'US$'], ['EUR', '€']].map(([v, l]) => `<option value="${v}" ${x.cur === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <div class="field"><label>Valor recebido</label><input id="dv-a" class="pt" inputmode="decimal" value="${fmtN(x.amount, 2)}"></div>
     <div class="field"><label>Data</label><input type="date" id="dv-d" value="${x.date}"></div>
-    <div class="field"><label>Ticker<small>opcional — toque para escolher</small></label><input id="dv-k" list="dv-list" autocapitalize="characters" value="${esc(x.ticker || '')}" style="text-align:left" placeholder="ex.: HGLG11"><datalist id="dv-list"></datalist></div>
+    <div class="field"><label>Ticker<small>opcional — digite ou toque</small></label><input id="dv-k" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" value="${esc(x.ticker || '')}" style="text-align:left" placeholder="ex.: HGLG11"></div>
+    <div class="tk-sug" id="dv-sug"></div>
     <button class="btn primary block" id="dv-save">Salvar</button>
     ${id ? '<button class="btn danger block" id="dv-del">Apagar</button>' : ''}
     <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
     $$('input.pt', el).forEach(liveFormat);
-    const fill = () => { $('#dv-list', el).innerHTML = tickers($('#dv-t', el).value).map((t) => `<option value="${t}">`).join(''); };
+    const fill = () => {   // your own tickers of this type, narrowed as you type
+      const q = $('#dv-k', el).value.trim().toUpperCase(), all = tickers($('#dv-t', el).value), L = all.filter((t) => !q || t.includes(q));
+      $('#dv-sug', el).innerHTML = (L.length === 1 && L[0] === q) ? '' : L.slice(0, 12).map((t) => `<button type="button" data-tk="${t}" class="${t.startsWith(q) && q ? 'hit' : ''}">${t}</button>`).join('') || (all.length && q ? '<span class="small muted">nenhum ativo seu com esse nome — pode salvar assim mesmo</span>' : '');
+      $$('[data-tk]', el).forEach((b) => (b.onclick = () => { $('#dv-k', el).value = b.dataset.tk; fill(); }));
+    };
+    $('#dv-k', el).addEventListener('input', fill);
     $('#dv-t', el).onchange = () => { $('#dv-c', el).value = DTYPES[$('#dv-t', el).value].cur; fill(); }; fill();
     if (!id) setTimeout(() => $('#dv-a', el).focus(), 250);
     $('#dv-save', el).onclick = async () => {
@@ -502,6 +510,67 @@ function divLogList(limit) {
     : '<p class="muted small">Nenhum dividendo lançado ainda.</p>';
 }
 const wireDivList = () => $$('#view [data-div]').forEach((el) => (el.onclick = () => editDiv(el.dataset.div)));
+
+// ---- aportes with their date: the month's aporte is the sum; daily returns use the exact day the money arrived
+const apBRL = (e) => e.gbp * (e.g || DB.prices.gbpbrl || 0);
+function apSum(month) { const L = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === month); return L.length ? Math.round(L.reduce((a, e) => a + e.gbp, 0) * 100) / 100 : null; }
+function applyApLog(month) {
+  const v = apSum(month); if (v === null) return;
+  if (DB.draft.month === month) DB.draft.aporteGBP = v;
+  const h = DB.history.find((x) => x.month === month); if (h) h.aporteGBP = v;
+}
+const lastAp = () => [...(DB.apLog || [])].sort((a, b) => (a.at || a.date).localeCompare(b.at || b.date)).pop() || null;
+function editAp(id) {
+  const x = id ? DB.apLog.find((e) => e.id === id) : { id: uid(), gbp: null, date: today(), note: '' };
+  openSheet(`<h3>${id ? 'Editar aporte' : 'Fiz um aporte'}</h3>
+    <div class="small muted" style="margin-bottom:8px">Dinheiro NOVO que entrou nos investimentos. Para uma retirada, use um valor negativo (ex.: -200).</div>
+    <div class="field"><label>Valor (£)</label><input id="ap-v" class="pt" inputmode="decimal" value="${fmtN(x.gbp, 2)}"></div>
+    <div class="field"><label>Data</label><input type="date" id="ap-d" value="${x.date}"></div>
+    <div class="field"><label>Nota<small>opcional</small></label><input id="ap-n" value="${esc(x.note || '')}" style="text-align:left" placeholder="ex.: salário"></div>
+    <button class="btn primary block" id="ap-save">Salvar</button>
+    ${id ? '<button class="btn danger block" id="ap-del">Apagar</button>' : ''}
+    <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
+    $$('input.pt', el).forEach(liveFormat); if (!id) setTimeout(() => $('#ap-v', el).focus(), 250);
+    $('#ap-save', el).onclick = async () => {
+      const raw = $('#ap-v', el).value.trim(), neg = raw.startsWith('-'), v = parsePT(raw.replace(/^-/, ''));
+      if (!v) return toast('Digite o valor');
+      const o = { ...x, gbp: neg ? -v : v, date: $('#ap-d', el).value || today(), note: $('#ap-n', el).value.trim(), at: new Date().toISOString(), g: DB.prices.gbpbrl };
+      const m = o.date.slice(0, 7), first = !(DB.apLog || []).some((e) => e.id !== o.id && e.date.slice(0, 7) === m);
+      const typed = DB.draft.month === m ? DB.draft.aporteGBP : DB.history.find((h) => h.month === m)?.aporteGBP;
+      if (first && typed) {
+        const keep = await ask(`${ymLong(m)} já tem ${gbp(typed, 2)} de aporte digitado à mão.\n\nGuardar esse valor como um lançamento (para não perder) e somar este?`);
+        if (keep) DB.apLog.push({ id: uid(), gbp: typed, date: m + '-01', note: 'digitado antes', at: new Date(0).toISOString(), g: DB.history.find((h) => h.month === m)?.fx || DB.prices.gbpbrl });
+      }
+      const old = DB.apLog.find((e) => e.id === o.id)?.date.slice(0, 7);
+      const i = DB.apLog.findIndex((e) => e.id === o.id); if (i > -1) DB.apLog[i] = o; else DB.apLog.push(o);
+      applyApLog(m); if (old && old !== m) { if (apSum(old) === null) { if (DB.draft.month === old) DB.draft.aporteGBP = null; const h = DB.history.find((q) => q.month === old); if (h) h.aporteGBP = null; } else applyApLog(old); }
+      await save(); closeSheet(); render();
+      toast(`✓ Aporte de ${gbp(o.gbp, 2)} em ${new Date(o.date + 'T12:00').toLocaleDateString('pt-BR')} — atualize hoje os saldos/quantidades que mudaram`, 5000);
+    };
+    if (id) $('#ap-del', el).onclick = async () => {
+      if (!(await ask('Apagar este aporte?', { yes: 'Sim, apagar', danger: true }))) return;
+      const m = x.date.slice(0, 7); DB.apLog = DB.apLog.filter((e) => e.id !== id);
+      if (apSum(m) === null) { if (DB.draft.month === m) DB.draft.aporteGBP = null; const h = DB.history.find((q) => q.month === m); if (h) h.aporteGBP = null; } else applyApLog(m);
+      await save(); closeSheet(); render();
+    };
+  });
+}
+function apList() {
+  const L = [...(DB.apLog || [])].sort((a, b) => b.date.localeCompare(a.date));
+  return L.length ? L.map((e) => `<div class="item click" data-ap="${e.id}"><div><div class="t">${new Date(e.date + 'T12:00').toLocaleDateString('pt-BR')}</div><div class="s">${e.note ? esc(e.note) : 'aporte'}</div></div><div class="r"><div class="t ${e.gbp < 0 ? 'neg' : ''}">${gbp(e.gbp, 2)}</div><div class="s">${brl(apBRL(e))}</div></div></div>`).join('') : '<p class="muted small">Nenhum aporte lançado ainda.</p>';
+}
+// daily chained return for a month: needs a snapshot from the last days of the month before
+function dailyMonth(month) {
+  const D = DB.daily || [], start = month + '-01', base = [...D].filter((x) => x.d < start).pop();
+  if (!base || (new Date(start) - new Date(base.d)) / 864e5 > 7) return null;
+  const pts = [base, ...D.filter((x) => x.d.slice(0, 7) === month)]; if (pts.length < 2) return null;
+  let f = 1, gain = 0, cfT = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i], cf = (DB.apLog || []).filter((e) => e.date > a.d && e.date <= b.d).reduce((s2, e) => s2 + apBRL(e), 0);
+    if (a.v > 0) f *= 1 + (b.v - a.v - cf) / a.v; gain += b.v - a.v - cf; cfT += cf;
+  }
+  return { month, r: f - 1, gain, aporte: cfT, daily: true, days: pts.length - 1 };
+}
 
 // ---- daily snapshot: today's patrimônio, saved quietly after prices load (later the same day replaces it)
 const today = () => { const t = new Date(); return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0'); };
@@ -949,6 +1018,7 @@ function returnsData() {
   for (let i = 1; i < H.length; i++) {
     const a = H[i - 1], b = H[i];
     if (typeof a.pat !== 'number' || typeof b.pat !== 'number' || ymDiff(a.month, b.month) !== 1) continue;
+    const dm = b.month < ym() ? dailyMonth(b.month) : null; if (dm) { months.push(dm); continue; }   // daily data covers it → exact
     if (b.aporteGBP === null || b.aporteGBP === undefined || !b.fx) continue; // aporte unknown → month can't be measured
     const C = num(b.aporteGBP) * b.fx, den = a.pat + 0.5 * C;
     if (den <= 0) continue;
@@ -973,9 +1043,15 @@ function vPainel() {
   const HM = { BRL: (v) => brl(v), GBP: (v) => gbp(v / (DB.prices.gbpbrl || 1)), USD: (v) => usd(v / (DB.prices.usdbrl || 1)) };
   let heroCur = 'BRL'; try { heroCur = HM[localStorage.getItem('rumo.cur')] ? localStorage.getItem('rumo.cur') : 'BRL'; } catch {}
   const heroOpen = () => { try { return localStorage.getItem('rumo.hero') === '1'; } catch { return false; } };
-  const CV = (v) => HM[heroCur](v);   // every amount on the Painel follows the ⇄ currency
+  const CV = (v) => HM[heroCur](v);
+  const divNow = (() => { const m = ym(), h = DB.draft.month === m ? DB.draft : DB.history.find((x) => x.month === m) || {}, sl = divSums(m);
+    const f = (k) => (k in sl ? sl[k] : num(h[k])); return f('divFII') + f('divAcoes') + f('divStocks') * num(DB.prices.gbpbrl); })();   // every amount on the Painel follows the ⇄ currency
   // "Este mês": live patrimônio vs the last month saved before this calendar month
   const prevM = DB.history.filter((h) => typeof h.pat === 'number' && h.month < ym()).slice(-1)[0] || null, mChg = prevM ? P.total - prevM.pat : 0;
+  // real growth this month (aportes taken out): exact daily chain when possible, otherwise vs last saved month
+  const mReal = (() => { const dm = dailyMonth(ym()); if (dm) return dm.r; if (!prevM || !prevM.pat) return null;
+    const apNow = apSum(ym()) ?? (DB.draft.month === ym() ? DB.draft.aporteGBP : null); if (apNow === null || apNow === undefined) return null;
+    return (P.total - prevM.pat - apNow * num(DB.prices.gbpbrl)) / prevM.pat; })();
   // crypto 24h move, weighted by what you hold of each coin
   const c24 = (() => { let now = 0, before = 0, any = false; for (const x of cs.coins) { const ch = DB.prices[x.k + '_24h']; if (typeof ch !== 'number' || !x.valUSD) continue; any = true; now += x.valUSD; before += x.valUSD / (1 + ch / 100); } return any && before ? now / before - 1 : null; })();
   const aportesYearGBP = DB.history.filter((h) => h.month.startsWith(st.year) && h.aporteGBP).reduce((a, h) => a + h.aporteGBP, 0);
@@ -996,10 +1072,10 @@ function vPainel() {
         <div class="val ${Ry ? (Ry.r < 0 ? 'neg' : 'pos') : ''}">${Ry ? signed(pct, Ry.r) : '–'}</div>
         <div class="sub">${Ry ? `${Ry.n} ${Ry.n === 1 ? 'mês' : 'meses'} · ${signed(CV, Ry.gain)}` : 'começa com os aportes'}</div></div>
       <div class="card kpi click" onclick="location.hash='#historico'"><div class="lab">Este mês</div>
-        ${prevM ? `<div class="val ${mChg < 0 ? 'neg' : 'pos'}">${signed(CV, mChg)}</div><div class="sub">${signed(pct, prevM.pat ? mChg / prevM.pat : 0)} · desde ${ymLabel(prevM.month)} · ao vivo</div>`
+        ${prevM ? `<div class="val ${mChg < 0 ? 'neg' : 'pos'}">${signed(CV, mChg)}</div><div class="sub">${mReal === null ? signed(pct, prevM.pat ? mChg / prevM.pat : 0) + ' · ' : `<b class="${mReal < 0 ? 'neg' : 'pos'}">${signed(pct, mReal)}</b> sem aportes · `}desde ${ymLabel(prevM.month)}</div>`
           : '<div class="val">–</div><div class="sub">precisa de um mês salvo</div>'}</div>
-      <div class="card kpi click" onclick="location.hash='#dividendos'"><div class="lab">Dividendos ${st.year}</div>
-        <div class="val">${CV(st.divYear)}</div><div class="sub">média ${CV(st.monthsWithDiv ? st.divYear / st.monthsWithDiv : 0)}/mês</div></div>
+      <div class="card kpi click" onclick="location.hash='#dividendos'"><div class="lab">Dividendos ${MONTHS[new Date().getMonth()].toLowerCase()}</div>
+        <div class="val">${CV(divNow)}</div><div class="sub">${st.year}: ${CV(st.divYear)} · média ${CV(st.monthsWithDiv ? st.divYear / st.monthsWithDiv : 0)}/mês</div></div>
       <div class="card kpi click" onclick="location.hash='#dividendos'"><div class="lab">Dividendos na vida</div>
         <div class="val">${CV(st.divLife)}</div><div class="sub">próx. marco ${brl((Math.floor(st.divLife / 10000) + 1) * 10000)}</div></div>
       <div class="card kpi click" onclick="location.hash='#historico'"><div class="lab">Aportes ${st.year}</div>
@@ -1058,7 +1134,7 @@ function vGraficos() {
       <div class="row"><span class="l">Desde ${ymLabel(R.since)}</span><span class="r"><b class="${R.total < 0 ? 'neg' : 'pos'}">${signed(pct, R.total)}</b></span></div>
       <div class="small" style="margin-top:10px">Mês a mês — últimos 12 meses</div><div class="chart-box" style="height:200px;margin-top:4px"><canvas id="ch-ret"></canvas></div>`
       : '<p class="small">Ainda sem dados. A rentabilidade começa a ser calculada a partir do primeiro mês salvo com aporte (mesmo que seja £0).</p>'}
-      <div class="small" style="margin-top:8px">Método "time-weighted" (o mesmo de corretoras e fundos): cada mês = variação do patrimônio − aporte, dividido pelo que estava investido; os meses se multiplicam no ano. Dividendos contam como ganho. Em R$, então inclui o efeito do câmbio.</div>
+      <div class="small" style="margin-top:8px">Método "time-weighted" (o mesmo de corretoras e fundos): cada mês = variação do patrimônio − aporte, dividido pelo que estava investido; os meses se multiplicam no ano. Com o registro diário (e aportes com data), o mês é calculado dia a dia — o aporte só conta a partir do dia em que entrou. Dividendos contam como ganho. Em R$, então inclui o efeito do câmbio.</div>
     </div>
    </div>
   </div>`;
@@ -1072,7 +1148,7 @@ function vGraficos() {
       ...D.map((x) => ({ x: ts(x.d), y: conv(x.v, x.g, x.u) }))];
       if (rg !== 'all') { const from = Date.now() - Number(rg) * 864e5; pts = pts.filter((q) => q.x >= from); }
       const span = pts.length > 1 ? pts[pts.length - 1].x - pts[0].x : 0;
-      const dl = (v) => { const d = new Date(v); return span > 200 * 864e5 ? MONTHS[d.getMonth()].slice(0, 3).toLowerCase() + '/' + String(d.getFullYear()).slice(2) : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }); };
+      const dl = (v) => { const d = new Date(v); return span > 200 * 864e5 ? MON3[d.getMonth()] + '/' + String(d.getFullYear()).slice(2) : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }); };
       return { pts, dl }; };
     const { pts, dl } = build(patRange());
     chart('ch-pat', { type: 'line', data: { datasets: [{ data: pts, borderColor: '#2563EB', backgroundColor: 'rgba(37,99,235,.15)', fill: true, pointRadius: pts.length < 40 ? 2 : 0, tension: .2, borderWidth: 2 }] },
@@ -1160,6 +1236,7 @@ function fieldRow(label, key, val, hint, calc) {
 function calcRow(label, cls) {
   return `<div class="field click" onclick="ATV.seg='${cls}';location.hash='#ativos'"><label>${label} <small>calculado em Ativos (preços ao vivo) ›</small></label><div class="calc">${brl(classTotal(cls))}</div></div>`;
 }
+let FXEDIT = false;   // exchange rates / coin prices are locked unless you tap ✎ Corrigir à mão
 function vAtualizar() {
   const b = DB.balances, p = DB.prices, d = DB.draft, P = portfolio(), au = DB.settings.auto || {};
   const exists = DB.history.find((h) => h.month === d.month);
@@ -1170,11 +1247,13 @@ function vAtualizar() {
      <div class="month-row"><label>Mês que você está atualizando</label><button class="month-btn" id="f-month"><svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>${ymLong(d.month)}</span><span class="mb-chev">▾</span></button></div>
      <div class="small">${exists ? '⚠ Este mês já está no Histórico — salvar vai substituir.' : 'Este mês ainda não foi salvo.'}</div></div>
    <div class="card"><div class="step"><b>2</b><h2>Câmbio e preços</h2></div>
-     <div class="small" style="margin-bottom:6px">Buscados automaticamente (${p.updatedAt ? fmtDate(p.updatedAt) : 'ainda não buscados'}). Você pode corrigir à mão.</div>
+     <div class="small" style="margin-bottom:6px">Buscados automaticamente (${p.updatedAt ? fmtDate(p.updatedAt) : 'ainda não buscados'}).</div>
+     <div id="fx-box" class="${FXEDIT ? '' : 'locked'}">
      ${fieldRow('Libra → Real (GBP/BRL)', 'p.gbpbrl', p.gbpbrl)}
      ${fieldRow('Dólar → Real (USD/BRL)', 'p.usdbrl', p.usdbrl)}
-     ${COINS.map((c) => fieldRow(c.k + ' (US$)', 'p.' + c.k, p[c.k])).join('')}
-     <button class="btn primary block" id="f-prices">⟳ Buscar preços agora</button></div>
+     ${COINS.map((c) => fieldRow(c.k + ' (US$)', 'p.' + c.k, p[c.k])).join('')}</div>
+     <button class="btn primary block" id="f-prices">⟳ Buscar preços agora</button>
+     <button class="btn block" id="f-fxedit" style="margin-top:8px">${FXEDIT ? '✓ Pronto' : '✎ Corrigir à mão'}</button></div>
    <div class="card"><div class="step"><b>3</b><h2>Saldos de hoje</h2></div>
      ${au.acoes ? calcRow('Ações', 'acoes') : fieldRow('Ações (R$)', 'b.acoes', b.acoes, 'Corretora no Brasil')}
      ${au.fiis ? calcRow('FIIs', 'fiis') : fieldRow('FIIs (R$)', 'b.fiis', b.fiis, 'Corretora no Brasil')}
@@ -1196,16 +1275,22 @@ function vAtualizar() {
        if (!L.length) return fieldRow(lab, 'd.' + f, d[f], null, f === 'divStocks' && d[f] ? brl(d[f] * p.gbpbrl) : '');
        return `<div class="field click" onclick="location.hash='#dividendos'"><label>${lab}<small>${L.length} ${L.length === 1 ? 'lançamento' : 'lançamentos'} · somado sozinho ›</small></label><div class="calc">${fm(d[f] || 0)}</div></div>`;
      }).join('')}
-     ${fieldRow('Aporte do mês (£)', 'd.aporteGBP', d.aporteGBP, 'Dinheiro NOVO que você colocou', d.aporteGBP ? brl(d.aporteGBP * p.gbpbrl) : '')}</div>
+     <div style="border-top:1px solid var(--line); margin-top:6px; padding-top:10px"><button class="btn primary block" id="f-ap">＋ Fiz um aporte</button>
+     ${(() => { const e = lastAp(); return e ? `<div class="small muted" style="margin:8px 0">Último aporte: <b>${dmy(e.date)}</b> · ${gbp(e.gbp, 2)}${e.note ? ' (' + esc(e.note) + ')' : ''} · <a href="#" id="f-ap-all">ver todos</a></div>` : ''; })()}</div>
+     ${(() => { const n = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === d.month).length;
+       return n ? `<div class="field"><label>Aporte do mês (£)<small>${n} ${n === 1 ? 'lançamento' : 'lançamentos'} · somado sozinho</small></label><div class="calc">${gbp(d.aporteGBP || 0, 2)}<div class="small">${brl((d.aporteGBP || 0) * p.gbpbrl)}</div></div></div>`
+         : fieldRow('Aporte do mês (£)', 'd.aporteGBP', d.aporteGBP, 'Dinheiro NOVO que você colocou', d.aporteGBP ? brl(d.aporteGBP * p.gbpbrl) : ''); })()}</div>
    <div class="card"><div class="step"><b>5</b><h2>Salvar o mês</h2></div>
      <div class="small">Guarda no Histórico: patrimônio total, aporte, dividendos e o câmbio de hoje. Pode salvar de novo quantas vezes quiser — substitui o mês.</div>
      <button class="btn primary block" id="f-save">Salvar ${ymLong(d.month)} no Histórico</button></div>
   </div></div>`;
   $('#f-div').onclick = () => editDiv(null);
+  $('#f-ap').onclick = () => editAp(null);
+  $('#f-ap-all') && ($('#f-ap-all').onclick = (e) => { e.preventDefault(); openSheet(`<h3>Aportes</h3>${apList()}<button class="btn block" onclick="closeSheet()" style="margin-top:10px">Fechar</button>`, (el) => $$('[data-ap]', el).forEach((x) => (x.onclick = () => editAp(x.dataset.ap)))); });
   $('#f-month').onclick = () => pickMonth(d.month, async (m) => {
     const h = DB.history.find((x) => x.month === m);
     DB.draft = { month: m, divFII: h?.divFII ?? null, divAcoes: h?.divAcoes ?? null, divStocks: h?.divStocks ?? null, aporteGBP: h?.aporteGBP ?? null };
-    applyDivLog(m); await save(); render();
+    applyDivLog(m); applyApLog(m); await save(); render();
   });
   $$('#view input[data-k]').forEach((inp) => inp.addEventListener('change', async () => {
     const [grp, key] = inp.dataset.k.split('.'); const v = parsePT(inp.value);
@@ -1214,6 +1299,7 @@ function vAtualizar() {
     await save(); render();
   }));
   $('#f-prices').onclick = () => refreshPrices(false);
+  $('#f-fxedit').onclick = () => { FXEDIT = !FXEDIT; render(); if (FXEDIT) setTimeout(() => $('#fx-box input')?.focus(), 50); };
   $('#f-save').onclick = async () => {
     const P2 = portfolio(), d2 = DB.draft;
     if (d2.aporteGBP === null || d2.aporteGBP === undefined) {
@@ -1228,7 +1314,7 @@ function vAtualizar() {
     const nextM = ymAdd(d2.month, 1);
     await save(); toast(`✓ ${ymLong(d2.month)} salvo`);
     if (await ask(`Começar ${ymLong(nextM)} agora? (os campos de dividendos e aporte ficam vazios)`)) {
-      DB.draft = { month: nextM, divFII: null, divAcoes: null, divStocks: null, aporteGBP: null }; applyDivLog(nextM); await save();
+      DB.draft = { month: nextM, divFII: null, divAcoes: null, divStocks: null, aporteGBP: null }; applyDivLog(nextM); applyApLog(nextM); await save();
     }
     render();
   };
@@ -1248,8 +1334,28 @@ function vHistorico() {
   }).join('');
   $('#view').innerHTML = `<div class="card"><div class="small" style="margin-bottom:6px">Toque num mês para editar. Novos meses entram pela aba Atualizar → Salvar.</div>${rows || '<p class="muted">Nenhum mês salvo ainda.</p>'}
     <button class="btn block" id="h-add">+ Adicionar mês manualmente</button></div>`;
-  $$('#view .item').forEach((el) => (el.onclick = () => editMonth(el.dataset.m)));
+  $$('#view .item').forEach((el) => (el.onclick = () => monthCard(el.dataset.m)));
   $('#h-add').onclick = () => editMonth(null);
+}
+// tap a month in Histórico → summary card; tap outside to close, "Editar mês" for the form
+function monthCard(m) {
+  const i = DB.history.findIndex((h) => h.month === m), h = DB.history[i], prev = DB.history[i - 1];
+  const varP = prev && typeof prev.pat === 'number' && typeof h.pat === 'number' && ymDiff(prev.month, h.month) === 1 ? h.pat - prev.pat : null;
+  const ap = h.aporteGBP !== null && h.aporteGBP !== undefined && h.fx ? h.aporteGBP * h.fx : null, rend = varP !== null && ap !== null ? varP - ap : null;
+  const rm = returnsData().months.find((x) => x.month === m), nLog = (DB.divLog || []).filter((e) => e.date.slice(0, 7) === m).length;
+  const row = (l, v, cls = '') => `<div class="mc-row"><span>${l}</span><b class="${cls}">${v}</b></div>`;
+  openSheet(`<div class="mc">
+    <div class="mc-top"><div class="small muted">${prev ? 'vs ' + ymLong(prev.month) : 'primeiro mês'}</div><h3 style="margin:2px 0 0">${ymLong(m)}</h3>
+      <div class="mc-big">${typeof h.pat === 'number' ? brl(h.pat) : '–'}</div>
+      ${varP !== null ? `<div class="${varP < 0 ? 'neg' : 'pos'}" style="font-weight:700">${varP < 0 ? '▼' : '▲'} ${signed(brl, varP)} no mês</div>` : ''}</div>
+    ${rend !== null ? row('Rendimento (sem aporte)', `${signed(brl, rend)}${rm ? ' · ' + signed(pct, rm.r) : ''}`, rend < 0 ? 'neg' : 'pos') : row('Rendimento', '<span class="muted">sem aporte informado</span>')}
+    ${row('Aporte', h.aporteGBP === null || h.aporteGBP === undefined ? '–' : `${gbp(h.aporteGBP)}${ap ? ' <span class="muted">(' + brl(ap) + ')</span>' : ''}`)}
+    ${row('Dividendos', brl(divTotal(h), 2))}
+    <div class="mc-sub">FIIs ${brl(num(h.divFII), 2)} · Ações ${brl(num(h.divAcoes), 2)} · Stocks ${gbp(num(h.divStocks), 2)}${nLog ? ` · ${nLog} ${nLog === 1 ? 'lançamento' : 'lançamentos'}` : ''}</div>
+    ${row('Câmbio', h.fx ? '£1 = R$ ' + nf2.format(h.fx) : '–')}
+    ${h.note ? row('Nota', esc(h.note)) : ''}
+    <button class="btn primary block" id="mc-edit" style="margin-top:14px">✎ Editar mês</button>
+    <button class="btn block" onclick="closeSheet()">Fechar</button></div>`, (el) => { $('#mc-edit', el).onclick = () => { closeSheet(); editMonth(m); }; });
 }
 function editMonth(m) {
   const h = m ? DB.history.find((x) => x.month === m) : { month: ym(), pat: null, aporteGBP: null, divFII: null, divAcoes: null, divStocks: null, fx: null, note: '' };
@@ -1304,11 +1410,12 @@ function vDividendos() {
     <tr><td>Média mensal</td>${tot.map((v, i) => `<td>${cnt[i] ? nf0.format(v / cnt[i]) : ''}</td>`).join('')}</tr>
     <tr><td>Crescimento</td>${tot.map((v, i) => { const g = i && tot[i - 1] && cnt[i] === 12 ? v / tot[i - 1] - 1 : null; return `<td class="${g > 0 ? 'pos' : g < 0 ? 'neg' : ''}">${g === null ? '' : pct(g)}</td>`; }).join('')}</tr>
   </table></div><div class="small" style="margin-top:6px">Azul = maior dividendo mensal de todos. Arraste a tabela para o lado. Crescimento só para anos completos. Stocks entram convertidos pelo câmbio do mês (a partir de out/2026).</div></div>
-  <div class="card" style="margin-top:12px"><h2>Últimos lançamentos</h2>${divLogList(15)}${(DB.divLog || []).length > 15 ? '<div class="small muted" style="margin-top:6px">Todos os lançamentos vão no Excel (Ajustes → Exportar Excel).</div>' : ''}</div>
+  <div class="card" style="margin-top:12px"><h2>Últimos lançamentos</h2>${divLogList(5)}${(DB.divLog || []).length > 5 ? `<button class="btn block" id="dv-all" style="margin-top:8px">Ver todos (${DB.divLog.length})</button>` : ''}</div>
   <div class="card" style="margin-top:12px"><h2>Marcos de R$ 10 mil</h2>
     ${mile.map((x) => `<div class="row"><span class="l">✓ ${brl(x.v)}</span><span class="r">${ymLabel(x.m)} <span class="small">(${x.n} meses)</span></span></div>`).join('') || '<p class="muted">Ainda nenhum.</p>'}</div>`;
   const tw = $('#view .tbl-wrap'); if (tw) tw.scrollLeft = tw.scrollWidth;
   $('#dv-add').onclick = () => editDiv(null); wireDivList();
+  $('#dv-all') && ($('#dv-all').onclick = () => openSheet(`<h3>Todos os dividendos</h3>${divLogList(100000)}<button class="btn block" onclick="closeSheet()" style="margin-top:10px">Fechar</button>`, (el) => $$('[data-div]', el).forEach((x) => (x.onclick = () => editDiv(x.dataset.div)))));
 }
 
 /* ----- Cripto ----- */
@@ -1534,6 +1641,7 @@ async function exportExcel() {
     X.utils.book_append_sheet(wb, ws, name);
   };
   const BR = '"R$" #,##0.00', GB = '"£" #,##0.00', PC = '0.00%';
+  if ((DB.apLog || []).length) add('Aportes', [['Data', 'Aporte (£)', 'GBP/BRL', 'Aporte (R$)', 'Nota'], ...[...DB.apLog].sort((a, b) => a.date.localeCompare(b.date)).map((e) => [new Date(e.date + 'T12:00:00Z'), e.gbp, e.g, Math.round(apBRL(e) * 100) / 100, e.note || ''])], [12, 12, 9, 13, 20], { 0: 'dd/mm/yyyy', 1: GB, 3: BR });
   if ((DB.divLog || []).length) add('Lançamentos div', [['Data', 'Tipo', 'Ticker', 'Valor', 'Moeda', 'Em R$'], ...[...DB.divLog].sort((a, b) => a.date.localeCompare(b.date)).map((e) => [new Date(e.date + 'T12:00:00Z'), DTYPES[e.type].n, e.ticker || '', e.amount, e.cur, Math.round(divInField(e, 'divFII') * 100) / 100])], [12, 10, 10, 12, 7, 12], { 0: 'dd/mm/yyyy', 5: BR });
   if ((DB.daily || []).length) add('Diário', [['Data', 'Patrimônio (R$)', 'GBP/BRL', 'USD/BRL'], ...DB.daily.map((x) => [new Date(x.d + 'T12:00:00Z'), x.v, x.g, x.u])], [12, 18, 10, 10], { 0: 'dd/mm/yyyy', 1: BR });
   add('Histórico', [['Mês', 'Patrimônio (R$)', 'Aporte (£)', 'GBP/BRL', 'Aporte (R$)', 'Div FIIs (R$)', 'Div Ações (R$)', 'Div Stocks (£)', 'Div total (R$)', 'Variação (R$)', 'Rendimento sem aporte (R$)', 'Retorno do mês', 'Observação'],

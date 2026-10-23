@@ -235,3 +235,15 @@ html.dark .month-btn{color:#93C5FD}
 .month-row{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0}
 .month-row label{font-size:14px; flex:1 1 auto; min-width:0}
 .month-row .month-btn{flex:0 0 auto}
+
+/* v4.31 — ticker suggestions, month card, locked rates */
+.tk-sug{display:flex; flex-wrap:wrap; gap:6px; margin:-4px 0 10px}
+.tk-sug button{border:1px solid var(--input-border); background:var(--blue-xl); color:var(--blue); border-radius:999px; padding:7px 12px; font-weight:700; font-size:14px}
+html.dark .tk-sug button{color:#93C5FD} .tk-sug button.hit{background:var(--blue); color:#fff; border-color:var(--blue)}
+.mc-top{text-align:center; padding:4px 0 12px; border-bottom:1px solid var(--line); margin-bottom:6px}
+.mc-big{font-size:30px; font-weight:800; color:var(--title); margin:4px 0 2px}
+.mc-row{display:flex; justify-content:space-between; gap:12px; padding:10px 0; border-bottom:1px solid var(--line); font-size:15px}
+.mc-row b{text-align:right; color:var(--title)} .mc-row b.pos{color:var(--green)} .mc-row b.neg{color:var(--red)}
+.mc-sub{font-size:12px; color:var(--muted); padding:6px 0 8px; border-bottom:1px solid var(--line)}
+html.priv .mc-big, html.priv .mc-row b, html.priv .mc-sub{filter:blur(8px)}
+#fx-box.locked input{background:transparent !important; border-color:transparent !important; color:var(--ink) !important; pointer-events:none}
