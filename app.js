@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.29';
+const APP_VERSION = '4.30';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -109,6 +109,7 @@ function emptyDB() {
     assets: [],
     history: [],
     daily: [],
+    divLog: [],
   };
 }
 function normalize(d) {
@@ -126,6 +127,7 @@ function normalize(d) {
   d.settings.keyStatus = d.settings.keyStatus || {};
   d.assets = (d.assets || []).map((a) => ({ id: a.id || uid(), ...a }));
   d.history = (d.history || []).filter((h) => h && h.month).sort((a, b) => a.month.localeCompare(b.month));
+  d.divLog = (d.divLog || []).filter((x) => x && x.date && typeof x.amount === 'number');
   d.daily = (d.daily || []).filter((x) => x && x.d && typeof x.v === 'number').sort((a, b) => a.d.localeCompare(b.d));
   d.crypto.log = (d.crypto.log || []).map((x) => ({ id: x.id || uid(), ...x })).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   return d;
@@ -425,6 +427,82 @@ function maybeRefreshPrices() {
   if (DB && age > PRICE_EVERY) refreshPrices(true);
 }
 setInterval(() => { if (DB && !document.hidden) maybeRefreshPrices(); }, 60 * 1000);
+// ---- dividends as they arrive: each payment is logged; the month's totals are the sum of its payments
+const DTYPES = {
+  fii: { n: 'FIIs', f: 'divFII', cur: 'BRL', cls: 'fiis' }, acoes: { n: 'Ações', f: 'divAcoes', cur: 'BRL', cls: 'acoes' },
+  stocks: { n: 'Stocks', f: 'divStocks', cur: 'GBP', cls: 'stocks', kinds: ['Stock', 'ETF'] }, reits: { n: 'REITs', f: 'divStocks', cur: 'GBP', cls: 'stocks', kinds: ['REIT'] },
+};
+const DIV_FIELDS = ['divFII', 'divAcoes', 'divStocks'];
+function divInField(e, field) {   // FIIs/Ações in R$, Stocks+REITs in £ (as the monthly fields have always been)
+  const pr = DB.prices, g = e.g || pr.gbpbrl || 1, rate = { BRL: 1, GBP: g, USD: e.u || pr.usdbrl || 1, EUR: e.e || pr.eurbrl || 1 }[e.cur] || 1;
+  const brlV = e.amount * rate; return field === 'divStocks' ? brlV / g : brlV;
+}
+function divSums(month) {
+  const out = {}, L = (DB.divLog || []).filter((e) => e.date.slice(0, 7) === month);
+  for (const e of L) { const f = DTYPES[e.type].f; out[f] = (out[f] || 0) + divInField(e, f); }
+  for (const f of DIV_FIELDS) if (f in out) out[f] = Math.round(out[f] * 100) / 100;
+  return out;
+}
+function applyDivLog(month) {
+  const sums = divSums(month), h = DB.history.find((x) => x.month === month);
+  for (const f of DIV_FIELDS) {
+    const logged = (DB.divLog || []).some((e) => e.date.slice(0, 7) === month && DTYPES[e.type].f === f);
+    if (!logged) continue;
+    if (DB.draft.month === month) DB.draft[f] = sums[f];
+    if (h) h[f] = sums[f];
+  }
+}
+const lastDiv = () => [...(DB.divLog || [])].sort((a, b) => (a.at || a.date).localeCompare(b.at || b.date)).pop() || null;
+const divLabel = (e) => (e.cur === 'GBP' ? gbp(e.amount, 2) : e.cur === 'USD' ? usd(e.amount, 2) : e.cur === 'EUR' ? '€ ' + nf2.format(e.amount) : brl(e.amount, 2));
+const dmy = (d) => new Date(d + 'T12:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+function editDiv(id) {
+  const x = id ? DB.divLog.find((e) => e.id === id) : { id: uid(), type: 'fii', cur: 'BRL', amount: null, date: today(), ticker: '' };
+  const tickers = (t) => { const D = DTYPES[t]; return [...new Set((DB.assets || []).filter((a) => a.cls === D.cls && (!D.kinds || D.kinds.includes(a.kind || 'Stock'))).map((a) => a.ticker))].sort(); };
+  openSheet(`<h3>${id ? 'Editar dividendo' : 'Recebi dividendos'}</h3>
+    <div class="field"><label>Tipo</label><select id="dv-t">${Object.entries(DTYPES).map(([k, v]) => `<option value="${k}" ${x.type === k ? 'selected' : ''}>${v.n}</option>`).join('')}</select></div>
+    <div class="field"><label>Moeda</label><select id="dv-c">${[['BRL', 'R$'], ['GBP', '£'], ['USD', 'US$'], ['EUR', '€']].map(([v, l]) => `<option value="${v}" ${x.cur === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="field"><label>Valor recebido</label><input id="dv-a" class="pt" inputmode="decimal" value="${fmtN(x.amount, 2)}"></div>
+    <div class="field"><label>Data</label><input type="date" id="dv-d" value="${x.date}"></div>
+    <div class="field"><label>Ticker<small>opcional — toque para escolher</small></label><input id="dv-k" list="dv-list" autocapitalize="characters" value="${esc(x.ticker || '')}" style="text-align:left" placeholder="ex.: HGLG11"><datalist id="dv-list"></datalist></div>
+    <button class="btn primary block" id="dv-save">Salvar</button>
+    ${id ? '<button class="btn danger block" id="dv-del">Apagar</button>' : ''}
+    <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
+    $$('input.pt', el).forEach(liveFormat);
+    const fill = () => { $('#dv-list', el).innerHTML = tickers($('#dv-t', el).value).map((t) => `<option value="${t}">`).join(''); };
+    $('#dv-t', el).onchange = () => { $('#dv-c', el).value = DTYPES[$('#dv-t', el).value].cur; fill(); }; fill();
+    if (!id) setTimeout(() => $('#dv-a', el).focus(), 250);
+    $('#dv-save', el).onclick = async () => {
+      const o = { ...x, type: $('#dv-t', el).value, cur: $('#dv-c', el).value, amount: parsePT($('#dv-a', el).value), date: $('#dv-d', el).value || today(),
+        ticker: $('#dv-k', el).value.trim().toUpperCase(), at: new Date().toISOString(), g: DB.prices.gbpbrl, u: DB.prices.usdbrl, e: DB.prices.eurbrl };
+      if (!o.amount) return toast('Digite o valor');
+      const m = o.date.slice(0, 7), f = DTYPES[o.type].f;
+      const firstOfMonth = !(DB.divLog || []).some((e) => e.id !== o.id && e.date.slice(0, 7) === m && DTYPES[e.type].f === f);
+      const typed = DB.draft.month === m ? DB.draft[f] : DB.history.find((h) => h.month === m)?.[f];
+      if (firstOfMonth && typed) {   // keep what was typed by hand before switching this month to logged payments
+        const keep = await ask(`${ymLong(m)} já tem ${f === 'divStocks' ? gbp(typed, 2) : brl(typed, 2)} de dividendos ${f === 'divStocks' ? 'Stocks/REITs' : DTYPES[o.type].n} digitados à mão.\n\nGuardar esse valor como um lançamento (para não perder) e somar o novo?`);
+        if (keep) DB.divLog.push({ id: uid(), type: f === 'divStocks' ? 'stocks' : o.type, cur: f === 'divStocks' ? 'GBP' : 'BRL', amount: typed, date: m + '-01', ticker: '', note: 'digitado antes', at: new Date(0).toISOString(), g: DB.prices.gbpbrl });
+      }
+      const old = DB.divLog.find((e) => e.id === o.id)?.date.slice(0, 7);
+      const i = DB.divLog.findIndex((e) => e.id === o.id); if (i > -1) DB.divLog[i] = o; else DB.divLog.push(o);
+      applyDivLog(m); if (old && old !== m) applyDivLog(old);
+      await save(); closeSheet(); render(); toast(`✓ ${divLabel(o)}${o.ticker ? ' · ' + o.ticker : ''} em ${ymLong(m)}`);
+    };
+    if (id) $('#dv-del', el).onclick = async () => {
+      if (!(await ask('Apagar este dividendo?', { yes: 'Sim, apagar', danger: true }))) return;
+      const m = x.date.slice(0, 7), f = DTYPES[x.type].f; DB.divLog = DB.divLog.filter((e) => e.id !== id);
+      const still = DB.divLog.some((e) => e.date.slice(0, 7) === m && DTYPES[e.type].f === f);
+      if (!still) { if (DB.draft.month === m) DB.draft[f] = null; const h = DB.history.find((q) => q.month === m); if (h) h[f] = null; } else applyDivLog(m);
+      await save(); closeSheet(); render();
+    };
+  });
+}
+function divLogList(limit) {
+  const L = [...(DB.divLog || [])].sort((a, b) => b.date.localeCompare(a.date) || (b.at || '').localeCompare(a.at || '')).slice(0, limit);
+  return L.length ? L.map((e) => `<div class="item click" data-div="${e.id}"><div><div class="t">${DTYPES[e.type].n}${e.ticker ? ' · ' + esc(e.ticker) : ''}</div><div class="s">${new Date(e.date + 'T12:00').toLocaleDateString('pt-BR')}${e.note ? ' · ' + esc(e.note) : ''}</div></div><div class="r"><div class="t">${divLabel(e)}</div>${e.cur !== 'BRL' ? `<div class="s">${brl(divInField(e, 'divFII'), 2)}</div>` : ''}</div></div>`).join('')
+    : '<p class="muted small">Nenhum dividendo lançado ainda.</p>';
+}
+const wireDivList = () => $$('#view [data-div]').forEach((el) => (el.onclick = () => editDiv(el.dataset.div)));
+
 // ---- daily snapshot: today's patrimônio, saved quietly after prices load (later the same day replaces it)
 const today = () => { const t = new Date(); return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0'); };
 async function dailySnap() {
@@ -1111,18 +1189,23 @@ function vAtualizar() {
   </div>
   <div class="grid" style="align-content:start">
    <div class="card"><div class="step"><b>4</b><h2>Dividendos e aporte do mês</h2></div>
-     ${fieldRow('Dividendos FIIs (R$)', 'd.divFII', d.divFII)}
-     ${fieldRow('Dividendos Ações (R$)', 'd.divAcoes', d.divAcoes)}
-     ${fieldRow('Dividendos Stocks (£)', 'd.divStocks', d.divStocks, null, d.divStocks ? brl(d.divStocks * p.gbpbrl) : '')}
+     <button class="btn primary block" id="f-div" style="margin:4px 0 6px">＋ Recebi dividendos</button>
+     ${(() => { const e = lastDiv(); return e ? `<div class="small muted" style="margin-bottom:8px">Último lançamento: <b>${dmy(e.date)}</b> · ${divLabel(e)}${e.ticker ? ' (' + esc(e.ticker) + ')' : ''}</div>` : ''; })()}
+     ${[['Dividendos FIIs (R$)', 'divFII', (v) => brl(v, 2)], ['Dividendos Ações (R$)', 'divAcoes', (v) => brl(v, 2)], ['Dividendos Stocks + REITs (£)', 'divStocks', (v) => gbp(v, 2)]].map(([lab, f, fm]) => {
+       const L = (DB.divLog || []).filter((e) => e.date.slice(0, 7) === d.month && DTYPES[e.type].f === f);
+       if (!L.length) return fieldRow(lab, 'd.' + f, d[f], null, f === 'divStocks' && d[f] ? brl(d[f] * p.gbpbrl) : '');
+       return `<div class="field click" onclick="location.hash='#dividendos'"><label>${lab}<small>${L.length} ${L.length === 1 ? 'lançamento' : 'lançamentos'} · somado sozinho ›</small></label><div class="calc">${fm(d[f] || 0)}</div></div>`;
+     }).join('')}
      ${fieldRow('Aporte do mês (£)', 'd.aporteGBP', d.aporteGBP, 'Dinheiro NOVO que você colocou', d.aporteGBP ? brl(d.aporteGBP * p.gbpbrl) : '')}</div>
    <div class="card"><div class="step"><b>5</b><h2>Salvar o mês</h2></div>
      <div class="small">Guarda no Histórico: patrimônio total, aporte, dividendos e o câmbio de hoje. Pode salvar de novo quantas vezes quiser — substitui o mês.</div>
      <button class="btn primary block" id="f-save">Salvar ${ymLong(d.month)} no Histórico</button></div>
   </div></div>`;
+  $('#f-div').onclick = () => editDiv(null);
   $('#f-month').onclick = () => pickMonth(d.month, async (m) => {
     const h = DB.history.find((x) => x.month === m);
     DB.draft = { month: m, divFII: h?.divFII ?? null, divAcoes: h?.divAcoes ?? null, divStocks: h?.divStocks ?? null, aporteGBP: h?.aporteGBP ?? null };
-    await save(); render();
+    applyDivLog(m); await save(); render();
   });
   $$('#view input[data-k]').forEach((inp) => inp.addEventListener('change', async () => {
     const [grp, key] = inp.dataset.k.split('.'); const v = parsePT(inp.value);
@@ -1145,7 +1228,7 @@ function vAtualizar() {
     const nextM = ymAdd(d2.month, 1);
     await save(); toast(`✓ ${ymLong(d2.month)} salvo`);
     if (await ask(`Começar ${ymLong(nextM)} agora? (os campos de dividendos e aporte ficam vazios)`)) {
-      DB.draft = { month: nextM, divFII: null, divAcoes: null, divStocks: null, aporteGBP: null }; await save();
+      DB.draft = { month: nextM, divFII: null, divAcoes: null, divStocks: null, aporteGBP: null }; applyDivLog(nextM); await save();
     }
     render();
   };
@@ -1206,7 +1289,10 @@ function vDividendos() {
   const mile = []; let acc = 0, k = 1, prevM = H[0]?.month;
   for (const h of H) { acc += divTotal(h); while (acc >= k * step) { mile.push({ v: k * step, m: h.month, n: ymDiff(prevM, h.month) }); prevM = h.month; k++; } }
   const last12 = H.filter((h) => st.last && ymDiff(h.month, st.last.month) >= 0 && ymDiff(h.month, st.last.month) < 12).reduce((s, h) => s + divTotal(h), 0);
+  const ld = lastDiv();
   $('#view').innerHTML = `
+  <div class="card" style="margin-bottom:12px"><button class="btn primary block" id="dv-add">＋ Recebi dividendos</button>
+    ${ld ? `<div class="small muted" style="margin-top:8px">Último lançamento: <b>${new Date(ld.date + 'T12:00').toLocaleDateString('pt-BR')}</b> · ${divLabel(ld)}${ld.ticker ? ' (' + esc(ld.ticker) + ')' : ''}</div>` : '<div class="small muted" style="margin-top:8px">Lance cada pagamento quando ele cair — o total do mês soma sozinho em Atualizar.</div>'}</div>
   <div class="grid g2" style="margin-bottom:12px">
     <div class="card kpi"><div class="lab">Total na vida</div><div class="val">${brl(life)}</div><div class="sub">próx. marco ${brl((Math.floor(life / step) + 1) * step)}</div></div>
     <div class="card kpi"><div class="lab">Últimos 12 meses</div><div class="val">${brl(last12)}</div><div class="sub">≈ ${brl(last12 / 12)}/mês</div></div>
@@ -1218,9 +1304,11 @@ function vDividendos() {
     <tr><td>Média mensal</td>${tot.map((v, i) => `<td>${cnt[i] ? nf0.format(v / cnt[i]) : ''}</td>`).join('')}</tr>
     <tr><td>Crescimento</td>${tot.map((v, i) => { const g = i && tot[i - 1] && cnt[i] === 12 ? v / tot[i - 1] - 1 : null; return `<td class="${g > 0 ? 'pos' : g < 0 ? 'neg' : ''}">${g === null ? '' : pct(g)}</td>`; }).join('')}</tr>
   </table></div><div class="small" style="margin-top:6px">Azul = maior dividendo mensal de todos. Arraste a tabela para o lado. Crescimento só para anos completos. Stocks entram convertidos pelo câmbio do mês (a partir de out/2026).</div></div>
+  <div class="card" style="margin-top:12px"><h2>Últimos lançamentos</h2>${divLogList(15)}${(DB.divLog || []).length > 15 ? '<div class="small muted" style="margin-top:6px">Todos os lançamentos vão no Excel (Ajustes → Exportar Excel).</div>' : ''}</div>
   <div class="card" style="margin-top:12px"><h2>Marcos de R$ 10 mil</h2>
     ${mile.map((x) => `<div class="row"><span class="l">✓ ${brl(x.v)}</span><span class="r">${ymLabel(x.m)} <span class="small">(${x.n} meses)</span></span></div>`).join('') || '<p class="muted">Ainda nenhum.</p>'}</div>`;
   const tw = $('#view .tbl-wrap'); if (tw) tw.scrollLeft = tw.scrollWidth;
+  $('#dv-add').onclick = () => editDiv(null); wireDivList();
 }
 
 /* ----- Cripto ----- */
@@ -1446,6 +1534,7 @@ async function exportExcel() {
     X.utils.book_append_sheet(wb, ws, name);
   };
   const BR = '"R$" #,##0.00', GB = '"£" #,##0.00', PC = '0.00%';
+  if ((DB.divLog || []).length) add('Lançamentos div', [['Data', 'Tipo', 'Ticker', 'Valor', 'Moeda', 'Em R$'], ...[...DB.divLog].sort((a, b) => a.date.localeCompare(b.date)).map((e) => [new Date(e.date + 'T12:00:00Z'), DTYPES[e.type].n, e.ticker || '', e.amount, e.cur, Math.round(divInField(e, 'divFII') * 100) / 100])], [12, 10, 10, 12, 7, 12], { 0: 'dd/mm/yyyy', 5: BR });
   if ((DB.daily || []).length) add('Diário', [['Data', 'Patrimônio (R$)', 'GBP/BRL', 'USD/BRL'], ...DB.daily.map((x) => [new Date(x.d + 'T12:00:00Z'), x.v, x.g, x.u])], [12, 18, 10, 10], { 0: 'dd/mm/yyyy', 1: BR });
   add('Histórico', [['Mês', 'Patrimônio (R$)', 'Aporte (£)', 'GBP/BRL', 'Aporte (R$)', 'Div FIIs (R$)', 'Div Ações (R$)', 'Div Stocks (£)', 'Div total (R$)', 'Variação (R$)', 'Rendimento sem aporte (R$)', 'Retorno do mês', 'Observação'],
     ...H.map((h, i) => { const prev = H[i - 1], v = prev && typeof prev.pat === 'number' && typeof h.pat === 'number' && ymDiff(prev.month, h.month) === 1 ? h.pat - prev.pat : null, rm = rByM[h.month];
