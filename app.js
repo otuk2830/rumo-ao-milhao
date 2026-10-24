@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.46';
+const APP_VERSION = '4.47';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1177,7 +1177,7 @@ function vPainel() {
   const P = portfolio(), st = historyStats(), pr = projections(P.total), ms = milestones(), s = DB.settings, cs = P.cs;
   const meta = num(s.meta), prog = meta ? Math.min(1, P.total / meta) : 0;
   const backupOld = !s.lastBackup || Date.now() - new Date(s.lastBackup) > 30 * 864e5;
-  const R = returnsData(), Ry = R.years.find((y) => y.year === st.year);
+  const R = returnsData();
   // ⇄ on the Patrimônio card: R$ → £ → US$ (remembered on this phone)
   const HM = { BRL: (v) => brl(v), GBP: (v) => gbp(v / (DB.prices.gbpbrl || 1)), USD: (v) => usd(v / (DB.prices.usdbrl || 1)) };
   let heroCur = 'BRL'; try { heroCur = HM[localStorage.getItem('rumo.cur')] ? localStorage.getItem('rumo.cur') : 'BRL'; } catch {}
@@ -1199,6 +1199,14 @@ function vPainel() {
 
   // ---- extras for the new layout
   const mLoc = prevM ? liveLocal(P) : null;
+  // the year on the Painel = saved months of this year (except the current one) × the current month LIVE, same as the month figure
+  const Ry = (() => {
+    const yNow = String(new Date().getFullYear()), M = R.months.filter((m) => m.month.startsWith(yNow) && m.month !== ym());
+    let f = 1, fl = 1, gain = 0, n = 0, nl = 0;
+    for (const m of M) { f *= 1 + m.r; gain += m.gain; n++; if (m.rl !== null && m.rl !== undefined) { fl *= 1 + m.rl; nl++; } }
+    if (prevM && mReal !== null) { f *= 1 + mReal; gain += mRealV ?? 0; n++; if (mLoc) { fl *= 1 + mLoc.r; nl++; } }
+    return n ? { year: yNow, r: f - 1, gain, n, rl: nl ? fl - 1 : null, nl, full: nl === n } : null;
+  })();
   // "hoje": investments only — each block in its own currency vs yesterday's snapshot, aportes of today taken out (no exchange-rate effect)
   const yest = [...(DB.daily || [])].filter((x) => x.d < today() && x.n).pop() || null;
   const dLoc = yest ? localPeriod(yest, { n: natNow(P), g: DB.prices.gbpbrl, u: DB.prices.usdbrl }, flowsBetween(yest.d, today(), 'day').f, false) : null;
