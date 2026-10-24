@@ -360,3 +360,4 @@ html, body{min-height:100%}
 #app{min-height:100vh; min-height:100dvh}
 main{min-height:calc(100vh - 70px); min-height:calc(100dvh - 70px); box-sizing:border-box}
 .tabs{transform:translateZ(0)}
+.dchip{cursor:pointer} .dchip::after{content:" ›"; opacity:.7}

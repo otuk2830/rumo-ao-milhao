@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.47';
+const APP_VERSION = '4.48';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -703,7 +703,9 @@ function breakHtml(B, title, sub) {
 async function dailySnap() {
   if (!DB || !DB.prices.updatedAt || Date.now() - new Date(DB.prices.updatedAt) > 2 * 3600 * 1000) return;   // only with fresh prices
   const P = portfolio(); if (!(P.total > 0)) return;
-  const e = { d: today(), v: Math.round(P.total * 100) / 100, g: DB.prices.gbpbrl || null, u: DB.prices.usdbrl || null, c: catNow(P), n: natNow(P) };
+  const e = { d: today(), v: Math.round(P.total * 100) / 100, g: DB.prices.gbpbrl || null, u: DB.prices.usdbrl || null, eu: DB.prices.eurbrl || null, c: catNow(P), n: natNow(P),
+    a: Object.fromEntries((DB.assets || []).filter((x) => priceOf(x) > 0).map((x) => [x.id, [priceOf(x), num(x.qty)]])),
+    k: Object.fromEntries(P.cs.coins.filter((x) => x.units).map((x) => [x.k, [num(DB.prices[x.k]), x.units]])) };
   const D = (DB.daily ||= []), last = D[D.length - 1];
   if (last && last.d === e.d) D[D.length - 1] = e; else D.push(e);
   await save();
@@ -1173,6 +1175,38 @@ function returnsData() {
   return { months, years: list, total, since: months[0]?.month || null };
 }
 
+// tap the "hoje" chip: what moved your money today (no exchange-rate effect)
+function todaySheet(CV) {
+  const P = portfolio(), pr = DB.prices, yest = [...(DB.daily || [])].filter((x) => x.d < today() && x.n).pop();
+  if (!yest) return toast('Precisa do valor de ontem — volte amanhã');
+  const now = { n: natNow(P), g: pr.gbpbrl, u: pr.usdbrl }, fl = flowsBetween(yest.d, today(), 'day').f, tot = localPeriod(yest, now, fl, false);
+  const blocks = Object.keys(BLK).map((k) => { const Va = num(yest.n[k]), Vb = num(now.n[k]), g = Vb - Va - num(fl[k]); return { k, n: BLK[k].n, r: Va ? g / Va : 0, v: g * rateOf(k, now.g, now.u) }; });
+  // movers: yesterday's quantity × price change, in R$ at today's rate (so the exchange rate doesn't count)
+  const mv = [];
+  for (const a of DB.assets || []) {
+    const y = yest.a?.[a.id], pt = priceOf(a); if (!y || !pt || !y[0]) continue;
+    const cur = curOf(a), v = y[1] * (pt - y[0]) * FXOF(cur); if (Math.abs(v) < 0.005) continue;
+    mv.push({ t: a.ticker, r: pt / y[0] - 1, v });
+  }
+  for (const c of P.cs.coins) {
+    if (!c.units) continue; const y = yest.k?.[c.k], pt = num(pr[c.k]);
+    if (y && y[0]) mv.push({ t: c.k, r: pt / y[0] - 1, v: y[1] * (pt - y[0]) * num(pr.usdbrl) });
+    else { const ch = pr[c.k + '_24h']; if (typeof ch === 'number') mv.push({ t: c.k, r: ch / 100, v: c.valUSD * (1 - 1 / (1 + ch / 100)) * num(pr.usdbrl), h24: true }); }
+  }
+  const mkt = mv.reduce((a, m) => a + m.v, 0), other = tot.gainR - mkt;
+  const dn = mv.filter((m) => m.v < 0).sort((a, b) => a.v - b.v).slice(0, 5), up = mv.filter((m) => m.v > 0).sort((a, b) => b.v - a.v).slice(0, 5);
+  const ln = (l, r, v, b = false) => `<div class="mc-row"><span>${l}</span><span style="text-align:right">${r !== null ? `<span class="${r < 0 ? 'neg' : 'pos'}">${signed(pct, r)}</span> · ` : ''}${b ? '<b' : '<span'} class="money ${v < 0 ? 'neg' : 'pos'}">${signed(CV, v)}${b ? '</b>' : '</span>'}</span></div>`;
+  const hasA = !!yest.a;
+  openSheet(`<div class="mc"><div class="mc-top"><div class="small muted">desde ${new Date(yest.d + 'T12:00').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' })} · sem câmbio</div><h3 style="margin:2px 0 0">Hoje</h3>
+      <div class="mc-big ${tot.gainR < 0 ? 'neg' : 'pos'} money">${signed(CV, tot.gainR)}</div><div style="font-weight:700" class="${tot.r < 0 ? 'neg' : 'pos'}">${signed(pct, tot.r)}</div></div>
+    <div class="small muted" style="margin:10px 0 2px;font-weight:700;letter-spacing:.03em">POR BLOCO</div>
+    ${blocks.map((b) => ln(b.n, b.r, b.v)).join('')}
+    ${hasA || mv.length ? `${dn.length ? `<div class="small muted" style="margin:14px 0 2px;font-weight:700;letter-spacing:.03em">MAIS PESARAM</div>${dn.map((m) => ln(m.t + (m.h24 ? ' <small class="muted">24h</small>' : ''), m.r, m.v)).join('')}` : ''}
+      ${up.length ? `<div class="small muted" style="margin:14px 0 2px;font-weight:700;letter-spacing:.03em">SUBIRAM</div>${up.map((m) => ln(m.t + (m.h24 ? ' <small class="muted">24h</small>' : ''), m.r, m.v)).join('')}` : ''}` : ''}
+    ${!hasA ? '<div class="small muted" style="margin-top:10px">A lista de cada ação e FII aparece a partir de amanhã (o app começou a guardar o preço de cada ativo hoje). Cripto já aparece pela variação de 24h.</div>' : ''}
+    ${hasA && Math.abs(other) >= 1 ? ln('Ajustes seus hoje <small class="muted">(saldos, quantidades, dividendos em caixa)</small>', null, other) : ''}
+    <button class="btn block" onclick="closeSheet()" style="margin-top:14px">Fechar</button></div>`);
+}
 function vPainel() {
   const P = portfolio(), st = historyStats(), pr = projections(P.total), ms = milestones(), s = DB.settings, cs = P.cs;
   const meta = num(s.meta), prog = meta ? Math.min(1, P.total / meta) : 0;
@@ -1288,6 +1322,7 @@ function vPainel() {
   { const r = $('#mrow'), k = ms.indexOf(nextMs); if (r && k > 0) r.scrollLeft = Math.max(0, (k - 2) * 70); }   // show the last 2 reached + the next one
   $('#cur-swap').onclick = (e) => { e.stopPropagation(); const nx = { BRL: 'GBP', GBP: 'USD', USD: 'BRL' }[heroCur]; try { localStorage.setItem('rumo.cur', nx); } catch {} render(); };
   $('#spark-tap') && ($('#spark-tap').onclick = (e) => { e.stopPropagation(); patSheet(); });
+  $('.dchip') && ($('.dchip').onclick = (e) => { e.stopPropagation(); todaySheet(CV); });
   $('#hero-tap').onclick = () => { try { localStorage.setItem('rumo.hero', heroOpen() ? '0' : '1'); } catch {} render(); };
   $('#k-perf').onclick = () => {
     if (!prevM) return;
