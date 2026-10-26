@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.52';
+const APP_VERSION = '4.53';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -619,6 +619,11 @@ async function fillMissingFx() {
     if (e.gFixed || e.date >= today()) continue;
     const rate = await fxOn(e.date); if (rate) { e.g = rate; e.gFixed = true; changed = true; }
   }
+  for (const h of DB.history.filter((x) => typeof x.pat === 'number' && !x.nat).slice(-4)) {   // recent months: both rates of the month's last day
+    if (h.fx && h.usd) continue; const [y, m] = h.month.split('-').map(Number), last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    if (!h.fx) { const g = await fxOn(last); if (g) { h.fx = g; h.fxAuto = true; changed = true; } }
+    if (!h.usd) { const u = await fxPair(last, 'USD'); if (u) { h.usd = u; changed = true; } }
+  }
   // still missing (offline or service down): use the nearest saved month's rate, so the month can be measured
   for (const h of DB.history) {
     if (h.fx || !num(h.aporteGBP)) continue;
@@ -651,28 +656,34 @@ function localPeriod(a, b, f, half) {
   }
   return { r: den ? num_ / den : 0, gainR: gainEnd };
 }
-function liveLocal(P) {
-  const now = { d: today(), n: natNow(P), g: DB.prices.gbpbrl, u: DB.prices.usdbrl }, start = ym() + '-01';
-  const D = (DB.daily || []).filter((x) => x.n && x.d < today()), base = [...D].filter((x) => x.d < start).pop();
-  if (base && (new Date(start) - new Date(base.d)) / 864e5 <= 7) {
-    const pts = [base, ...D.filter((x) => x.d >= start), now]; let f = 1, gR = 0;
-    for (let i = 1; i < pts.length; i++) { const L = localPeriod(pts[i - 1], pts[i], flowsBetween(pts[i - 1].d, pts[i].d, 'day').f, false); f *= 1 + L.r; gR += L.gainR; }
-    return { r: f - 1, gainR: gR };
-  }
-  const prev = DB.history.filter((h) => h.month < ym() && h.nat).slice(-1)[0];
-  if (!prev || ymDiff(prev.month, ym()) !== 1) return null;
-  const fl = flowsBetween(ym(), null, 'month'); const L = localPeriod({ n: prev.nat, g: prev.fx, u: prev.usd }, now, fl.f, true); return { r: L.r, gainR: L.gainR };
+// months imported from the spreadsheet have only the total: split it by the currency mix of the nearest daily snapshot, valued at that month's rates
+function estNat(pat, g, u, S) {
+  if (!S?.n || !(pat > 0) || !g || !u) return null;
+  const w = { brl: num(S.n.brl), gbp: num(S.n.gbp) * g, usd: num(S.n.usd) * u }, t = w.brl + w.gbp + w.usd; if (!t) return null;
+  return { brl: (pat * w.brl) / t, gbp: (pat * w.gbp) / t / g, usd: (pat * w.usd) / t / u };
 }
-function localMonth(month) {   // exact daily chain when snapshots allow, otherwise saved month vs saved month
-  const D = (DB.daily || []).filter((x) => x.n), start = month + '-01', base = [...D].filter((x) => x.d < start).pop();
-  const pts = base && (new Date(start) - new Date(base.d)) / 864e5 <= 7 ? [base, ...D.filter((x) => x.d.slice(0, 7) === month)] : null;
-  if (pts && pts.length >= 2) { let f = 1, gR = 0; for (let i = 1; i < pts.length; i++) { const L = localPeriod(pts[i - 1], pts[i], flowsBetween(pts[i - 1].d, pts[i].d, 'day').f, false); f *= 1 + L.r; gR += L.gainR; } return { r: f - 1, gainR: gR }; }
-  const H = DB.history, i = H.findIndex((h) => h.month === month), a = H[i - 1], h = H[i];
-  if (!h || !a || !h.nat || !a.nat || ymDiff(a.month, h.month) !== 1) return null;
+const chainLocal = (pts, halfFirst) => { let f = 1, gR = 0; for (let i = 1; i < pts.length; i++) { const L = localPeriod(pts[i - 1], pts[i], flowsBetween(pts[i - 1].d, pts[i].d, 'day').f, halfFirst && i === 1); f *= 1 + L.r; gR += L.gainR; } return { r: f - 1, gainR: gR }; };
+// return of a month without the exchange rate. now = live point for the current month (or null)
+function monthLocal(month, now) {
+  const D = (DB.daily || []).filter((x) => x.n && (!now || x.d < today())), start = month + '-01', base = [...D].filter((x) => x.d < start).pop();
+  const inM = D.filter((x) => x.d.slice(0, 7) === month), tail = now ? [...inM, now] : inM;
+  if (base && (new Date(start) - new Date(base.d)) / 864e5 <= 7 && tail.length) return chainLocal([base, ...tail], false);   // exact: daily chain
+  const H = DB.history, a = H.filter((h) => h.month < month && typeof h.pat === 'number').slice(-1)[0];
+  if (!a || ymDiff(a.month, month) !== 1) return null;
+  const aEnd = a.month + '-31';   // after any day of the month before
+  if (a.nat && tail.length) return chainLocal([{ d: aEnd, n: a.nat, g: a.fx, u: a.usd }, ...tail], true);
+  if (!a.nat && tail.length) {   // month before has only the total: estimate its split with the first snapshot of this month
+    const n = estNat(a.pat, a.fx, a.usd, tail[0]); if (n) return { ...chainLocal([{ d: aEnd, n, g: a.fx, u: a.usd }, ...tail], true), est: true };
+  }
+  const h = H.find((x) => x.month === month); if (!h || typeof h.pat !== 'number') return null;   // a past month with no snapshots inside
+  const S = D.find((x) => x.d > month + '-31' && (new Date(x.d) - new Date(start)) / 864e5 <= 75);
+  const nA = a.nat || estNat(a.pat, a.fx, a.usd, S), nH = h.nat || estNat(h.pat, h.fx, h.usd, S); if (!nA || !nH) return null;
   const fl = flowsBetween(month, null, 'month'); let f = fl.f;
   if (!fl.any) { if (h.aporteGBP === null || h.aporteGBP === undefined) return null; f = { brl: 0, gbp: num(h.aporteGBP), usd: 0 }; }   // typed aporte → Trading 212
-  const L = localPeriod({ n: a.nat, g: a.fx, u: a.usd }, { n: h.nat, g: h.fx, u: h.usd }, f, true); return { r: L.r, gainR: L.gainR };
+  const L = localPeriod({ n: nA, g: a.fx, u: a.usd }, { n: nH, g: h.fx, u: h.usd }, f, true); return { r: L.r, gainR: L.gainR, est: !(a.nat && h.nat) };
 }
+function liveLocal(P) { return monthLocal(ym(), { d: today(), n: natNow(P), g: DB.prices.gbpbrl, u: DB.prices.usdbrl }); }
+function localMonth(month) { return monthLocal(month, null); }
 const catNow = (P) => { const o = {}; for (const k in P.v) o[k] = Math.round(P.v[k] * 100) / 100; o.caixa = Math.round(num(DB.balances.caixa) * 100) / 100; return o; };
 // "where did the growth come from": total change − aportes = real growth; split into dividends + price/FX, and by category when both ends have it
 function growthBreak(from, to, apBRLv, divBRL, loc) {
