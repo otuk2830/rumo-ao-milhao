@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.48';
+const APP_VERSION = '4.49';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1175,37 +1175,38 @@ function returnsData() {
   return { months, years: list, total, since: months[0]?.month || null };
 }
 
-// tap the "hoje" chip: what moved your money today (no exchange-rate effect)
+// tap the "hoje" chip: what moved your money today, by category (no exchange-rate effect); tap a category to see its assets
 function todaySheet(CV) {
   const P = portfolio(), pr = DB.prices, yest = [...(DB.daily || [])].filter((x) => x.d < today() && x.n).pop();
   if (!yest) return toast('Precisa do valor de ontem — volte amanhã');
   const now = { n: natNow(P), g: pr.gbpbrl, u: pr.usdbrl }, fl = flowsBetween(yest.d, today(), 'day').f, tot = localPeriod(yest, now, fl, false);
-  const blocks = Object.keys(BLK).map((k) => { const Va = num(yest.n[k]), Vb = num(now.n[k]), g = Vb - Va - num(fl[k]); return { k, n: BLK[k].n, r: Va ? g / Va : 0, v: g * rateOf(k, now.g, now.u) }; });
-  // movers: yesterday's quantity × price change, in R$ at today's rate (so the exchange rate doesn't count)
-  const mv = [];
-  for (const a of DB.assets || []) {
+  const CATS = [['acoes', 'Ações'], ['fiis', 'FIIs'], ['Stock', 'Stocks'], ['REIT', 'REITs'], ['ETF', 'ETFs'], ['crypto', 'Cripto']];
+  const G = Object.fromEntries(CATS.map(([k, n]) => [k, { n, v: 0, base: 0, items: [] }]));
+  for (const a of DB.assets || []) {   // yesterday's quantity × price change, in R$ at today's rate (so the exchange rate doesn't count)
     const y = yest.a?.[a.id], pt = priceOf(a); if (!y || !pt || !y[0]) continue;
-    const cur = curOf(a), v = y[1] * (pt - y[0]) * FXOF(cur); if (Math.abs(v) < 0.005) continue;
-    mv.push({ t: a.ticker, r: pt / y[0] - 1, v });
+    const fx = FXOF(curOf(a)), v = y[1] * (pt - y[0]) * fx, k = a.cls === 'stocks' ? a.kind || 'Stock' : a.cls; if (!G[k]) continue;
+    G[k].v += v; G[k].base += y[1] * y[0] * fx; if (Math.abs(v) >= 0.005) G[k].items.push({ t: a.ticker, r: pt / y[0] - 1, v });
   }
   for (const c of P.cs.coins) {
-    if (!c.units) continue; const y = yest.k?.[c.k], pt = num(pr[c.k]);
-    if (y && y[0]) mv.push({ t: c.k, r: pt / y[0] - 1, v: y[1] * (pt - y[0]) * num(pr.usdbrl) });
-    else { const ch = pr[c.k + '_24h']; if (typeof ch === 'number') mv.push({ t: c.k, r: ch / 100, v: c.valUSD * (1 - 1 / (1 + ch / 100)) * num(pr.usdbrl), h24: true }); }
+    if (!c.units) continue; const y = yest.k?.[c.k], pt = num(pr[c.k]), u = num(pr.usdbrl); let r, v, base;
+    if (y && y[0]) { r = pt / y[0] - 1; v = y[1] * (pt - y[0]) * u; base = y[1] * y[0] * u; }
+    else { const ch = pr[c.k + '_24h']; if (typeof ch !== 'number') continue; r = ch / 100; base = (c.valUSD / (1 + r)) * u; v = c.valUSD * u - base; }
+    G.crypto.v += v; G.crypto.base += base; if (Math.abs(v) >= 0.005) G.crypto.items.push({ t: c.k, r, v });
   }
-  const mkt = mv.reduce((a, m) => a + m.v, 0), other = tot.gainR - mkt;
-  const dn = mv.filter((m) => m.v < 0).sort((a, b) => a.v - b.v).slice(0, 5), up = mv.filter((m) => m.v > 0).sort((a, b) => b.v - a.v).slice(0, 5);
-  const ln = (l, r, v, b = false) => `<div class="mc-row"><span>${l}</span><span style="text-align:right">${r !== null ? `<span class="${r < 0 ? 'neg' : 'pos'}">${signed(pct, r)}</span> · ` : ''}${b ? '<b' : '<span'} class="money ${v < 0 ? 'neg' : 'pos'}">${signed(CV, v)}${b ? '</b>' : '</span>'}</span></div>`;
-  const hasA = !!yest.a;
+  const list = CATS.map(([k]) => ({ k, ...G[k] })).filter((g) => g.base > 0 || g.items.length);
+  const mkt = list.reduce((a, g) => a + g.v, 0), other = tot.gainR - mkt;
+  const amt = (v) => `<span class="money ${v < 0 ? 'neg' : v > 0 ? 'pos' : ''}">${signed(CV, v)}</span>`;
+  const catRow = (g) => `<div class="tc click" data-c="${g.k}"><div class="mc-row" style="border:0"><span><span class="tc-ch">▸</span> ${g.n}</span><span style="text-align:right">${g.base ? `<span class="${g.v < 0 ? 'neg' : g.v > 0 ? 'pos' : ''}">${signed(pct, g.v / g.base)}</span> · ` : ''}${amt(g.v)}</span></div>
+      <div class="tc-items hidden">${g.items.sort((a, b) => a.v - b.v).map((m) => `<div class="tc-i"><span>${esc(m.t)}</span><span><span class="${m.r < 0 ? 'neg' : 'pos'}">${signed(pct, m.r)}</span> · ${amt(m.v)}</span></div>`).join('') || '<div class="tc-i muted">sem variação</div>'}</div></div>`;
   openSheet(`<div class="mc"><div class="mc-top"><div class="small muted">desde ${new Date(yest.d + 'T12:00').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' })} · sem câmbio</div><h3 style="margin:2px 0 0">Hoje</h3>
       <div class="mc-big ${tot.gainR < 0 ? 'neg' : 'pos'} money">${signed(CV, tot.gainR)}</div><div style="font-weight:700" class="${tot.r < 0 ? 'neg' : 'pos'}">${signed(pct, tot.r)}</div></div>
-    <div class="small muted" style="margin:10px 0 2px;font-weight:700;letter-spacing:.03em">POR BLOCO</div>
-    ${blocks.map((b) => ln(b.n, b.r, b.v)).join('')}
-    ${hasA || mv.length ? `${dn.length ? `<div class="small muted" style="margin:14px 0 2px;font-weight:700;letter-spacing:.03em">MAIS PESARAM</div>${dn.map((m) => ln(m.t + (m.h24 ? ' <small class="muted">24h</small>' : ''), m.r, m.v)).join('')}` : ''}
-      ${up.length ? `<div class="small muted" style="margin:14px 0 2px;font-weight:700;letter-spacing:.03em">SUBIRAM</div>${up.map((m) => ln(m.t + (m.h24 ? ' <small class="muted">24h</small>' : ''), m.r, m.v)).join('')}` : ''}` : ''}
-    ${!hasA ? '<div class="small muted" style="margin-top:10px">A lista de cada ação e FII aparece a partir de amanhã (o app começou a guardar o preço de cada ativo hoje). Cripto já aparece pela variação de 24h.</div>' : ''}
-    ${hasA && Math.abs(other) >= 1 ? ln('Ajustes seus hoje <small class="muted">(saldos, quantidades, dividendos em caixa)</small>', null, other) : ''}
-    <button class="btn block" onclick="closeSheet()" style="margin-top:14px">Fechar</button></div>`);
+    <div class="small muted" style="margin:10px 0 2px;font-weight:700;letter-spacing:.03em">POR CATEGORIA <span style="font-weight:500;letter-spacing:0">· toque para ver os ativos</span></div>
+    ${list.map(catRow).join('')}
+    ${!yest.a ? '<div class="small muted" style="margin-top:10px">Ações, FIIs e Exterior aparecem a partir de amanhã (o app começou a guardar o preço de cada ativo hoje).</div>' : ''}
+    ${Math.abs(other) >= 1 ? `<div class="mc-row"><span>Ajustes seus hoje <small class="muted">(saldos, quantidades, dividendos em caixa)</small></span>${amt(other)}</div>` : ''}
+    <button class="btn block" onclick="closeSheet()" style="margin-top:14px">Fechar</button></div>`, (el) => {
+    $$('.tc', el).forEach((t) => (t.onclick = () => { const it = $('.tc-items', t), open = it.classList.toggle('hidden') === false; $('.tc-ch', t).textContent = open ? '▾' : '▸'; }));
+  });
 }
 function vPainel() {
   const P = portfolio(), st = historyStats(), pr = projections(P.total), ms = milestones(), s = DB.settings, cs = P.cs;

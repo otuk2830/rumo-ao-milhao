@@ -361,3 +361,6 @@ html, body{min-height:100%}
 main{min-height:calc(100vh - 70px); min-height:calc(100dvh - 70px); box-sizing:border-box}
 .tabs{transform:translateZ(0)}
 .dchip{cursor:pointer} .dchip::after{content:" ›"; opacity:.7}
+.tc{border-bottom:1px solid var(--line)} .tc:active{opacity:.75}
+.tc-ch{display:inline-block; width:14px; color:var(--muted)}
+.tc-items{padding:0 0 8px 20px} .tc-i{display:flex; justify-content:space-between; font-size:13px; padding:5px 0; color:var(--muted)}
