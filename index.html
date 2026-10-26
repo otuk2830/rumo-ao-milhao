@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="icon-192.png">
-<link rel="stylesheet" href="app.css?v=4.49">
+<link rel="stylesheet" href="app.css?v=4.52">
 <script>/* theme before paint (not sensitive, kept outside the encrypted data) */
 (function(){var t='auto';try{t=localStorage.getItem('rumo.theme')||'auto'}catch(e){}
 var d=t==='dark'||(t==='auto'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);try{if(localStorage.getItem('rumo.hide')==='1')document.documentElement.classList.add('priv')}catch(e){}})();</script>
@@ -50,10 +50,10 @@ var d=t==='dark'||(t==='auto'&&matchMedia('(prefers-color-scheme: dark)').matche
       <div class="top-sub" id="top-sub"></div>
     </div>
     <div class="top-actions">
-      <button class="icon-btn" id="btn-refresh" aria-label="Atualizar preços">⟳</button>
+      <button class="icon-btn" id="btn-refresh" aria-label="Atualizar preços"><svg class="ic-spin" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <button class="icon-btn" id="btn-eye" aria-label="Esconder valores"></button>
-      <button class="icon-btn" id="btn-lock" aria-label="Bloquear">🔒</button>
-      <button class="icon-btn" id="btn-settings" aria-label="Ajustes">⚙︎</button>
+      <button class="icon-btn" id="btn-lock" aria-label="Bloquear"><svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+      <button class="icon-btn" id="btn-settings" aria-label="Ajustes"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></button>
     </div>
   </header>
   <main id="view"></main>
@@ -70,6 +70,6 @@ var d=t==='dark'||(t==='auto'&&matchMedia('(prefers-color-scheme: dark)').matche
 <div id="toast" class="toast hidden"></div>
 <input type="file" id="file-in" accept=".json,application/json" class="hidden">
 
-<script src="app.js?v=4.49"></script>
+<script src="app.js?v=4.52"></script>
 </body>
 </html>

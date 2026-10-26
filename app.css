@@ -364,3 +364,11 @@ main{min-height:calc(100vh - 70px); min-height:calc(100dvh - 70px); box-sizing:b
 .tc{border-bottom:1px solid var(--line)} .tc:active{opacity:.75}
 .tc-ch{display:inline-block; width:14px; color:var(--muted)}
 .tc-items{padding:0 0 8px 20px} .tc-i{display:flex; justify-content:space-between; font-size:13px; padding:5px 0; color:var(--muted)}
+
+/* v4.52 — header icons the same size and centred; the refresh arrow spins on its own centre */
+.icon-btn{display:inline-flex; align-items:center; justify-content:center; padding:0; line-height:1}
+.icon-btn svg{display:block}
+.icon-btn.spin{animation:none}
+.icon-btn.spin .ic-spin{animation:rumo-spin .7s linear infinite; transform-origin:50% 50%}
+.alloc-row{grid-template-columns:86px minmax(0,1fr) 54px 64px}
+.hero-list div{grid-template-columns:minmax(0,1fr) auto 54px}
