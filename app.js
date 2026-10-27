@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.56';
+const APP_VERSION = '4.58';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -253,7 +253,18 @@ async function refreshPrices(silent) {
 async function refreshPricesNow(silent) {
   if (!navigator.onLine) { if (!silent) toast('Sem internet — usando os últimos preços salvos'); return false; }
   const p = DB.prices; let ok = 0;
-  const assetsP = refreshAssetPrices(!silent).catch((e) => { console.warn('assets', e); return null; });   // shares run at the same time as crypto + FX
+  const assetsP = refreshAssetPrices(!silent).catch((e) => { console.warn('assets', e); return null; });
+  // live exchange rates from the Google Sheet (rows CURRENCY:GBPBRL, CURRENCY:USDBRL, CURRENCY:EURBRL), at most every 10 min
+  // live exchange rates with no setup: AwesomeAPI (Brazil) first, Coinbase second
+  const liveFxP = navigator.onLine ? (async () => {
+    try { const j = await fetchJSON('https://economia.awesomeapi.com.br/json/last/GBP-BRL,USD-BRL,EUR-BRL');
+      const g = parseFloat(j?.GBPBRL?.bid), u = parseFloat(j?.USDBRL?.bid), e = parseFloat(j?.EURBRL?.bid); if (g > 0 && u > 0) return { g, u, e: e > 0 ? e : null, src: 'ao vivo' }; } catch (e) { console.warn('fx awesome', e); }
+    try { const j = await fetchJSON('https://api.coinbase.com/v2/exchange-rates?currency=GBP'), r = j?.data?.rates || {};
+      const g = parseFloat(r.BRL), us = parseFloat(r.USD), eu = parseFloat(r.EUR); if (g > 0 && us > 0) return { g, u: g / us, e: eu > 0 ? g / eu : null, src: 'ao vivo' }; } catch (e) { console.warn('fx coinbase', e); }
+    return null; })() : null;
+  const ks = DB.settings.keys || {}, sfOld = !p.sheetFx || Date.now() - new Date(p.sheetFx.at) > 10 * 60 * 1000;
+  const sheetFxP = ks.sheet && sfOld && navigator.onLine ? (async () => { const keep = LASTERR.sheet; const q = await sheetQuotes(FX_SHEET, ks.sheet); LASTERR.sheet = keep;
+    if (q[FX_SHEET[0]]) p.sheetFx = { g: q[FX_SHEET[0]], u: q[FX_SHEET[1]] || null, e: q[FX_SHEET[2]] || null, at: new Date().toISOString() }; })().catch(() => null) : null;   // shares run at the same time as crypto + FX
   try {
     const j = await fetchJSON('https://api.coingecko.com/api/v3/simple/price?ids=' + COINS.map((c) => c.id).join(',') + '&vs_currencies=usd&include_24hr_change=true');
     for (const c of COINS) if (j[c.id]?.usd) { p[c.k] = j[c.id].usd; p[c.k + '_24h'] = j[c.id].usd_24h_change ?? null; ok++; }
@@ -269,7 +280,15 @@ async function refreshPricesNow(silent) {
       if (j.rates?.BRL && j.rates?.USD) { p.gbpbrl = j.rates.BRL; p.usdbrl = j.rates.BRL / j.rates.USD; if (j.rates.EUR) p.eurbrl = j.rates.BRL / j.rates.EUR; fx = true; }
     } catch (e) { console.warn('fx er-api', e); }
   }
-  const ar = await assetsP;
+  const ar = await assetsP; await sheetFxP; const lv = await liveFxP;
+  // live rate first (moves during the day); the ECB rate is set once a day and stays as the backup and sanity check
+  const near = (a, b) => !b || (a / b > 0.8 && a / b < 1.25);
+  const sf = lv && near(lv.g, fx ? p.gbpbrl : null) ? { ...lv, at: new Date().toISOString() } : p.sheetFx;
+  if (sf && sf.g && Date.now() - new Date(sf.at) < 40 * 60 * 1000 && near(sf.g, fx ? p.gbpbrl : null)) {
+    const ecbG = p.gbpbrl, ecbU = p.usdbrl; p.gbpbrl = sf.g;
+    p.usdbrl = sf.u && near(sf.u, ecbU) ? sf.u : ecbU && ecbG ? ecbU * (sf.g / ecbG) : p.usdbrl;
+    if (sf.e && near(sf.e, p.eurbrl)) p.eurbrl = sf.e; p.fxSrc = 'planilha'; p.fxAt = sf.at; fx = true;
+  } else if (fx) p.fxSrc = 'BCE';
   if (ok || fx || ar) {
     p.updatedAt = new Date().toISOString(); await save(); render(); dailySnap();
     if (!silent) toast(ok === COINS.length && fx ? 'Preços atualizados' : 'Alguns preços não atualizaram — confira em Atualizar');
@@ -913,6 +932,7 @@ function sheetNum(v) {
   else v = v.replace(',', '.');
   const n = Number(v); return n > 0 ? n : null;
 }
+const FX_SHEET = ['CURRENCY:GBPBRL', 'CURRENCY:USDBRL', 'CURRENCY:EURBRL'];
 async function sheetQuotes(syms, link) {
   const got = {}, url = sheetCsvUrl(link);
   if (!url) { LASTERR.sheet = 'link inválido — copie o link do botão Compartilhar'; return got; }
@@ -1584,7 +1604,7 @@ function vAtualizar() {
        ${au.stocks ? calcRow('Exterior (Trading 212)', 'stocks') : `${balRow('Pie Stocks (£)', 'pieStocks', b.pieStocks, brl(b.pieStocks * p.gbpbrl))}${balRow('Pie REITs (£)', 'pieReits', b.pieReits, brl(b.pieReits * p.gbpbrl))}${balRow("Pie ETF's (£)", 'pieEtfs', b.pieEtfs, brl(b.pieEtfs * p.gbpbrl))}`}
        <div class="small muted" style="margin-top:8px">Comprou ou vendeu algo? Ajuste a quantidade em Ativos (“Comprei mais”).</div>
        ${nonAuto.length ? '<button class="btn block" id="f-cls-ok" style="margin-top:8px">✓ Pronto — nada mudou</button>' : ''}`)}
-    ${stepH(5, s5, true, 'Câmbio, cripto e preços', s5 ? `£1 = R$ ${nf2.format(p.gbpbrl || 0)} · BTC ${usd(p.BTC)} · ${fmtDate(p.updatedAt).split(' ')[1] || ''}` : '<span class="warn">preços antigos — toque para buscar</span>',
+    ${stepH(5, s5, true, 'Câmbio, cripto e preços', s5 ? `£1 = R$ ${nf2.format(p.gbpbrl || 0)}${p.fxSrc ? ` <small>(${p.fxSrc === 'planilha' ? 'ao vivo' : 'BCE'})</small>` : ''} · BTC ${usd(p.BTC)} · ${fmtDate(p.updatedAt).split(' ')[1] || ''}` : '<span class="warn">preços antigos — toque para buscar</span>',
       `<div id="fx-box" class="${FXEDIT ? '' : 'locked'}">
        ${fieldRow('Libra → Real (GBP/BRL)', 'p.gbpbrl', p.gbpbrl)}
        ${fieldRow('Dólar → Real (USD/BRL)', 'p.usdbrl', p.usdbrl)}
@@ -1989,7 +2009,7 @@ function vAjustes() {
   $('#a-theme').onclick = () => openSheet(`<h3>Tema</h3>${[['auto', 'Automático (igual ao iPhone)'], ['light', 'Claro'], ['dark', 'Escuro']].map(([v, l]) => `<button class="btn block ${getTheme() === v ? 'primary' : ''}" data-th="${v}">${l}</button>`).join('')}`, (el) => $$('[data-th]', el).forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.theme', b.dataset.th); } catch {} applyTheme(); closeSheet(); render(); })));
   $('#a-priv').onclick = () => openSheet(`<h3>Privacidade</h3><div class="small" style="line-height:1.6">
      • Nenhum dado seu sai do aparelho. Ficam guardados criptografados (AES-256) com o seu PIN.<br>
-     • A internet só é usada para buscar preços: CoinGecko (cripto), Frankfurter/BCE e open.er-api (câmbio), Google Sheets, brapi, Finnhub e Alpha Vantage (ações e FIIs). Eles recebem apenas os tickers, nunca quantidades ou valores.<br>
+     • A internet só é usada para buscar preços: CoinGecko (cripto), AwesomeAPI, Coinbase, Frankfurter/BCE e open.er-api (câmbio), Google Sheets, brapi, Finnhub e Alpha Vantage (ações e FIIs). Eles recebem apenas os tickers, nunca quantidades ou valores.<br>
      • ${getMeta()?.open ? 'O app está sem PIN (abre direto).' : 'O app trava sozinho após 2 minutos fora da tela.'}<br>
      • Face ID usa uma chave de acesso (passkey) do iPhone.<br>
      • O backup é um arquivo criptografado com senha. O Excel NÃO é criptografado.</div><button class="btn block" onclick="closeSheet()" style="margin-top:12px">Fechar</button>`);
