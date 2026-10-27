@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.55';
+const APP_VERSION = '4.56';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1120,8 +1120,11 @@ function editAsset(id, cls) {
 const TITLES = { painel: 'Painel', graficos: 'Gráficos', atualizar: 'Atualizar', historico: 'Histórico', dividendos: 'Dividendos', cripto: 'Cripto', ativos: 'Ativos', ajustes: 'Ajustes' };
 function route() { return (location.hash || '#painel').slice(1); }
 window.addEventListener('hashchange', () => { if (DB) render(); window.scrollTo(0, 0); });
+let RENDER_WAIT = false;
 function render() {
   if (!DB) return;
+  const ae = document.activeElement;
+  if (ae && ae.matches && ae.matches('#view input[data-k]')) { if (!RENDER_WAIT) { RENDER_WAIT = true; ae.addEventListener('blur', () => { RENDER_WAIT = false; setTimeout(render, 0); }, { once: true }); } return; }
   setTimeout(() => $$('#view input[data-k]').forEach(liveFormat), 0);
   $('#btn-lock').classList.toggle('hidden', !!getMeta()?.open);
   charts.forEach((c) => c.destroy()); charts = [];
@@ -1592,7 +1595,7 @@ function vAtualizar() {
    </div>
    <div class="card">
      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><span class="lab">Patrimônio de ${MONTHS[Number(d.month.slice(5)) - 1]}</span><b id="f-total" class="at-tot">${brl(P.total)}</b></div>
-     <div class="small muted" style="margin:4px 0 12px">${P.alloc.map((a) => a.n + ' ' + brl(a.v)).join(' · ')} · Caixa ${brl(num(b.caixa))}</div>
+     <div class="small muted" id="f-cats" style="margin:4px 0 12px">${P.alloc.map((a) => a.n + ' ' + brl(a.v)).join(' · ')} · Caixa ${brl(num(b.caixa))}</div>
      <button class="btn primary block" id="f-save">Salvar ${MONTHS[Number(d.month.slice(5)) - 1]} no Histórico</button>
      <div class="small muted" style="text-align:center;margin-top:8px">Pode salvar quantas vezes quiser — vale o último.</div>
    </div>
@@ -1611,6 +1614,17 @@ function vAtualizar() {
     DB.draft = { month: m, divFII: h?.divFII ?? null, divAcoes: h?.divAcoes ?? null, divStocks: h?.divStocks ?? null, aporteGBP: h?.aporteGBP ?? null };
     applyDivLog(m); applyApLog(m); ATU.open = undefined; await save(); render();
   });
+  // live: every key typed updates the value, the totals on this page and is saved a moment later
+  let saveT = null;
+  const liveTotals = () => { const P3 = portfolio(); $('#f-total') && ($('#f-total').textContent = brl(P3.total));
+    $('#f-cats') && ($('#f-cats').textContent = P3.alloc.map((a) => a.n + ' ' + brl(a.v)).join(' · ') + ' · Caixa ' + brl(num(DB.balances.caixa)));
+    const gb = (k) => num(DB.balances[k]) * num(DB.prices.gbpbrl);
+    for (const k of ['t212cash', 'pieStocks', 'pieReits', 'pieEtfs']) { const c = $(`[data-calc="b.${k}"]`); if (c) c.textContent = brl(gb(k)); } };
+  $$('#view input[data-k]').forEach((inp) => inp.addEventListener('input', () => {
+    const [grp, key] = inp.dataset.k.split('.'); if (grp !== 'b') return; const v = parsePT(inp.value);
+    DB.balances[key] = v ?? 0; balAt[key] = new Date().toISOString(); liveTotals();
+    clearTimeout(saveT); saveT = setTimeout(() => save(), 700);
+  }));
   $$('#view input[data-k]').forEach((inp) => inp.addEventListener('change', async () => {
     const [grp, key] = inp.dataset.k.split('.'); const v = parsePT(inp.value);
     const target = grp === 'p' ? DB.prices : grp === 'b' ? DB.balances : DB.draft;
