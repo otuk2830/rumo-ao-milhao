@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.53';
+const APP_VERSION = '4.54';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -540,18 +540,24 @@ function applyApLog(month) {
 const lastAp = () => [...(DB.apLog || [])].sort((a, b) => (a.at || a.date).localeCompare(b.at || b.date)).pop() || null;
 function editAp(id) {
   const x = id ? DB.apLog.find((e) => e.id === id) : { id: uid(), gbp: null, date: today(), note: '' };
-  openSheet(`<h3>${id ? 'Editar aporte' : 'Fiz um aporte'}</h3>
-    <div class="small muted" style="margin-bottom:8px">Dinheiro NOVO que entrou nos investimentos. Para uma retirada, use um valor negativo (ex.: -200).</div>
-    <div class="field"><label>Valor (£)</label><input id="ap-v" class="pt" inputmode="decimal" value="${fmtN(x.gbp, 2)}"></div>
+  let out = num(x.gbp) < 0;
+  openSheet(`<h3 id="ap-h">${id ? (out ? 'Editar retirada' : 'Editar aporte') : 'Fiz um aporte'}</h3>
+    <div class="seg ap-seg" style="margin:4px 0 10px"><button data-k="in" class="${out ? '' : 'on'}">Aporte</button><button data-k="out" class="${out ? 'on' : ''}">Retirada</button></div>
+    <div class="small muted" style="margin-bottom:8px" id="ap-hint"></div>
+    <div class="field"><label>Valor (£)</label><input id="ap-v" class="pt" inputmode="decimal" value="${x.gbp === null || x.gbp === undefined ? '' : fmtN(Math.abs(x.gbp), 2)}"></div>
     <div class="field"><label>Data</label><input type="date" id="ap-d" value="${x.date}"></div>
-    <div class="field"><label>Para onde foi</label><select id="ap-to">${Object.entries(BLK).map(([k, v]) => `<option value="${k}" ${(x.dest || 'gbp') === k ? 'selected' : ''}>${v.n} (${v.cur})</option>`).join('')}</select></div>
+    <div class="field"><label id="ap-to-l">Para onde foi</label><select id="ap-to">${Object.entries(BLK).map(([k, v]) => `<option value="${k}" ${(x.dest || 'gbp') === k ? 'selected' : ''}>${v.n} (${v.cur})</option>`).join('')}</select></div>
     <div class="field"><label>Nota<small>opcional</small></label><input id="ap-n" value="${esc(x.note || '')}" style="text-align:left" placeholder="ex.: salário"></div>
     <button class="btn primary block" id="ap-save">Salvar</button>
     ${id ? '<button class="btn danger block" id="ap-del">Apagar</button>' : ''}
     <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
     $$('input.pt', el).forEach(liveFormat); if (!id) setTimeout(() => $('#ap-v', el).focus(), 250);
+    const mode = () => { $$('.ap-seg button', el).forEach((b) => b.classList.toggle('on', (b.dataset.k === 'out') === out));
+      $('#ap-hint', el).textContent = out ? 'Dinheiro que você TIROU dos investimentos. Depois atualize o saldo de onde saiu.' : 'Dinheiro NOVO que entrou nos investimentos.';
+      $('#ap-to-l', el).textContent = out ? 'De onde saiu' : 'Para onde foi'; if (!id) $('#ap-h', el).textContent = out ? 'Fiz uma retirada' : 'Fiz um aporte'; };
+    $$('.ap-seg button', el).forEach((b) => (b.onclick = () => { out = b.dataset.k === 'out'; mode(); })); mode();
     $('#ap-save', el).onclick = async () => {
-      const raw = $('#ap-v', el).value.trim(), neg = raw.startsWith('-'), v = parsePT(raw.replace(/^-/, ''));
+      const raw = $('#ap-v', el).value.trim(), neg = out || raw.startsWith('-'), v = parsePT(raw.replace(/^-/, ''));
       if (!v) return toast('Digite o valor');
       const o = { ...x, gbp: neg ? -v : v, date: $('#ap-d', el).value || today(), dest: $('#ap-to', el).value, note: $('#ap-n', el).value.trim(), at: new Date().toISOString(), g: DB.prices.gbpbrl };
       const m = o.date.slice(0, 7), first = !(DB.apLog || []).some((e) => e.id !== o.id && e.date.slice(0, 7) === m);
@@ -566,17 +572,25 @@ function editAp(id) {
       await save(); closeSheet(); render(); fillMissingFx();
       toast(`✓ Aporte de ${gbp(o.gbp, 2)} em ${new Date(o.date + 'T12:00').toLocaleDateString('pt-BR')} — atualize hoje os saldos/quantidades que mudaram`, 5000);
     };
-    if (id) $('#ap-del', el).onclick = async () => {
-      if (!(await ask('Apagar este aporte?', { yes: 'Sim, apagar', danger: true }))) return;
-      const m = x.date.slice(0, 7); DB.apLog = DB.apLog.filter((e) => e.id !== id);
-      if (apSum(m) === null) { if (DB.draft.month === m) DB.draft.aporteGBP = 0; const h = DB.history.find((q) => q.month === m); if (h) h.aporteGBP = 0; } else applyApLog(m);   // no entries left = £0 that month
-      await save(); closeSheet(); render();
-    };
+    if (id) $('#ap-del', el).onclick = async () => { if (await delAp(id)) { closeSheet(); render(); } };
+  });
+}
+async function delAp(id) {
+  const x = DB.apLog.find((e) => e.id === id); if (!x) return false;
+  if (!(await ask(`Apagar ${x.gbp < 0 ? 'esta retirada' : 'este aporte'} de ${gbp(Math.abs(x.gbp), 2)} (${new Date(x.date + 'T12:00').toLocaleDateString('pt-BR')})?`, { yes: 'Sim, apagar', danger: true }))) return false;
+  const m = x.date.slice(0, 7); DB.apLog = DB.apLog.filter((e) => e.id !== id);
+  if (apSum(m) === null) { if (DB.draft.month === m) DB.draft.aporteGBP = 0; const h = DB.history.find((q) => q.month === m); if (h) h.aporteGBP = 0; } else applyApLog(m);   // no entries left = £0 that month
+  await save(); return true;
+}
+function openApList() {
+  openSheet(`<h3>Aportes e retiradas</h3><div class="small muted" style="margin-bottom:6px">Toque para editar · × para apagar</div>${apList()}<button class="btn block" onclick="closeSheet()" style="margin-top:10px">Fechar</button>`, (el) => {
+    $$('[data-ap]', el).forEach((x) => (x.onclick = () => editAp(x.dataset.ap)));
+    $$('[data-apx]', el).forEach((b) => (b.onclick = async (e) => { e.stopPropagation(); if (await delAp(b.dataset.apx)) { render(); openApList(); } }));
   });
 }
 function apList() {
   const L = [...(DB.apLog || [])].sort((a, b) => b.date.localeCompare(a.date));
-  return L.length ? L.map((e) => `<div class="item click" data-ap="${e.id}"><div><div class="t">${new Date(e.date + 'T12:00').toLocaleDateString('pt-BR')}</div><div class="s">${e.note ? esc(e.note) : 'aporte'}</div></div><div class="r"><div class="t ${e.gbp < 0 ? 'neg' : ''}">${gbp(e.gbp, 2)}</div><div class="s">${brl(apBRL(e))}</div></div></div>`).join('') : '<p class="muted small">Nenhum aporte lançado ainda.</p>';
+  return L.length ? L.map((e) => `<div class="item click" data-ap="${e.id}"><div><div class="t">${new Date(e.date + 'T12:00').toLocaleDateString('pt-BR')}</div><div class="s">${e.note ? esc(e.note) : e.gbp < 0 ? 'retirada' : 'aporte'} · ${BLK[e.dest || 'gbp'].n}</div></div><div class="r" style="display:flex;align-items:center;gap:10px"><div><div class="t ${e.gbp < 0 ? 'neg' : ''}">${gbp(e.gbp, 2)}</div><div class="s">${brl(apBRL(e))}</div></div><button class="apx" data-apx="${e.id}" aria-label="Apagar">×</button></div></div>`).join('') : '<p class="muted small">Nenhum aporte lançado ainda.</p>';
 }
 // daily chained return for a month: needs a snapshot from the last days of the month before
 function dailyMonth(month) {
@@ -1287,6 +1301,7 @@ function vPainel() {
       <div class="lab" style="display:flex;justify-content:space-between;align-items:center">Patrimônio hoje <span style="display:flex;gap:10px;align-items:center"><button class="cur-swap" id="cur-swap" aria-label="Trocar moeda">⇄ ${heroCur === 'BRL' ? 'R$' : heroCur === 'GBP' ? '£' : 'US$'}</button><span class="chev">${heroOpen() ? '▴' : '▾'}</span></span></div>
       <div class="val">${HM[heroCur](P.total)}</div>
       ${dLoc ? `<span class="dchip ${dChg < 0 ? 'neg' : 'pos'}">${dChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(dChg))}</span> hoje · ${signed(pctS, dLoc.r)}</span>` : ''}
+      ${prevM ? `<div class="mline">este mês <b class="money ${mChg < 0 ? 'neg' : 'pos'}">${signed(CV, mChg)}</b>${apNowGBP ? ` <span class="muted">· inclui ${apNowGBP < 0 ? 'retirada' : 'aporte'} de <span class="money">${gbp(Math.abs(apNowGBP))}</span></span>` : ''}</div>` : ''}
       <div class="sub">${['BRL', 'GBP', 'USD'].filter((c) => c !== heroCur).map((c) => HM[c](P.total)).join(' · ')}</div>
       <div id="spark-tap">${spark}</div>
       ${heroOpen() ? `<div class="hero-list">${[...P.alloc.map((a) => [a.n, a.v, a.c]), ['Caixa', num(DB.balances.caixa), '#94A3B8']].map(([n, v, c]) =>
@@ -1586,7 +1601,7 @@ function vAtualizar() {
   $('#f-div0') && ($('#f-div0').onclick = async () => { d.divOk = true; await save(); ATU.open = 0; render(); });
   $('#f-div') && ($('#f-div').onclick = () => editDiv(null));
   $('#f-ap') && ($('#f-ap').onclick = () => editAp(null));
-  $('#f-ap-all') && ($('#f-ap-all').onclick = (e) => { e.preventDefault(); openSheet(`<h3>Aportes</h3>${apList()}<button class="btn block" onclick="closeSheet()" style="margin-top:10px">Fechar</button>`, (el) => $$('[data-ap]', el).forEach((x) => (x.onclick = () => editAp(x.dataset.ap)))); });
+  $('#f-ap-all') && ($('#f-ap-all').onclick = (e) => { e.preventDefault(); openApList(); });
   $('#f-month').onclick = () => pickMonth(d.month, async (m) => {
     const h = DB.history.find((x) => x.month === m);
     DB.draft = { month: m, divFII: h?.divFII ?? null, divAcoes: h?.divAcoes ?? null, divStocks: h?.divStocks ?? null, aporteGBP: h?.aporteGBP ?? null };
