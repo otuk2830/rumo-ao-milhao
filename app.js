@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.54';
+const APP_VERSION = '4.55';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -530,7 +530,8 @@ function divLogList(limit) {
 const wireDivList = () => $$('#view [data-div]').forEach((el) => (el.onclick = () => editDiv(el.dataset.div)));
 
 // ---- aportes with their date: the month's aporte is the sum; daily returns use the exact day the money arrived
-const apBRL = (e) => e.gbp * (e.g || DB.prices.gbpbrl || 0);
+const apBRL = (e) => (typeof e.brl === 'number' ? e.brl : e.gbp * (e.g || DB.prices.gbpbrl || 0));   // typed in R$ → exact R$
+const apTxt = (e) => (typeof e.brl === 'number' ? brl(Math.abs(e.brl)) : gbp(Math.abs(e.gbp), 2));
 function apSum(month) { const L = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === month); return L.length ? Math.round(L.reduce((a, e) => a + e.gbp, 0) * 100) / 100 : null; }
 function applyApLog(month) {
   const v = apSum(month); if (v === null) return;
@@ -544,7 +545,7 @@ function editAp(id) {
   openSheet(`<h3 id="ap-h">${id ? (out ? 'Editar retirada' : 'Editar aporte') : 'Fiz um aporte'}</h3>
     <div class="seg ap-seg" style="margin:4px 0 10px"><button data-k="in" class="${out ? '' : 'on'}">Aporte</button><button data-k="out" class="${out ? 'on' : ''}">Retirada</button></div>
     <div class="small muted" style="margin-bottom:8px" id="ap-hint"></div>
-    <div class="field"><label>Valor (£)</label><input id="ap-v" class="pt" inputmode="decimal" value="${x.gbp === null || x.gbp === undefined ? '' : fmtN(Math.abs(x.gbp), 2)}"></div>
+    <div class="field"><label id="ap-v-l">Valor (£)</label><input id="ap-v" class="pt" inputmode="decimal" value="${x.gbp === null || x.gbp === undefined ? '' : fmtN(Math.abs(typeof x.brl === 'number' ? x.brl : x.gbp), 2)}"></div>
     <div class="field"><label>Data</label><input type="date" id="ap-d" value="${x.date}"></div>
     <div class="field"><label id="ap-to-l">Para onde foi</label><select id="ap-to">${Object.entries(BLK).map(([k, v]) => `<option value="${k}" ${(x.dest || 'gbp') === k ? 'selected' : ''}>${v.n} (${v.cur})</option>`).join('')}</select></div>
     <div class="field"><label>Nota<small>opcional</small></label><input id="ap-n" value="${esc(x.note || '')}" style="text-align:left" placeholder="ex.: salário"></div>
@@ -556,10 +557,13 @@ function editAp(id) {
       $('#ap-hint', el).textContent = out ? 'Dinheiro que você TIROU dos investimentos. Depois atualize o saldo de onde saiu.' : 'Dinheiro NOVO que entrou nos investimentos.';
       $('#ap-to-l', el).textContent = out ? 'De onde saiu' : 'Para onde foi'; if (!id) $('#ap-h', el).textContent = out ? 'Fiz uma retirada' : 'Fiz um aporte'; };
     $$('.ap-seg button', el).forEach((b) => (b.onclick = () => { out = b.dataset.k === 'out'; mode(); })); mode();
+    const curL = () => { $('#ap-v-l', el).textContent = $('#ap-to', el).value === 'brl' ? 'Valor (R$)' : 'Valor (£)'; };
+    $('#ap-to', el).addEventListener('change', curL); curL();
     $('#ap-save', el).onclick = async () => {
       const raw = $('#ap-v', el).value.trim(), neg = out || raw.startsWith('-'), v = parsePT(raw.replace(/^-/, ''));
       if (!v) return toast('Digite o valor');
-      const o = { ...x, gbp: neg ? -v : v, date: $('#ap-d', el).value || today(), dest: $('#ap-to', el).value, note: $('#ap-n', el).value.trim(), at: new Date().toISOString(), g: DB.prices.gbpbrl };
+      const inBRL = $('#ap-to', el).value === 'brl', g0 = DB.prices.gbpbrl || 1, sv = neg ? -v : v;
+      const o = { ...x, gbp: inBRL ? Math.round((sv / g0) * 100) / 100 : sv, brl: inBRL ? sv : undefined, gFixed: false, date: $('#ap-d', el).value || today(), dest: $('#ap-to', el).value, note: $('#ap-n', el).value.trim(), at: new Date().toISOString(), g: DB.prices.gbpbrl };
       const m = o.date.slice(0, 7), first = !(DB.apLog || []).some((e) => e.id !== o.id && e.date.slice(0, 7) === m);
       const typed = DB.draft.month === m ? DB.draft.aporteGBP : DB.history.find((h) => h.month === m)?.aporteGBP;
       if (first && typed) {
@@ -570,14 +574,14 @@ function editAp(id) {
       const i = DB.apLog.findIndex((e) => e.id === o.id); if (i > -1) DB.apLog[i] = o; else DB.apLog.push(o);
       applyApLog(m); if (old && old !== m) { if (apSum(old) === null) { if (DB.draft.month === old) DB.draft.aporteGBP = null; const h = DB.history.find((q) => q.month === old); if (h) h.aporteGBP = null; } else applyApLog(old); }
       await save(); closeSheet(); render(); fillMissingFx();
-      toast(`✓ Aporte de ${gbp(o.gbp, 2)} em ${new Date(o.date + 'T12:00').toLocaleDateString('pt-BR')} — atualize hoje os saldos/quantidades que mudaram`, 5000);
+      toast(`✓ ${o.gbp < 0 ? 'Retirada' : 'Aporte'} de ${apTxt(o)} em ${new Date(o.date + 'T12:00').toLocaleDateString('pt-BR')} — atualize hoje os saldos/quantidades que mudaram`, 5000);
     };
     if (id) $('#ap-del', el).onclick = async () => { if (await delAp(id)) { closeSheet(); render(); } };
   });
 }
 async function delAp(id) {
   const x = DB.apLog.find((e) => e.id === id); if (!x) return false;
-  if (!(await ask(`Apagar ${x.gbp < 0 ? 'esta retirada' : 'este aporte'} de ${gbp(Math.abs(x.gbp), 2)} (${new Date(x.date + 'T12:00').toLocaleDateString('pt-BR')})?`, { yes: 'Sim, apagar', danger: true }))) return false;
+  if (!(await ask(`Apagar ${x.gbp < 0 ? 'esta retirada' : 'este aporte'} de ${apTxt(x)} (${new Date(x.date + 'T12:00').toLocaleDateString('pt-BR')})?`, { yes: 'Sim, apagar', danger: true }))) return false;
   const m = x.date.slice(0, 7); DB.apLog = DB.apLog.filter((e) => e.id !== id);
   if (apSum(m) === null) { if (DB.draft.month === m) DB.draft.aporteGBP = 0; const h = DB.history.find((q) => q.month === m); if (h) h.aporteGBP = 0; } else applyApLog(m);   // no entries left = £0 that month
   await save(); return true;
@@ -590,7 +594,7 @@ function openApList() {
 }
 function apList() {
   const L = [...(DB.apLog || [])].sort((a, b) => b.date.localeCompare(a.date));
-  return L.length ? L.map((e) => `<div class="item click" data-ap="${e.id}"><div><div class="t">${new Date(e.date + 'T12:00').toLocaleDateString('pt-BR')}</div><div class="s">${e.note ? esc(e.note) : e.gbp < 0 ? 'retirada' : 'aporte'} · ${BLK[e.dest || 'gbp'].n}</div></div><div class="r" style="display:flex;align-items:center;gap:10px"><div><div class="t ${e.gbp < 0 ? 'neg' : ''}">${gbp(e.gbp, 2)}</div><div class="s">${brl(apBRL(e))}</div></div><button class="apx" data-apx="${e.id}" aria-label="Apagar">×</button></div></div>`).join('') : '<p class="muted small">Nenhum aporte lançado ainda.</p>';
+  return L.length ? L.map((e) => `<div class="item click" data-ap="${e.id}"><div><div class="t">${new Date(e.date + 'T12:00').toLocaleDateString('pt-BR')}</div><div class="s">${e.note ? esc(e.note) : e.gbp < 0 ? 'retirada' : 'aporte'} · ${BLK[e.dest || 'gbp'].n}</div></div><div class="r" style="display:flex;align-items:center;gap:10px"><div>${typeof e.brl === 'number' ? `<div class="t ${e.gbp < 0 ? 'neg' : ''}">${brl(e.brl)}</div><div class="s">${gbp(e.gbp, 2)}</div>` : `<div class="t ${e.gbp < 0 ? 'neg' : ''}">${gbp(e.gbp, 2)}</div><div class="s">${brl(apBRL(e))}</div>`}</div><button class="apx" data-apx="${e.id}" aria-label="Apagar">×</button></div></div>`).join('') : '<p class="muted small">Nenhum aporte lançado ainda.</p>';
 }
 // daily chained return for a month: needs a snapshot from the last days of the month before
 function dailyMonth(month) {
@@ -631,7 +635,7 @@ async function fillMissingFx() {
   }
   for (const e of DB.apLog || []) {   // aportes logged with a past date get that day's rate
     if (e.gFixed || e.date >= today()) continue;
-    const rate = await fxOn(e.date); if (rate) { e.g = rate; e.gFixed = true; changed = true; }
+    const rate = await fxOn(e.date); if (rate) { e.g = rate; if (typeof e.brl === 'number') e.gbp = Math.round((e.brl / rate) * 100) / 100; e.gFixed = true; changed = true; }
   }
   for (const h of DB.history.filter((x) => typeof x.pat === 'number' && !x.nat).slice(-4)) {   // recent months: both rates of the month's last day
     if (h.fx && h.usd) continue; const [y, m] = h.month.split('-').map(Number), last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
@@ -657,7 +661,7 @@ const rateOf = (k, g, u) => (k === 'brl' ? 1 : k === 'gbp' ? g : u);
 // new money of a period, split by where it went, in each block's own currency
 function flowsBetween(d1, d2, mode) {   // mode 'day': (d1, d2]  ·  mode 'month': whole month d1
   const L = (DB.apLog || []).filter((e) => (mode === 'month' ? e.date.slice(0, 7) === d1 : e.date > d1 && e.date <= d2)), f = { brl: 0, gbp: 0, usd: 0 };
-  for (const e of L) { const g = e.g || DB.prices.gbpbrl || 1, k = e.dest || 'gbp'; f[k] += k === 'gbp' ? e.gbp : k === 'brl' ? e.gbp * g : (e.gbp * g) / (DB.prices.usdbrl || 1); }
+  for (const e of L) { const g = e.g || DB.prices.gbpbrl || 1, k = e.dest || 'gbp'; f[k] += k === 'gbp' ? e.gbp : k === 'brl' ? apBRL(e) : (e.gbp * g) / (DB.prices.usdbrl || 1); }
   return { f, any: L.length > 0 };
 }
 // return without exchange-rate effect for one period: each block in its own currency, weighted by its size at the start
@@ -1301,7 +1305,7 @@ function vPainel() {
       <div class="lab" style="display:flex;justify-content:space-between;align-items:center">Patrimônio hoje <span style="display:flex;gap:10px;align-items:center"><button class="cur-swap" id="cur-swap" aria-label="Trocar moeda">⇄ ${heroCur === 'BRL' ? 'R$' : heroCur === 'GBP' ? '£' : 'US$'}</button><span class="chev">${heroOpen() ? '▴' : '▾'}</span></span></div>
       <div class="val">${HM[heroCur](P.total)}</div>
       ${dLoc ? `<span class="dchip ${dChg < 0 ? 'neg' : 'pos'}">${dChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(dChg))}</span> hoje · ${signed(pctS, dLoc.r)}</span>` : ''}
-      ${prevM ? `<div class="mline">este mês <b class="money ${mChg < 0 ? 'neg' : 'pos'}">${signed(CV, mChg)}</b>${apNowGBP ? ` <span class="muted">· inclui ${apNowGBP < 0 ? 'retirada' : 'aporte'} de <span class="money">${gbp(Math.abs(apNowGBP))}</span></span>` : ''}</div>` : ''}
+      ${prevM ? `<div class="mline">este mês <b class="money ${mChg < 0 ? 'neg' : 'pos'}">${signed(CV, mChg)}</b>${apNowGBP ? ` <span class="muted">· inclui ${apNowGBP < 0 ? 'retirada' : 'aporte'} de <span class="money">${(() => { const L = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === ym()); return L.length && L.every((e) => typeof e.brl !== 'number') ? gbp(Math.abs(apNowGBP)) : CV(Math.abs(L.length ? L.reduce((t, e) => t + apBRL(e), 0) : apNowGBP * num(DB.prices.gbpbrl))); })()}</span></span>` : ''}</div>` : ''}
       <div class="sub">${['BRL', 'GBP', 'USD'].filter((c) => c !== heroCur).map((c) => HM[c](P.total)).join(' · ')}</div>
       <div id="spark-tap">${spark}</div>
       ${heroOpen() ? `<div class="hero-list">${[...P.alloc.map((a) => [a.n, a.v, a.c]), ['Caixa', num(DB.balances.caixa), '#94A3B8']].map(([n, v, c]) =>
@@ -1555,7 +1559,7 @@ function vAtualizar() {
    <div class="card cl">
     ${stepH(1, s1, false, 'Aporte do mês', apN ? `${gbp(d.aporteGBP || 0, 2)} · ${apN} ${apN === 1 ? 'lançamento' : 'lançamentos'}${ae && ae.date.slice(0, 7) === d.month ? ' · ' + dmy(ae.date) + ' → ' + BLK[ae.dest || 'gbp'].n : ''}` : s1 ? `${gbp(d.aporteGBP, 2)}${num(d.aporteGBP) ? '' : ' · sem aporte'}` : 'ainda não informado',
       `<button class="btn primary block" id="f-ap">＋ Fiz um aporte</button>
-       ${ae ? `<div class="small muted" style="margin:8px 0">Último: <b>${dmy(ae.date)}</b> · ${gbp(ae.gbp, 2)}${ae.note ? ' (' + esc(ae.note) + ')' : ''} · <a href="#" id="f-ap-all">ver todos</a></div>` : ''}
+       ${ae ? `<div class="small muted" style="margin:8px 0">Último: <b>${dmy(ae.date)}</b> · ${ae.gbp < 0 ? '−' : ''}${apTxt(ae)}${ae.note ? ' (' + esc(ae.note) + ')' : ''} · <a href="#" id="f-ap-all">ver todos</a></div>` : ''}
        ${apN ? `<div class="field"><label>Aporte do mês (£)<small>somado sozinho</small></label><div class="calc">${gbp(d.aporteGBP || 0, 2)}<div class="small">${brl((d.aporteGBP || 0) * p.gbpbrl)}</div></div></div>`
          : `${fieldRow('Ou digite o total (£)', 'd.aporteGBP', d.aporteGBP, 'dinheiro NOVO que entrou', d.aporteGBP ? brl(d.aporteGBP * p.gbpbrl) : '')}<button class="btn block" id="f-ap0" style="margin-top:8px">Não houve aporte este mês (£0)</button>`}`)}
     ${stepH(2, s2, false, 'Dividendos', dvN ? `${brl(dvTot, 2)} · ${dvN} ${dvN === 1 ? 'lançamento' : 'lançamentos'}${de && de.date.slice(0, 7) === d.month ? ' · último ' + dmy(de.date) : ''}` : s2 ? brl(dvTot, 2) : 'nenhum lançado ainda',
