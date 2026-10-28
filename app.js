@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.58';
+const APP_VERSION = '4.60';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -135,9 +135,12 @@ function normalize(d) {
   d.crypto.log = (d.crypto.log || []).map((x) => ({ id: x.id || uid(), ...x })).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   return d;
 }
+let SAVE_ERR = null;
 async function save() {
   if (!DB || !KEY) return;
-  localStorage.setItem(K_DATA, JSON.stringify(await encryptObj(DB, KEY)));
+  const data = JSON.stringify(await encryptObj(DB, KEY));
+  try { localStorage.setItem(K_DATA, data); if (SAVE_ERR) { SAVE_ERR = null; render(); } }
+  catch (e) { console.error('save', e); const first = !SAVE_ERR; SAVE_ERR = String(e?.name || e); toast('⚠ Não consegui salvar neste aparelho. Faça um backup agora (Ajustes → Backup).', 8000); if (first) render(); }
 }
 
 /* ---------------- calculations ---------------- */
@@ -270,16 +273,12 @@ async function refreshPricesNow(silent) {
     for (const c of COINS) if (j[c.id]?.usd) { p[c.k] = j[c.id].usd; p[c.k + '_24h'] = j[c.id].usd_24h_change ?? null; ok++; }
   } catch (e) { console.warn('crypto price', e); }
   let fx = false;
-  try {
-    let j; try { j = await fetchJSON('https://api.frankfurter.dev/v1/latest?base=GBP&symbols=BRL,USD,EUR'); } catch { j = await fetchJSON('https://api.frankfurter.app/latest?from=GBP&to=BRL,USD,EUR'); }
-    if (j.rates?.BRL && j.rates?.USD) { p.gbpbrl = j.rates.BRL; p.usdbrl = j.rates.BRL / j.rates.USD; if (j.rates.EUR) p.eurbrl = j.rates.BRL / j.rates.EUR; fx = true; }
-  } catch (e) { console.warn('fx frankfurter', e); }
-  if (!fx) {
-    try {
-      const j = await fetchJSON('https://open.er-api.com/v6/latest/GBP');
-      if (j.rates?.BRL && j.rates?.USD) { p.gbpbrl = j.rates.BRL; p.usdbrl = j.rates.BRL / j.rates.USD; if (j.rates.EUR) p.eurbrl = j.rates.BRL / j.rates.EUR; fx = true; }
-    } catch (e) { console.warn('fx er-api', e); }
+  if (!p.ecb || Date.now() - new Date(p.ecb.at) > 6 * 3600 * 1000) {   // the ECB rate changes once a day: backup and sanity check only
+    const put = (j) => { if (j?.rates?.BRL && j.rates?.USD) p.ecb = { g: j.rates.BRL, u: j.rates.BRL / j.rates.USD, e: j.rates.EUR ? j.rates.BRL / j.rates.EUR : null, at: new Date().toISOString() }; };
+    try { let j; try { j = await fetchJSON('https://api.frankfurter.dev/v1/latest?base=GBP&symbols=BRL,USD,EUR'); } catch { j = await fetchJSON('https://api.frankfurter.app/latest?from=GBP&to=BRL,USD,EUR'); } put(j); } catch (e) { console.warn('fx frankfurter', e); }
+    if (!p.ecb || Date.now() - new Date(p.ecb.at) > 6 * 3600 * 1000) { try { put(await fetchJSON('https://open.er-api.com/v6/latest/GBP')); } catch (e) { console.warn('fx er-api', e); } }
   }
+  if (p.ecb) { p.gbpbrl = p.ecb.g; p.usdbrl = p.ecb.u; if (p.ecb.e) p.eurbrl = p.ecb.e; fx = true; }
   const ar = await assetsP; await sheetFxP; const lv = await liveFxP;
   // live rate first (moves during the day); the ECB rate is set once a day and stays as the backup and sanity check
   const near = (a, b) => !b || (a / b > 0.8 && a / b < 1.25);
@@ -550,6 +549,9 @@ const wireDivList = () => $$('#view [data-div]').forEach((el) => (el.onclick = (
 
 // ---- aportes with their date: the month's aporte is the sum; daily returns use the exact day the money arrived
 const apBRL = (e) => (typeof e.brl === 'number' ? e.brl : e.gbp * (e.g || DB.prices.gbpbrl || 0));   // typed in R$ → exact R$
+// a month's aportes in R$: entries typed in R$ count exactly, the rest at the given rate
+const apMonthBRL = (m, fx, gbpTot) => { const L = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === m), R = L.filter((e) => typeof e.brl === 'number');
+  return R.reduce((t, e) => t + e.brl, 0) + (num(gbpTot) - R.reduce((t, e) => t + e.gbp, 0)) * num(fx); };
 const apTxt = (e) => (typeof e.brl === 'number' ? brl(Math.abs(e.brl)) : gbp(Math.abs(e.gbp), 2));
 function apSum(month) { const L = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === month); return L.length ? Math.round(L.reduce((a, e) => a + e.gbp, 0) * 100) / 100 : null; }
 function applyApLog(month) {
@@ -757,7 +759,25 @@ async function dailySnap() {
     k: Object.fromEntries(P.cs.coins.filter((x) => x.units).map((x) => [x.k, [num(DB.prices[x.k]), x.units]])) };
   const D = (DB.daily ||= []), last = D[D.length - 1];
   if (last && last.d === e.d) D[D.length - 1] = e; else D.push(e);
-  await save();
+  const cut = (() => { const t = new Date(Date.now() - 60 * 864e5); return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0'); })();
+  for (const x of D) if (x.d < cut && (x.a || x.k)) { delete x.a; delete x.k; }   // older days keep only the totals (all charts and returns use those)
+  await save(); autoCloseMonth();
+}
+// on the 1st (or later), last month is saved from its last daily snapshot, unless you saved it yourself on/after that day
+async function autoCloseMonth() {
+  if (!DB) return; const m = ymAdd(ym(), -1), D = (DB.daily || []).filter((x) => x.d.slice(0, 7) === m && x.n && x.c), last = D[D.length - 1];
+  if (!last) return; const [y, mo] = m.split('-').map(Number), endDay = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  if (Number(last.d.slice(8)) < endDay - 3) return;   // no record near the end of the month: leave it to you
+  const h = DB.history.find((x) => x.month === m); if (h && h.savedAt && h.savedAt.slice(0, 10) >= last.d) return;
+  const src = DB.draft.month === m ? DB.draft : h || {};
+  const entry = { month: m, pat: last.v, aporteGBP: src.aporteGBP ?? null, divFII: src.divFII ?? null, divAcoes: src.divAcoes ?? null, divStocks: src.divStocks ?? null, fx: last.g, usd: last.u, cat: last.c, nat: last.n, savedAt: new Date(last.d + 'T22:00:00Z').toISOString(), auto: true };
+  if (h?.note) entry.note = h.note;
+  const i = DB.history.findIndex((x) => x.month === m); if (i > -1) DB.history[i] = entry; else DB.history.push(entry);
+  DB.history.sort((a, b) => a.month.localeCompare(b.month)); applyDivLog(m); applyApLog(m);
+  if (DB.draft.month <= m) { DB.draft = { month: ym(), divFII: null, divAcoes: null, divStocks: null, aporteGBP: null }; applyDivLog(ym()); applyApLog(ym()); }
+  await save(); render();
+  const e2 = DB.history.find((x) => x.month === m);
+  toast(`✓ ${ymLong(m)} fechado sozinho com os valores de ${dmy(last.d)}${e2.aporteGBP === null || e2.aporteGBP === undefined ? ' — informe o aporte do mês em Histórico' : ''}`, 6000);
 }
 async function enterApp() {
   $('#lock').classList.add('hidden'); $('#welcome').classList.add('hidden'); $('#app').classList.remove('hidden');
@@ -766,6 +786,7 @@ async function enterApp() {
   maybeRefreshPrices();
   setTimeout(() => dailySnap(), 20000);   // fallback if prices were already fresh (no refresh needed)
   setTimeout(() => fillMissingFx(), 4000);
+  setTimeout(() => autoCloseMonth(), 3000);
 }
 
 /* ---------------- backup ---------------- */
@@ -861,8 +882,8 @@ function brapiParse(j) {
   const out = {};
   for (const r of j?.results || []) {
     const sym = String(r.symbol || r.data?.symbol || r.stock || '').toUpperCase();
-    const px = r.data?.regularMarketPrice ?? r.regularMarketPrice;
-    if (sym && typeof px === 'number' && px > 0) out[sym] = px;
+    const px = r.data?.regularMarketPrice ?? r.regularMarketPrice, pc = r.data?.regularMarketPreviousClose ?? r.regularMarketPreviousClose;
+    if (sym && typeof px === 'number' && px > 0) { out[sym] = px; if (typeof pc === 'number' && pc > 0) PCQ.b[sym] = pc; }
   }
   return out;
 }
@@ -891,7 +912,7 @@ async function brapiQuotes(syms, key) {
 async function finnhubQuotes(syms, key) {
   const got = {}; if (!key) return got;
   await pool(syms, 4, async (s) => {   // 4 at a time (Finnhub allows ~60/minute, but not big bursts)
-    try { const j = await fetchRetry('https://finnhub.io/api/v1/quote?symbol=' + encodeURIComponent(s) + '&token=' + encodeURIComponent(key)); if (j.c > 0) got[s] = j.c; else LASTERR.finnhub = 'ticker sem preço (' + s + ')'; } catch (e) { console.warn('finnhub', s, e); LASTERR.finnhub = e.message; }
+    try { const j = await fetchRetry('https://finnhub.io/api/v1/quote?symbol=' + encodeURIComponent(s) + '&token=' + encodeURIComponent(key)); if (j.c > 0) { got[s] = j.c; if (j.pc > 0) PCQ.f[s] = j.pc; } else LASTERR.finnhub = 'ticker sem preço (' + s + ')'; } catch (e) { console.warn('finnhub', s, e); LASTERR.finnhub = e.message; }
   });
   return got;
 }
@@ -932,6 +953,7 @@ function sheetNum(v) {
   else v = v.replace(',', '.');
   const n = Number(v); return n > 0 ? n : null;
 }
+const PCQ = { b: {}, f: {}, s: {} };   // previous close per source (brapi, Finnhub, Google Sheet column E)
 const FX_SHEET = ['CURRENCY:GBPBRL', 'CURRENCY:USDBRL', 'CURRENCY:EURBRL'];
 async function sheetQuotes(syms, link) {
   const got = {}, url = sheetCsvUrl(link);
@@ -941,10 +963,11 @@ async function sheetQuotes(syms, link) {
     const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' }); clearTimeout(t);
     const txt = await r.text();
     if (!r.ok || /<html/i.test(txt.slice(0, 200))) { LASTERR.sheet = 'sem acesso — no Google Sheets: Compartilhar → "Qualquer pessoa com o link" → Leitor'; return got; }
-    const all = {}, cur = {};
-    for (const row of csvRows(txt)) { const tk = String(row[0] || '').trim().toUpperCase().replace(/^BVMF:/, ''); const px = sheetNum(row[1]); if (tk && px) { all[tk] = px; const c = String(row[3] || '').trim().toUpperCase(); if (/^(BRL|USD|GBP|GBX|EUR)$/.test(c)) cur[tk] = c; } }
+    const all = {}, cur = {}, pcAll = {};
+    for (const row of csvRows(txt)) { const tk = String(row[0] || '').trim().toUpperCase().replace(/^BVMF:/, ''); const px = sheetNum(row[1]); if (tk && px) { all[tk] = px; const pc0 = sheetNum(row[4]); if (pc0) pcAll[tk] = pc0; const c = String(row[3] || '').trim().toUpperCase(); if (/^(BRL|USD|GBP|GBX|EUR)$/.test(c)) cur[tk] = c; } }
     // also match without the exchange: "VWRP" finds "LON:VWRP" (an exact match always wins)
-    for (const tk of Object.keys(all)) { const sh = tk.includes(':') ? tk.split(':').pop() : null; if (sh && !(sh in all)) { all[sh] = all[tk]; if (cur[tk]) cur[sh] = cur[tk]; } }
+    for (const tk of Object.keys(all)) { const sh = tk.includes(':') ? tk.split(':').pop() : null; if (sh && !(sh in all)) { all[sh] = all[tk]; if (cur[tk]) cur[sh] = cur[tk]; if (pcAll[tk]) pcAll[sh] = pcAll[tk]; } }
+    for (const s2 of syms) if (pcAll[s2]) PCQ.s[s2] = pcAll[s2];
     sheetQuotes.cur = cur;
     for (const s of syms) if (all[s]) got[s] = all[s];
     sheetQuotes.count = Object.keys(all).length;
@@ -963,31 +986,34 @@ async function refreshAssetPrices(force) {
   assetBusy = true;
   try {
     const keys = DB.settings.keys || {};
+    const now = () => new Date().toISOString(), tk = (m) => [...new Set(A.filter((a) => a.market === m).map((a) => a.ticker))];
     const usDue = !DB.prices.usAt || Date.now() - new Date(DB.prices.usAt) > 60 * 1000, b3Due = !DB.prices.b3At || Date.now() - new Date(DB.prices.b3At) > (force ? 5 : 30) * 60 * 1000;
-    const b3 = b3Due ? [...new Set(A.filter((a) => a.market === 'B3').map((a) => a.ticker))] : [], us = usDue ? [...new Set(A.filter((a) => a.market === 'US').map((a) => a.ticker))] : [];
-    if (us.length) DB.prices.usAt = new Date().toISOString(); if (b3.length) DB.prices.b3At = new Date().toISOString();
     const euDue = force || !DB.prices.euAt || Date.now() - new Date(DB.prices.euAt) > 20 * 3600 * 1000;   // saves the small daily allowance
-    const eu = euDue ? [...new Set(A.filter((a) => a.market === 'EU').map((a) => a.ticker))] : [];
-    const gsDue = force || !DB.prices.gsAt || Date.now() - new Date(DB.prices.gsAt) > 15 * 60 * 1000,
-      gs = gsDue ? [...new Set(A.filter((a) => a.market === 'GS' || (a.market === 'B3' && keys.sheet)).map((a) => a.ticker))] : [];
-    if (gs.length) DB.prices.gsAt = new Date().toISOString();
-    const [pb, pu, pe, pg] = await Promise.all([b3.length ? brapiQuotes(b3, keys.brapi) : {}, us.length ? finnhubQuotes(us, keys.finnhub) : {}, eu.length ? alphaQuotes(eu, keys.alpha) : {}, gs.length ? sheetQuotes(gs, keys.sheet) : {}]);
-    if (gs.length && keys.sheet) { const own = [...new Set(A.filter((a) => a.market === 'GS').map((a) => a.ticker))], n = own.filter((t) => pg[t]).length;   // B3 extras are only a backup for brapi
-      await setKeyStatus('sheet', Object.keys(pg).length > 0, `${n}/${own.length} preços`); }
+    const gsDue = force || !DB.prices.gsAt || Date.now() - new Date(DB.prices.gsAt) > 15 * 60 * 1000;
+    // 1) Google Sheet first (no monthly limit): its own tickers + the B3 shares
+    const gs = gsDue ? [...new Set([...tk('GS'), ...(keys.sheet ? tk('B3') : [])])] : [];
+    if (gs.length) DB.prices.gsAt = now();
+    const pg = gs.length ? await sheetQuotes(gs, keys.sheet) : {};
+    if (gs.length && keys.sheet) { const own = tk('GS'), n = own.filter((t) => pg[t]).length; DB.prices.sheetHas = tk('B3').filter((t) => pg[t]);
+      await setKeyStatus('sheet', Object.keys(pg).length > 0, `${n}/${own.length} preços${DB.prices.sheetHas.length ? ` + ${DB.prices.sheetHas.length} da B3` : ''}`); }
+    const inSheet = new Set(keys.sheet ? DB.prices.sheetHas || [] : []);
+    // 2) brapi only for B3 shares the sheet doesn't have
+    const b3 = b3Due ? tk('B3').filter((t) => !inSheet.has(t)) : [], us = usDue ? tk('US') : [], eu = euDue ? tk('EU') : [];
+    if (b3.length) DB.prices.b3At = now(); if (us.length) DB.prices.usAt = now();
+    const [pb, pu, pe] = await Promise.all([b3.length ? brapiQuotes(b3, keys.brapi) : {}, us.length ? finnhubQuotes(us, keys.finnhub) : {}, eu.length ? alphaQuotes(eu, keys.alpha) : {}]);
     if (b3.length) await setKeyStatus('brapi', Object.keys(pb).length > 0, `${Object.keys(pb).length}/${b3.length} preços`);
     if (us.length && keys.finnhub) await setKeyStatus('finnhub', Object.keys(pu).length > 0, `${Object.keys(pu).length}/${us.length} preços`);
-    if (eu.length && keys.alpha) { await setKeyStatus('alpha', Object.keys(pe).length > 0, `${Object.keys(pe).length}/${eu.length} preços`); DB.prices.euAt = new Date().toISOString(); }
+    if (eu.length && keys.alpha) { await setKeyStatus('alpha', Object.keys(pe).length > 0, `${Object.keys(pe).length}/${eu.length} preços`); DB.prices.euAt = now(); }
     let ok = 0, fail = [];
     for (const a of A) {
       if (a.market === 'MANUAL') continue;
-      if (a.market === 'B3' && !b3Due && gsDue && pg[a.ticker]) { a.price = pg[a.ticker]; a.priceAt = new Date().toISOString(); a.priceErr = null; ok++; continue; }   // brapi resting: sheet price
-      if ((a.market === 'EU' && !euDue) || (a.market === 'GS' && !gsDue) || (a.market === 'US' && !usDue) || (a.market === 'B3' && !b3Due)) {
-        if (a.priceAt && !a.priceErr) ok++;   // fetched moments ago — still fresh, counted as up to date
-        else if (!a.price) fail.push(a.ticker);
-        continue;
-      }
-      const px = (a.market === 'B3' ? pb[a.ticker] || pg[a.ticker] : (a.market === 'US' ? pu : a.market === 'GS' ? pg : pe)[a.ticker]);
-      if (px) { a.price = px; a.priceAt = new Date().toISOString(); a.priceErr = null; ok++; if (a.market === 'GS' && sheetQuotes.cur?.[a.ticker]) a.currency = sheetQuotes.cur[a.ticker]; }
+      const viaSheet = a.market === 'GS' || (a.market === 'B3' && inSheet.has(a.ticker));
+      const due = viaSheet ? gsDue : a.market === 'B3' ? b3Due : a.market === 'US' ? usDue : euDue;
+      if (!due) { if (a.priceAt && !a.priceErr) ok++; else if (!a.price) fail.push(a.ticker); continue; }   // fetched moments ago — still fresh
+      const [Q, PC] = viaSheet ? [pg, PCQ.s] : a.market === 'B3' ? [pb, PCQ.b] : a.market === 'US' ? [pu, PCQ.f] : [pe, {}];
+      let px = Q[a.ticker], pc = PC[a.ticker];
+      if (!px && a.market === 'B3' && pg[a.ticker]) { px = pg[a.ticker]; pc = PCQ.s[a.ticker]; }
+      if (px) { a.price = px; a.priceAt = now(); a.priceErr = null; ok++; if (pc > 0) { a.pc = pc; a.pcAt = today(); } if (a.market === 'GS' && sheetQuotes.cur?.[a.ticker]) a.currency = sheetQuotes.cur[a.ticker]; }
       else { a.priceErr = 'não atualizou'; fail.push(a.ticker); }   // keeps the last good price
     }
     DB.prices.assetsAt = new Date().toISOString(); await save();
@@ -1023,7 +1049,6 @@ function vAtivos() {
       <button class="btn block" id="at-refresh">⟳ Atualizar preços agora</button>
       ${needGS ? '<div class="banner" style="margin:10px 0 0">Para preços de FIIs, cole o link da sua planilha do Google em ⚙︎ Ajustes → Chaves de preço → Google Sheets.</div>' : ''}
       ${needB3 ? '<div class="banner" style="margin:10px 0 0">Para preços da B3, crie a chave grátis em <b>brapi.dev</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
-      ${cls === 'acoes' && keys.sheet && rows.some((r) => r.a.market === 'B3') ? `<div class="banner info" style="margin:10px 0 0">💡 A brapi grátis tem 15.000 chamadas/mês. Coloque estas ações na sua planilha do Google (coluna A) e use a planilha — sem limite.<button class="btn block" id="at-all-gs" style="margin-top:8px">Usar Google Sheets em todas as ações</button></div>` : ''}
       ${needUS ? '<div class="banner" style="margin:10px 0 0">Para preços dos EUA, crie a chave grátis em <b>finnhub.io</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
       ${needEU ? '<div class="banner" style="margin:10px 0 0">Para Londres/Europa, crie a chave grátis em <b>alphavantage.co</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
     </div>
@@ -1033,7 +1058,7 @@ function vAtivos() {
      ${(() => {
         const itemHtml = (r) => `<div class="item click" data-id="${r.a.id}">
         <div><div class="t">${esc(r.a.ticker)} ${r.a.kind ? `<span class="small muted">${esc(r.a.kind)}</span>` : ''}</div>
-        <div class="s">${r.a.qty.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} × ${fmtPx(r.cur, r.pr)}${r.a.market === 'MANUAL' ? ' · manual' : ''}${r.stale ? ` · <span class="neg">⚠ ${r.a.priceAt ? 'preço de ' + new Date(r.a.priceAt).toLocaleDateString('pt-BR') : 'sem preço'}</span>` : ''}</div></div>
+        <div class="s">${r.a.qty.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} × ${fmtPx(r.cur, r.pr)}${r.a.market === 'MANUAL' ? ' · manual' : ''}${!num(r.a.avg) ? ' · <span class="warn">sem preço médio</span>' : ''}${r.stale ? ` · <span class="neg">⚠ ${r.a.priceAt ? 'preço de ' + new Date(r.a.priceAt).toLocaleDateString('pt-BR') : 'sem preço'}</span>` : ''}</div></div>
         <div class="r"><div class="t">${M(r.value)}</div>${inGBP ? `<div class="s">${brl(r.value, 2)}</div>` : ''}${r.pl !== null ? `<div class="s ${r.pl < 0 ? 'neg' : 'pos'}">${signed(pct, r.plPct)}</div>` : ''}</div></div>`;
         const sorted = rows.sort((x, y) => y.value - x.value);
         if (!sorted.length) return '<p class="muted">Nenhum ativo ainda. Toque em ＋ Adicionar ativo.</p>';
@@ -1137,7 +1162,7 @@ function editAsset(id, cls) {
 }
 
 /* ---------------- rendering ---------------- */
-const TITLES = { painel: 'Painel', graficos: 'Gráficos', atualizar: 'Atualizar', historico: 'Histórico', dividendos: 'Dividendos', cripto: 'Cripto', ativos: 'Ativos', ajustes: 'Ajustes' };
+const TITLES = { painel: 'Painel', atualizar: 'Atualizar', historico: 'Histórico', dividendos: 'Dividendos', cripto: 'Cripto', ativos: 'Ativos', ajustes: 'Ajustes' };
 function route() { return (location.hash || '#painel').slice(1); }
 window.addEventListener('hashchange', () => { if (DB) render(); window.scrollTo(0, 0); });
 let RENDER_WAIT = false;
@@ -1153,7 +1178,7 @@ function render() {
   $('#top-sub').textContent = 'Preços: ' + (DB.prices.updatedAt ? fmtDate(DB.prices.updatedAt) : 'ainda não buscados') + (navigator.onLine ? '' : ' · offline');
   $$('.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === (r === 'cripto' ? 'ativos' : r)));
   requestAnimationFrame(() => { const maxY = Math.max(0, document.documentElement.scrollHeight - innerHeight); if (scrollY > maxY) scrollTo(0, maxY); });
-  ({ painel: vPainel, graficos: vGraficos, atualizar: vAtualizar, historico: vHistorico, dividendos: vDividendos, cripto: vCripto, ativos: vAtivos, ajustes: vAjustes })[r]();
+  ({ painel: vPainel, atualizar: vAtualizar, historico: vHistorico, dividendos: vDividendos, cripto: vCripto, ativos: vAtivos, ajustes: vAjustes })[r]();
 }
 $('#btn-settings').onclick = () => { location.hash = '#ajustes'; };
 $('#btn-lock').onclick = lockNow;
@@ -1214,7 +1239,7 @@ function returnsData() {
     const dm = b.month < ym() ? dailyMonth(b.month) : null; if (dm) { months.push({ ...dm, rl }); continue; }   // daily data covers it → exact
     if (b.aporteGBP === null || b.aporteGBP === undefined) continue; // aporte unknown → month can't be measured
     const fx = b.fx || (num(b.aporteGBP) === 0 ? 1 : null); if (!fx) continue;   // rate is fetched in the background for old months
-    const C = num(b.aporteGBP) * fx, den = a.pat + 0.5 * C;
+    const C = apMonthBRL(b.month, fx, b.aporteGBP), den = a.pat + 0.5 * C;
     if (den <= 0) continue;
     months.push({ month: b.month, gain: b.pat - a.pat - C, r: (b.pat - a.pat - C) / den, aporte: C, rl });
   }
@@ -1229,34 +1254,39 @@ function returnsData() {
 }
 
 // tap the "hoje" chip: what moved your money today, by category (no exchange-rate effect); tap a category to see its assets
-function todaySheet(CV) {
-  const P = portfolio(), pr = DB.prices, yest = [...(DB.daily || [])].filter((x) => x.d < today() && x.n).pop();
-  if (!yest) return toast('Precisa do valor de ontem — volte amanhã');
-  const now = { n: natNow(P), g: pr.gbpbrl, u: pr.usdbrl }, fl = flowsBetween(yest.d, today(), 'day').f, tot = localPeriod(yest, now, fl, false);
+// today's market move: each asset vs its previous close (as brokers show it), crypto over 24 h; typed balances and the exchange rate don't count
+function dayMove(P) {
+  const pr = DB.prices, yest = [...(DB.daily || [])].filter((x) => x.d < today() && x.a).pop() || null;
   const CATS = [['acoes', 'Ações'], ['fiis', 'FIIs'], ['Stock', 'Stocks'], ['REIT', 'REITs'], ['ETF', 'ETFs'], ['crypto', 'Cripto']];
-  const G = Object.fromEntries(CATS.map(([k, n]) => [k, { n, v: 0, base: 0, items: [] }]));
-  for (const a of DB.assets || []) {   // yesterday's quantity × price change, in R$ at today's rate (so the exchange rate doesn't count)
-    const y = yest.a?.[a.id], pt = priceOf(a); if (!y || !pt || !y[0]) continue;
-    const fx = FXOF(curOf(a)), v = y[1] * (pt - y[0]) * fx, k = a.cls === 'stocks' ? a.kind || 'Stock' : a.cls; if (!G[k]) continue;
-    G[k].v += v; G[k].base += y[1] * y[0] * fx; if (Math.abs(v) >= 0.005) G[k].items.push({ t: a.ticker, r: pt / y[0] - 1, v });
+  const G = Object.fromEntries(CATS.map(([k, n]) => [k, { n, v: 0, base: 0, items: [] }])); let snapUsed = 0, any = false;
+  for (const a of DB.assets || []) {
+    const pt = priceOf(a), q = num(a.qty); if (!pt || !q) continue;
+    let base = a.pc > 0 && a.pcAt === today() ? a.pc : null;
+    if (!base) { const y = yest?.a?.[a.id]; if (!y || !y[0]) continue; base = y[0]; snapUsed++; }   // no previous close: last snapshot price
+    const fx = FXOF(curOf(a)), v = q * (pt - base) * fx, k = a.cls === 'stocks' ? a.kind || 'Stock' : a.cls; if (!G[k]) continue;
+    G[k].v += v; G[k].base += q * base * fx; any = true; if (Math.abs(v) >= 0.005) G[k].items.push({ t: a.ticker, r: pt / base - 1, v });
   }
   for (const c of P.cs.coins) {
-    if (!c.units) continue; const y = yest.k?.[c.k], pt = num(pr[c.k]), u = num(pr.usdbrl); let r, v, base;
-    if (y && y[0]) { r = pt / y[0] - 1; v = y[1] * (pt - y[0]) * u; base = y[1] * y[0] * u; }
-    else { const ch = pr[c.k + '_24h']; if (typeof ch !== 'number') continue; r = ch / 100; base = (c.valUSD / (1 + r)) * u; v = c.valUSD * u - base; }
-    G.crypto.v += v; G.crypto.base += base; if (Math.abs(v) >= 0.005) G.crypto.items.push({ t: c.k, r, v });
+    if (!c.units) continue; const u = num(pr.usdbrl), ch = pr[c.k + '_24h']; let r, v, base;
+    if (typeof ch === 'number') { r = ch / 100; base = (c.valUSD / (1 + r)) * u; v = c.valUSD * u - base; }
+    else { const y = yest?.k?.[c.k], pt = num(pr[c.k]); if (!y || !y[0]) continue; r = pt / y[0] - 1; v = c.units * (pt - y[0]) * u; base = c.units * y[0] * u; snapUsed++; }
+    G.crypto.v += v; G.crypto.base += base; any = true; if (Math.abs(v) >= 0.005) G.crypto.items.push({ t: c.k, r, v });
   }
-  const list = CATS.map(([k]) => ({ k, ...G[k] })).filter((g) => g.base > 0 || g.items.length);
-  const mkt = list.reduce((a, g) => a + g.v, 0), other = tot.gainR - mkt;
+  const list = CATS.map(([k]) => ({ k, ...G[k] })).filter((g) => g.base > 0 || g.items.length), v = list.reduce((t, g) => t + g.v, 0);
+  return { any, v, r: P.total - v > 0 ? v / (P.total - v) : 0, list, snapUsed };
+}
+function todaySheet(CV) {
+  const P = portfolio(), dm = dayMove(P); if (!dm.any) return toast('Sem preços de fechamento ainda — puxe para atualizar');
+  const wk = [0, 6].includes(new Date().getDay());
   const amt = (v) => `<span class="money ${v < 0 ? 'neg' : v > 0 ? 'pos' : ''}">${signed(CV, v)}</span>`;
   const catRow = (g) => `<div class="tc click" data-c="${g.k}"><div class="mc-row" style="border:0"><span><span class="tc-ch">▸</span> ${g.n}</span><span style="text-align:right">${g.base ? `<span class="${g.v < 0 ? 'neg' : g.v > 0 ? 'pos' : ''}">${signed(pctS, g.v / g.base)}</span> · ` : ''}${amt(g.v)}</span></div>
       <div class="tc-items hidden">${g.items.sort((a, b) => a.v - b.v).map((m) => `<div class="tc-i"><span>${esc(m.t)}</span><span><span class="${m.r < 0 ? 'neg' : 'pos'}">${signed(pctS, m.r)}</span> · ${amt(m.v)}</span></div>`).join('') || '<div class="tc-i muted">sem variação</div>'}</div></div>`;
-  openSheet(`<div class="mc"><div class="mc-top"><div class="small muted">desde ${new Date(yest.d + 'T12:00').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' })} · sem câmbio</div><h3 style="margin:2px 0 0">Hoje</h3>
-      <div class="mc-big ${tot.gainR < 0 ? 'neg' : 'pos'} money">${signed(CV, tot.gainR)}</div><div style="font-weight:700" class="${tot.r < 0 ? 'neg' : 'pos'}">${signed(pctS, tot.r)}</div></div>
+  openSheet(`<div class="mc"><div class="mc-top"><div class="small muted">${wk ? 'ações: último pregão (sexta)' : 'ações: desde o fechamento anterior'} · cripto: 24 h · sem câmbio</div><h3 style="margin:2px 0 0">Hoje</h3>
+      <div class="mc-big ${dm.v < 0 ? 'neg' : 'pos'} money">${signed(CV, dm.v)}</div><div style="font-weight:700" class="${dm.r < 0 ? 'neg' : 'pos'}">${signed(pctS, dm.r)}</div></div>
     <div class="small muted" style="margin:10px 0 2px;font-weight:700;letter-spacing:.03em">POR CATEGORIA <span style="font-weight:500;letter-spacing:0">· toque para ver os ativos</span></div>
-    ${list.map(catRow).join('')}
-    ${!yest.a ? '<div class="small muted" style="margin-top:10px">Ações, FIIs e Exterior aparecem a partir de amanhã (o app começou a guardar o preço de cada ativo hoje).</div>' : ''}
-    ${Math.abs(other) >= 1 ? `<div class="mc-row"><span>Ajustes seus hoje <small class="muted">(saldos, quantidades, dividendos em caixa)</small></span>${amt(other)}</div>` : ''}
+    ${dm.list.map(catRow).join('')}
+    ${dm.snapUsed ? `<div class="small muted" style="margin-top:10px">${dm.snapUsed} ${dm.snapUsed === 1 ? 'ativo sem' : 'ativos sem'} fechamento anterior na fonte de preço — comparado com o último registro do app.</div>` : ''}
+    <div class="small muted" style="margin-top:6px">Saldos digitados (renda fixa, caixa, cash da T212) não entram: só a variação de mercado.</div>
     <button class="btn block" onclick="closeSheet()" style="margin-top:14px">Fechar</button></div>`, (el) => {
     $$('.tc', el).forEach((t) => (t.onclick = () => { const it = $('.tc-items', t), open = it.classList.toggle('hidden') === false; $('.tc-ch', t).textContent = open ? '▾' : '▸'; }));
   });
@@ -1276,14 +1306,14 @@ function vPainel() {
   const prevM = DB.history.filter((h) => typeof h.pat === 'number' && h.month < ym()).slice(-1)[0] || null, mChg = prevM ? P.total - prevM.pat : 0;
   // real growth this month (aportes taken out): exact daily chain when possible, otherwise vs last saved month
   const apNowGBP = (() => { const a = apSum(ym()); if (a !== null) return a; const dv = DB.draft.month === ym() ? DB.draft.aporteGBP : null; if (dv !== null && dv !== undefined) return dv; const h = DB.history.find((x) => x.month === ym()); return h && h.aporteGBP !== undefined ? h.aporteGBP : null; })();
-  const mRealV = prevM && apNowGBP !== null && apNowGBP !== undefined ? mChg - apNowGBP * num(DB.prices.gbpbrl) : null;
+  const mRealV = prevM && apNowGBP !== null && apNowGBP !== undefined ? mChg - apMonthBRL(ym(), DB.prices.gbpbrl, apNowGBP) : null;
   const mReal = (() => { const dm = dailyMonth(ym()); if (dm) return dm.r; if (!prevM || !prevM.pat) return null;
     const apNow = apNowGBP; if (apNow === null || apNow === undefined) return null;
     return (P.total - prevM.pat - apNow * num(DB.prices.gbpbrl)) / prevM.pat; })();
   // crypto 24h move, weighted by what you hold of each coin
   const c24 = (() => { let now = 0, before = 0, any = false; for (const x of cs.coins) { const ch = DB.prices[x.k + '_24h']; if (typeof ch !== 'number' || !x.valUSD) continue; any = true; now += x.valUSD; before += x.valUSD / (1 + ch / 100); } return any && before ? now / before - 1 : null; })();
   const aportesYearGBP = DB.history.filter((h) => h.month.startsWith(st.year) && h.aporteGBP).reduce((a, h) => a + h.aporteGBP, 0);
-  const aportesYear = DB.history.filter((h) => h.month.startsWith(st.year) && h.aporteGBP && h.fx).reduce((a, h) => a + h.aporteGBP * h.fx, 0);
+  const aportesYear = DB.history.filter((h) => h.month.startsWith(st.year) && h.aporteGBP && h.fx).reduce((a, h) => a + apMonthBRL(h.month, h.fx, h.aporteGBP), 0);
 
   // ---- extras for the new layout
   const mLoc = prevM ? liveLocal(P) : null;
@@ -1296,8 +1326,7 @@ function vPainel() {
     return n ? { year: yNow, r: f - 1, gain, n, rl: nl ? fl - 1 : null, nl, full: nl === n } : null;
   })();
   // "hoje": investments only — each block in its own currency vs yesterday's snapshot, aportes of today taken out (no exchange-rate effect)
-  const yest = [...(DB.daily || [])].filter((x) => x.d < today() && x.n).pop() || null;
-  const dLoc = yest ? localPeriod(yest, { n: natNow(P), g: DB.prices.gbpbrl, u: DB.prices.usdbrl }, flowsBetween(yest.d, today(), 'day').f, false) : null;
+  const dmv = dayMove(P), dLoc = dmv.any ? { r: dmv.r, gainR: dmv.v } : null;
   const dChg = dLoc ? dLoc.gainR : null;
   const spark = (() => {   // last 30 days of daily values (+ now); falls back to the last 12 saved months
     const cut = Date.now() - 30 * 864e5; let pts = (DB.daily || []).filter((x) => new Date(x.d + 'T12:00') >= cut && x.d < today()).map((x) => x.v), lbl = 'últimos 30 dias';
@@ -1321,6 +1350,7 @@ function vPainel() {
   const nextMs = ms.find((m) => !m.hit), etaMs = nextMs && st.cresc12 > 0 ? ymAdd(ym(), Math.ceil(Math.max(0, nextMs.v - P.total) / st.cresc12)) : null;
   const tile = (ico, bg, lab, val, sub, go, extra = '') => `<div class="card kpi t2 click" onclick="location.hash='${go}'"><span class="ico" style="background:${bg}">${ico}</span><div class="lab">${lab}</div><div class="val">${val}</div><div class="sub">${sub}</div>${extra}</div>`;
   $('#view').innerHTML = `
+  ${SAVE_ERR ? `<div class="banner" style="border-color:var(--neg)" onclick="location.hash='#ajustes'">⚠ As últimas mudanças não foram salvas no aparelho (${esc(SAVE_ERR)}). Faça um backup agora — toque aqui.</div>` : ''}
   ${backupOld ? `<div class="banner" onclick="location.hash='#ajustes'">💾 Faça um backup — ${s.lastBackup ? 'o último foi há mais de 30 dias' : 'você ainda não fez nenhum'}. Toque aqui.</div>` : ''}
   <div class="grid split">
    <div class="grid" style="align-content:start">
@@ -1417,72 +1447,6 @@ async function patSheet() {
   });
 }
 const patRange = () => { try { return localStorage.getItem('rumo.range') || 'all'; } catch { return 'all'; } };
-function vGraficos() {
-  const P = portfolio(), H = DB.history, R = returnsData();
-  const hp = H.filter((h) => typeof h.pat === 'number');
-  const yrs = yearsList(), byY = yrs.map((y) => H.filter((h) => h.month.startsWith(y)).reduce((s2, h) => s2 + divTotal(h), 0));
-  $('#view').innerHTML = `
-  <div class="grid split">
-   <div class="grid" style="align-content:start">
-    <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px"><h2 style="margin:0">Patrimônio</h2>
-      <div class="seg mini">${[['30', '30d'], ['90', '90d'], ['365', '1a'], ['all', 'Tudo']].map(([k, l]) => `<button class="${patRange() === k ? 'on' : ''}" data-rg="${k}">${l}</button>`).join('')}</div></div>
-      <div class="chart-box" style="height:260px"><canvas id="ch-pat"></canvas></div>
-      <div class="small" id="pat-note" data-all="${patRange() === 'all' ? '1' : ''}" style="margin-top:6px">${(DB.daily || []).length ? `Diário desde ${new Date((DB.daily[0].d) + 'T12:00').toLocaleDateString('pt-BR')} (salvo sozinho ao abrir o app)` : 'O app guarda o patrimônio de cada dia em que você abrir — a linha diária começa hoje.'}<span class="pat-all"> · antes disso, os meses do Histórico</span></div></div>
-    <div class="card"><h2>Dividendos por mês</h2><div class="chart-box" style="height:240px"><canvas id="ch-div"></canvas></div></div>
-    <div class="card"><h2>Dividendos por ano</h2><div class="chart-box" style="height:220px"><canvas id="ch-year"></canvas></div></div>
-   </div>
-   <div class="grid" style="align-content:start">
-    <div class="card"><h2>Alocação</h2><div class="chart-box" style="height:220px"><canvas id="ch-alloc"></canvas></div>
-      <div class="legend">${P.alloc.map((a) => `<span><i style="background:${a.hex}"></i>${a.n} ${pct(a.cur)}</span>`).join('')}</div></div>
-    <div class="card"><h2>Rentabilidade (sem aportes)</h2>
-      ${R.years.length ? `
-      <div class="row"><span class="l small"><b>Ano</b></span><span class="r small">Meses · Ganho · <b>Retorno</b></span></div>
-      ${[...R.years].reverse().map((y) => `<div class="row"><span class="l"><b>${y.year}</b>${y.rl !== null ? `<div class="small">sem câmbio${y.full ? '' : ' (' + y.nl + ' m)'}: <b class="${y.rl < 0 ? 'neg' : 'pos'}">${signed(pct, y.rl)}</b></div>` : ''}</span><span class="r">${y.n} · ${signed(brl, y.gain)} · <b class="${y.r < 0 ? 'neg' : 'pos'}">${signed(pct, y.r)}</b></span></div>`).join('')}
-      <div class="row"><span class="l">Desde ${ymLabel(R.since)}</span><span class="r"><b class="${R.total < 0 ? 'neg' : 'pos'}">${signed(pct, R.total)}</b></span></div>
-      <div class="small" style="margin-top:10px">Mês a mês — últimos 12 meses</div><div class="chart-box" style="height:200px;margin-top:4px"><canvas id="ch-ret"></canvas></div>`
-      : '<p class="small">Ainda sem dados. A rentabilidade começa a ser calculada a partir do primeiro mês salvo com aporte (mesmo que seja £0).</p>'}
-      <div class="small" style="margin-top:8px">Método "time-weighted" (o mesmo de corretoras e fundos): cada mês = variação do patrimônio − aporte, dividido pelo que estava investido; os meses se multiplicam no ano. Com o registro diário (e aportes com data), o mês é calculado dia a dia — o aporte só conta a partir do dia em que entrou. Dividendos contam como ganho. Em R$, então inclui o efeito do câmbio.</div>
-    </div>
-   </div>
-  </div>`;
-  const opts = (fmt) => ({ maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => fmt(c.raw) } } }, scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 7 } }, y: { grid: gridOpts(), ticks: kTicks } } });
-  // patrimônio line: monthly history until the daily snapshots start, then one point per day
-  { const D = DB.daily || [], first = D[0]?.d, ts = (d) => new Date(d + 'T12:00').getTime(), pr = DB.prices;
-    const cur = (() => { try { return localStorage.getItem('rumo.cur') || 'BRL'; } catch { return 'BRL'; } })();
-    const conv = (v, g, u) => (cur === 'GBP' ? v / (g || pr.gbpbrl || 1) : cur === 'USD' ? v / (u || pr.usdbrl || 1) : v);
-    const fmt = cur === 'GBP' ? gbp : cur === 'USD' ? usd : brl;
-    const build = (rg) => { let pts = [...hp.filter((h) => !first || h.month < first.slice(0, 7)).map((h) => { const [y, m] = h.month.split('-').map(Number); return { x: new Date(y, m, 0, 12).getTime(), y: conv(h.pat, h.fx) }; }),
-      ...D.map((x) => ({ x: ts(x.d), y: conv(x.v, x.g, x.u) }))];
-      if (rg !== 'all') { const from = Date.now() - Number(rg) * 864e5; pts = pts.filter((q) => q.x >= from); }
-      const span = pts.length > 1 ? pts[pts.length - 1].x - pts[0].x : 0;
-      const dl = (v) => { const d = new Date(v); return span > 200 * 864e5 ? MON3[d.getMonth()] + '/' + String(d.getFullYear()).slice(2) : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }); };
-      return { pts, dl }; };
-    const { pts, dl } = build(patRange());
-    chart('ch-pat', { type: 'line', data: { datasets: [{ data: pts, borderColor: '#2563EB', backgroundColor: 'rgba(37,99,235,.15)', fill: true, pointRadius: pts.length < 40 ? 2 : 0, tension: .2, borderWidth: 2 }] },
-      options: { maintainAspectRatio: false, parsing: false, plugins: { legend: { display: false }, tooltip: { callbacks: { title: (c) => new Date(c[0].raw.x).toLocaleDateString('pt-BR'), label: (c) => fmt(c.raw.y) } } },
-        scales: { x: { type: 'linear', min: pts[0]?.x, max: pts[pts.length - 1]?.x, grid: { display: false }, ticks: { maxTicksLimit: 6, callback: dl } }, y: { grid: gridOpts(), ticks: kTicks } } } });
-    // range buttons change only this chart (no full-page redraw)
-    $$('#view [data-rg]').forEach((b) => (b.onclick = () => {
-      const rg = b.dataset.rg; try { localStorage.setItem('rumo.range', rg); } catch {}
-      $$('#view [data-rg]').forEach((x) => x.classList.toggle('on', x === b));
-      const ch = charts.find((c) => c.canvas.id === 'ch-pat'); if (!ch) return render();
-      const n = build(rg), ds = ch.data.datasets[0];
-      ds.data = n.pts; ds.pointRadius = n.pts.length < 40 ? 2 : 0;
-      Object.assign(ch.options.scales.x, { min: n.pts[0]?.x, max: n.pts[n.pts.length - 1]?.x }); ch.options.scales.x.ticks.callback = n.dl;
-      ch.update();
-      const note = $('#pat-note'); if (note) note.dataset.all = rg === 'all' ? '1' : '';
-    })); }
-  chart('ch-div', { type: 'bar', data: { labels: H.map((h) => ymLabel(h.month)), datasets: [{ data: H.map(divTotal), backgroundColor: '#0EA5A4', borderRadius: 2 }] }, options: opts(brl) });
-  chart('ch-year', { type: 'bar', data: { labels: yrs.slice(-10), datasets: [{ data: byY.slice(-10), backgroundColor: cssVar('--bar-strong'), borderRadius: 4 }] }, options: opts(brl) });
-  chart('ch-alloc', { type: 'doughnut', data: { labels: P.alloc.map((a) => a.n), datasets: [{ data: P.alloc.map((a) => a.v), backgroundColor: P.alloc.map((a) => a.hex), borderColor: cssVar('--card'), borderWidth: 2 }] },
-    options: { maintainAspectRatio: false, cutout: '60%', plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => c.label + ': ' + brl(c.raw) } } } } });
-  if (R.months.length) {
-    const RM = R.months.slice(-12);   // chart: the last 12 months; the table above keeps every year
-    chart('ch-ret', { type: 'bar', data: { labels: RM.map((m) => ymLabel(m.month)), datasets: [{ data: RM.map((m) => m.r * 100), backgroundColor: RM.map((m) => (m.r < 0 ? '#DC2626' : '#16A34A')), borderRadius: 2, maxBarThickness: 48 }] },
-      options: { maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => c.raw.toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + '%' } } },
-        scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 7 } }, y: { grid: gridOpts(), ticks: { callback: (v) => v + '%' } } } } });
-  }
-}
 function yearsList() {
   const H = DB.history; if (!H.length) return [String(new Date().getFullYear())];
   const a = Number(H[0].month.slice(0, 4)), b = Math.max(Number(H[H.length - 1].month.slice(0, 4)), new Date().getFullYear());
@@ -1705,7 +1669,7 @@ function vHistorico() {
 function monthCard(m) {
   const i = DB.history.findIndex((h) => h.month === m), h = DB.history[i], prev = DB.history[i - 1];
   const varP = prev && typeof prev.pat === 'number' && typeof h.pat === 'number' && ymDiff(prev.month, h.month) === 1 ? h.pat - prev.pat : null;
-  const ap = h.aporteGBP !== null && h.aporteGBP !== undefined && h.fx ? h.aporteGBP * h.fx : null, rend = varP !== null && ap !== null ? varP - ap : null;
+  const ap = h.aporteGBP !== null && h.aporteGBP !== undefined && h.fx ? apMonthBRL(h.month, h.fx, h.aporteGBP) : null, rend = varP !== null && ap !== null ? varP - ap : null;
   const rm = returnsData().months.find((x) => x.month === m), nLog = (DB.divLog || []).filter((e) => e.date.slice(0, 7) === m).length;
   const row = (l, v, cls = '') => `<div class="mc-row"><span>${l}</span><b class="${cls}">${v}</b></div>`;
   openSheet(`<div class="mc">
@@ -1934,14 +1898,15 @@ function keysSheet() {
      ${(() => { const u = s.brapiUse; return u && u.m === ym() ? `<div class="small muted" style="margin:-4px 0 10px">Uso este mês: <b>${nf0.format(u.n)}</b> de 15.000 · hoje ${nf0.format(u.d === today() ? u.dn : 0)}</div>` : ''; })()}
      <div class="field"><label>Finnhub (EUA)<small>finnhub.io → Get free API key</small></label><input id="k-finn" value="${esc(s.keys?.finnhub || '')}" autocomplete="off" style="text-align:left"></div>
      ${keyBadge('finnhub')}
-     <div class="field"><label>Alpha Vantage (opcional)<small>alphavantage.co → Get free API key</small></label><input id="k-alpha" value="${esc(s.keys?.alpha || '')}" autocomplete="off" style="text-align:left"></div>
-     ${keyBadge('alpha')}
+     ${s.keys?.alpha || (DB.assets || []).some((a) => a.market === 'EU') ? `<div class="field"><label>Alpha Vantage (opcional)<small>alphavantage.co → Get free API key</small></label><input id="k-alpha" value="${esc(s.keys?.alpha || '')}" autocomplete="off" style="text-align:left"></div>
+     ${keyBadge('alpha')}` : ''}
+     <div class="small muted" style="margin:6px 0 10px">Planilha: coluna E com <b>GOOGLEFINANCE(…; "closeyest")</b> dá o fechamento anterior para o "hoje".</div>
      <button class="btn primary block" id="k-test">Testar chaves</button>
      <button class="btn block" onclick="closeSheet()">Fechar</button>`, (el) => {
     const set = (id, k) => ($(id, el).onchange = async (e) => { DB.settings.keys[k] = e.target.value.trim(); delete DB.settings.keyStatus[k]; await save(); });
-    set('#k-sheet', 'sheet'); set('#k-brapi', 'brapi'); set('#k-finn', 'finnhub'); set('#k-alpha', 'alpha');
+    set('#k-sheet', 'sheet'); set('#k-brapi', 'brapi'); set('#k-finn', 'finnhub'); $('#k-alpha', el) && set('#k-alpha', 'alpha');
     $('#k-test', el).onclick = async () => {
-      const K = DB.settings.keys; K.brapi = $('#k-brapi', el).value.trim(); K.finnhub = $('#k-finn', el).value.trim(); K.alpha = $('#k-alpha', el).value.trim(); K.sheet = $('#k-sheet', el).value.trim();
+      const K = DB.settings.keys; K.brapi = $('#k-brapi', el).value.trim(); K.finnhub = $('#k-finn', el).value.trim(); if ($('#k-alpha', el)) K.alpha = $('#k-alpha', el).value.trim(); K.sheet = $('#k-sheet', el).value.trim();
       toast('Testando…'); for (const k in LASTERR) delete LASTERR[k];
       const sh = K.sheet ? await sheetQuotes(['HGLG11'], K.sheet) : null;
       if (sh) await setKeyStatus('sheet', (sheetQuotes.count || 0) > 0, `${sheetQuotes.count} tickers com preço${sh.HGLG11 ? ' · HGLG11 R$ ' + nf2.format(sh.HGLG11) : ''}`);
@@ -2070,7 +2035,7 @@ async function exportExcel() {
   if ((DB.daily || []).length) add('Diário', [['Data', 'Patrimônio (R$)', 'GBP/BRL', 'USD/BRL'], ...DB.daily.map((x) => [new Date(x.d + 'T12:00:00Z'), x.v, x.g, x.u])], [12, 18, 10, 10], { 0: 'dd/mm/yyyy', 1: BR });
   add('Histórico', [['Mês', 'Patrimônio (R$)', 'Aporte (£)', 'GBP/BRL', 'Aporte (R$)', 'Div FIIs (R$)', 'Div Ações (R$)', 'Div Stocks (£)', 'Div total (R$)', 'Variação (R$)', 'Rendimento sem aporte (R$)', 'Retorno do mês', 'Observação'],
     ...H.map((h, i) => { const prev = H[i - 1], v = prev && typeof prev.pat === 'number' && typeof h.pat === 'number' && ymDiff(prev.month, h.month) === 1 ? h.pat - prev.pat : null, rm = rByM[h.month];
-      return [md(h.month), h.pat ?? null, h.aporteGBP ?? null, h.fx ?? null, h.aporteGBP != null && h.fx ? h.aporteGBP * h.fx : null, h.divFII ?? null, h.divAcoes ?? null, h.divStocks ?? null, divTotal(h), v, rm ? rm.gain : null, rm ? rm.r : null, h.note || null]; })],
+      return [md(h.month), h.pat ?? null, h.aporteGBP ?? null, h.fx ?? null, h.aporteGBP != null && h.fx ? apMonthBRL(h.month, h.fx, h.aporteGBP) : null, h.divFII ?? null, h.divAcoes ?? null, h.divStocks ?? null, divTotal(h), v, rm ? rm.gain : null, rm ? rm.r : null, h.note || null]; })],
     [10, 16, 11, 9, 13, 13, 13, 12, 13, 14, 18, 12, 30], { 0: 'mmm/yyyy', 1: BR, 2: GB, 3: '0.0000', 4: BR, 5: BR, 6: BR, 7: GB, 8: BR, 9: BR, 10: BR, 11: PC });
   const yrs = yearsList(), cell = (y, i) => { const h = H.find((x) => x.month === `${y}-${String(i + 1).padStart(2, '0')}`); return h ? divTotal(h) : null; };
   const dRows = [['Mês', ...yrs.map(Number)], ...MONTHS.map((m, i) => [m, ...yrs.map((y) => cell(y, i))]), ['Total', ...yrs.map((y) => MONTHS.reduce((a, _, i) => a + (cell(y, i) || 0), 0))]];
