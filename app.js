@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.63';
+const APP_VERSION = '4.64';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -984,7 +984,8 @@ function exchOpenedToday(ex) {
   } catch { return true; }
 }
 const exchOf = (a) => a.exch || (a.market === 'US' ? 'US' : a.market === 'B3' ? 'BVMF' : curOf(a) === 'BRL' ? 'BVMF' : ['GBP', 'GBX'].includes(curOf(a)) ? 'LON' : curOf(a) === 'EUR' ? 'EPA' : 'US');
-const tradedToday = (a) => (a.tradeD ? a.tradeD === today() : exchOpenedToday(exchOf(a)));   // previous close per source (brapi, Finnhub, Google Sheet column E)
+// counts only if its exchange has opened today AND (when the source says) the last trade was today — a source's clock alone isn't trusted
+const tradedToday = (a) => exchOpenedToday(exchOf(a)) && (!a.tradeD || a.tradeD === today());   // previous close per source (brapi, Finnhub, Google Sheet column E)
 const FX_SHEET = ['CURRENCY:GBPBRL', 'CURRENCY:USDBRL', 'CURRENCY:EURBRL'];
 async function sheetQuotes(syms, link) {
   const got = {}, url = sheetCsvUrl(link);
