@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.60';
+const APP_VERSION = '4.61';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -258,6 +258,12 @@ async function refreshPricesNow(silent) {
   const p = DB.prices; let ok = 0;
   const assetsP = refreshAssetPrices(!silent).catch((e) => { console.warn('assets', e); return null; });
   // live exchange rates from the Google Sheet (rows CURRENCY:GBPBRL, CURRENCY:USDBRL, CURRENCY:EURBRL), at most every 10 min
+  // crypto price at 00:00 today (once a day), so "hoje" starts from zero at midnight
+  const cmidP = (!p.cmid || p.cmid.d !== today()) && navigator.onLine ? (async () => {
+    const mid = new Date(); mid.setHours(0, 0, 0, 0); const o = { d: today() };
+    for (const c of COINS) { try { const j = await fetchJSON(`https://api.coingecko.com/api/v3/coins/${c.id}/market_chart?vs_currency=usd&days=1`);
+      const pt = (j?.prices || []).find((x) => x[0] >= mid.getTime()); if (pt && pt[0] - mid.getTime() < 2 * 3600 * 1000) o[c.k] = pt[1]; } catch (e) { console.warn('cg midnight', c.k, e); } }
+    if (COINS.some((c) => o[c.k])) p.cmid = o; })().catch(() => null) : null;
   // live exchange rates with no setup: AwesomeAPI (Brazil) first, Coinbase second
   const liveFxP = navigator.onLine ? (async () => {
     try { const j = await fetchJSON('https://economia.awesomeapi.com.br/json/last/GBP-BRL,USD-BRL,EUR-BRL');
@@ -279,7 +285,7 @@ async function refreshPricesNow(silent) {
     if (!p.ecb || Date.now() - new Date(p.ecb.at) > 6 * 3600 * 1000) { try { put(await fetchJSON('https://open.er-api.com/v6/latest/GBP')); } catch (e) { console.warn('fx er-api', e); } }
   }
   if (p.ecb) { p.gbpbrl = p.ecb.g; p.usdbrl = p.ecb.u; if (p.ecb.e) p.eurbrl = p.ecb.e; fx = true; }
-  const ar = await assetsP; await sheetFxP; const lv = await liveFxP;
+  const ar = await assetsP; await sheetFxP; const lv = await liveFxP; await cmidP;
   // live rate first (moves during the day); the ECB rate is set once a day and stays as the backup and sanity check
   const near = (a, b) => !b || (a / b > 0.8 && a / b < 1.25);
   const sf = lv && near(lv.g, fx ? p.gbpbrl : null) ? { ...lv, at: new Date().toISOString() } : p.sheetFx;
@@ -882,8 +888,8 @@ function brapiParse(j) {
   const out = {};
   for (const r of j?.results || []) {
     const sym = String(r.symbol || r.data?.symbol || r.stock || '').toUpperCase();
-    const px = r.data?.regularMarketPrice ?? r.regularMarketPrice, pc = r.data?.regularMarketPreviousClose ?? r.regularMarketPreviousClose;
-    if (sym && typeof px === 'number' && px > 0) { out[sym] = px; if (typeof pc === 'number' && pc > 0) PCQ.b[sym] = pc; }
+    const px = r.data?.regularMarketPrice ?? r.regularMarketPrice, pc = r.data?.regularMarketPreviousClose ?? r.regularMarketPreviousClose, tt = r.data?.regularMarketTime ?? r.regularMarketTime;
+    if (sym && typeof px === 'number' && px > 0) { out[sym] = px; if (typeof pc === 'number' && pc > 0) PCQ.b[sym] = pc; if (tt) { const d = typeof tt === 'number' ? tradeDay(tt) : ymdL(new Date(tt)); if (d && d !== 'NaN-NaN-NaN') TDQ.b[sym] = d; } }
   }
   return out;
 }
@@ -912,7 +918,7 @@ async function brapiQuotes(syms, key) {
 async function finnhubQuotes(syms, key) {
   const got = {}; if (!key) return got;
   await pool(syms, 4, async (s) => {   // 4 at a time (Finnhub allows ~60/minute, but not big bursts)
-    try { const j = await fetchRetry('https://finnhub.io/api/v1/quote?symbol=' + encodeURIComponent(s) + '&token=' + encodeURIComponent(key)); if (j.c > 0) { got[s] = j.c; if (j.pc > 0) PCQ.f[s] = j.pc; } else LASTERR.finnhub = 'ticker sem preço (' + s + ')'; } catch (e) { console.warn('finnhub', s, e); LASTERR.finnhub = e.message; }
+    try { const j = await fetchRetry('https://finnhub.io/api/v1/quote?symbol=' + encodeURIComponent(s) + '&token=' + encodeURIComponent(key)); if (j.c > 0) { got[s] = j.c; if (j.pc > 0) PCQ.f[s] = j.pc; if (j.t > 0) TDQ.f[s] = tradeDay(j.t); } else LASTERR.finnhub = 'ticker sem preço (' + s + ')'; } catch (e) { console.warn('finnhub', s, e); LASTERR.finnhub = e.message; }
   });
   return got;
 }
@@ -953,7 +959,32 @@ function sheetNum(v) {
   else v = v.replace(',', '.');
   const n = Number(v); return n > 0 ? n : null;
 }
-const PCQ = { b: {}, f: {}, s: {} };   // previous close per source (brapi, Finnhub, Google Sheet column E)
+const PCQ = { b: {}, f: {}, s: {} };
+const TDQ = { b: {}, f: {}, s: {} }, EXQ = {};   // last trade day per source · exchange prefix from the sheet (LON, EPA…)
+const ymdL = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+function tradeDay(v) {   // "28/10 13:56", "28/10/2026 13:56:00", "2026-10-28 …", a sheet serial number or a unix time → 'YYYY-MM-DD'
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') return ymdL(new Date(v > 1e11 ? v : v > 1e9 ? v * 1000 : Date.UTC(1899, 11, 30) + v * 864e5));
+  const t = String(v).trim(); let m = t.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return m[1] + '-' + m[2].padStart(2, '0') + '-' + m[3].padStart(2, '0');
+  m = t.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+  if (m) { const now = new Date(), mo = Number(m[2]); let y = m[3] ? Number(m[3].length === 2 ? '20' + m[3] : m[3]) : now.getFullYear(); if (!m[3] && mo > now.getMonth() + 1) y--; return y + '-' + String(mo).padStart(2, '0') + '-' + m[1].padStart(2, '0'); }
+  if (/^\d{5}([.,]\d+)?$/.test(t)) return tradeDay(Number(t.replace(',', '.')));
+  return null;
+}
+// has this exchange opened today (by our clock)? used when the source gives no trade time
+const EXCH = { LON: ['Europe/London', 8, 0], EPA: ['Europe/Paris', 9, 0], AMS: ['Europe/Paris', 9, 0], EBR: ['Europe/Paris', 9, 0], ETR: ['Europe/Berlin', 9, 0], FRA: ['Europe/Berlin', 9, 0], BVMF: ['America/Sao_Paulo', 10, 0], US: ['America/New_York', 9, 30] };
+function exchOpenedToday(ex) {
+  const [z, h, mi] = EXCH[ex] || EXCH.BVMF;
+  try {
+    const f = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: z, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date()).map((x) => [x.type, x.value]));
+    if (f.weekday === 'Sat' || f.weekday === 'Sun') return false;
+    if (`${f.year}-${f.month}-${f.day}` !== today()) return false;   // over there it's still yesterday
+    return Number(f.hour) * 60 + Number(f.minute) >= h * 60 + mi;
+  } catch { return true; }
+}
+const exchOf = (a) => a.exch || (a.market === 'US' ? 'US' : a.market === 'B3' ? 'BVMF' : curOf(a) === 'BRL' ? 'BVMF' : ['GBP', 'GBX'].includes(curOf(a)) ? 'LON' : curOf(a) === 'EUR' ? 'EPA' : 'US');
+const tradedToday = (a) => (a.tradeD ? a.tradeD === today() : exchOpenedToday(exchOf(a)));   // previous close per source (brapi, Finnhub, Google Sheet column E)
 const FX_SHEET = ['CURRENCY:GBPBRL', 'CURRENCY:USDBRL', 'CURRENCY:EURBRL'];
 async function sheetQuotes(syms, link) {
   const got = {}, url = sheetCsvUrl(link);
@@ -963,11 +994,11 @@ async function sheetQuotes(syms, link) {
     const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' }); clearTimeout(t);
     const txt = await r.text();
     if (!r.ok || /<html/i.test(txt.slice(0, 200))) { LASTERR.sheet = 'sem acesso — no Google Sheets: Compartilhar → "Qualquer pessoa com o link" → Leitor'; return got; }
-    const all = {}, cur = {}, pcAll = {};
-    for (const row of csvRows(txt)) { const tk = String(row[0] || '').trim().toUpperCase().replace(/^BVMF:/, ''); const px = sheetNum(row[1]); if (tk && px) { all[tk] = px; const pc0 = sheetNum(row[4]); if (pc0) pcAll[tk] = pc0; const c = String(row[3] || '').trim().toUpperCase(); if (/^(BRL|USD|GBP|GBX|EUR)$/.test(c)) cur[tk] = c; } }
+    const all = {}, cur = {}, pcAll = {}, tdAll = {};
+    for (const row of csvRows(txt)) { const tk = String(row[0] || '').trim().toUpperCase().replace(/^BVMF:/, ''); const px = sheetNum(row[1]); if (tk && px) { all[tk] = px; const pc0 = sheetNum(row[4]); if (pc0) pcAll[tk] = pc0; const td0 = tradeDay(row[2]); if (td0) tdAll[tk] = td0; const c = String(row[3] || '').trim().toUpperCase(); if (/^(BRL|USD|GBP|GBX|EUR)$/.test(c)) cur[tk] = c; } }
     // also match without the exchange: "VWRP" finds "LON:VWRP" (an exact match always wins)
-    for (const tk of Object.keys(all)) { const sh = tk.includes(':') ? tk.split(':').pop() : null; if (sh && !(sh in all)) { all[sh] = all[tk]; if (cur[tk]) cur[sh] = cur[tk]; if (pcAll[tk]) pcAll[sh] = pcAll[tk]; } }
-    for (const s2 of syms) if (pcAll[s2]) PCQ.s[s2] = pcAll[s2];
+    for (const tk of Object.keys(all)) { const sh = tk.includes(':') ? tk.split(':').pop() : null; if (sh && !(sh in all)) { all[sh] = all[tk]; if (cur[tk]) cur[sh] = cur[tk]; if (pcAll[tk]) pcAll[sh] = pcAll[tk]; if (tdAll[tk]) tdAll[sh] = tdAll[tk]; EXQ[sh] = tk.split(':')[0]; } }
+    for (const s2 of syms) { if (pcAll[s2]) PCQ.s[s2] = pcAll[s2]; TDQ.s[s2] = tdAll[s2] || null; }
     sheetQuotes.cur = cur;
     for (const s of syms) if (all[s]) got[s] = all[s];
     sheetQuotes.count = Object.keys(all).length;
@@ -1010,10 +1041,11 @@ async function refreshAssetPrices(force) {
       const viaSheet = a.market === 'GS' || (a.market === 'B3' && inSheet.has(a.ticker));
       const due = viaSheet ? gsDue : a.market === 'B3' ? b3Due : a.market === 'US' ? usDue : euDue;
       if (!due) { if (a.priceAt && !a.priceErr) ok++; else if (!a.price) fail.push(a.ticker); continue; }   // fetched moments ago — still fresh
-      const [Q, PC] = viaSheet ? [pg, PCQ.s] : a.market === 'B3' ? [pb, PCQ.b] : a.market === 'US' ? [pu, PCQ.f] : [pe, {}];
-      let px = Q[a.ticker], pc = PC[a.ticker];
-      if (!px && a.market === 'B3' && pg[a.ticker]) { px = pg[a.ticker]; pc = PCQ.s[a.ticker]; }
-      if (px) { a.price = px; a.priceAt = now(); a.priceErr = null; ok++; if (pc > 0) { a.pc = pc; a.pcAt = today(); } if (a.market === 'GS' && sheetQuotes.cur?.[a.ticker]) a.currency = sheetQuotes.cur[a.ticker]; }
+      let [Q, PC, TD] = viaSheet ? [pg, PCQ.s, TDQ.s] : a.market === 'B3' ? [pb, PCQ.b, TDQ.b] : a.market === 'US' ? [pu, PCQ.f, TDQ.f] : [pe, {}, {}];
+      if (!Q[a.ticker] && a.market === 'B3' && pg[a.ticker]) [Q, PC, TD] = [pg, PCQ.s, TDQ.s];
+      const px = Q[a.ticker], pc = PC[a.ticker];
+      if (px) { a.price = px; a.priceAt = now(); a.priceErr = null; ok++; if (pc > 0) { a.pc = pc; a.pcAt = today(); }
+        a.tradeD = TD[a.ticker] || null; a.exch = Q === pg ? EXQ[a.ticker] || (a.market === 'B3' || curOf(a) === 'BRL' ? 'BVMF' : null) : a.market === 'US' ? 'US' : a.market === 'B3' ? 'BVMF' : null; if (a.market === 'GS' && sheetQuotes.cur?.[a.ticker]) a.currency = sheetQuotes.cur[a.ticker]; }
       else { a.priceErr = 'não atualizou'; fail.push(a.ticker); }   // keeps the last good price
     }
     DB.prices.assetsAt = new Date().toISOString(); await save();
@@ -1261,31 +1293,35 @@ function dayMove(P) {
   const G = Object.fromEntries(CATS.map(([k, n]) => [k, { n, v: 0, base: 0, items: [] }])); let snapUsed = 0, any = false;
   for (const a of DB.assets || []) {
     const pt = priceOf(a), q = num(a.qty); if (!pt || !q) continue;
+    if (a.market !== 'MANUAL' && !tradedToday(a)) { const fx0 = FXOF(curOf(a)), k0 = a.cls === 'stocks' ? a.kind || 'Stock' : a.cls; if (G[k0]) { G[k0].base += q * pt * fx0; any = true; } continue; }   // its market hasn't opened today: 0
     let base = a.pc > 0 && a.pcAt === today() ? a.pc : null;
     if (!base) { const y = yest?.a?.[a.id]; if (!y || !y[0]) continue; base = y[0]; snapUsed++; }   // no previous close: last snapshot price
     const fx = FXOF(curOf(a)), v = q * (pt - base) * fx, k = a.cls === 'stocks' ? a.kind || 'Stock' : a.cls; if (!G[k]) continue;
     G[k].v += v; G[k].base += q * base * fx; any = true; if (Math.abs(v) >= 0.005) G[k].items.push({ t: a.ticker, r: pt / base - 1, v });
   }
   for (const c of P.cs.coins) {
-    if (!c.units) continue; const u = num(pr.usdbrl), ch = pr[c.k + '_24h']; let r, v, base;
-    if (typeof ch === 'number') { r = ch / 100; base = (c.valUSD / (1 + r)) * u; v = c.valUSD * u - base; }
+    if (!c.units) continue; const u = num(pr.usdbrl), ch = pr[c.k + '_24h'], m0 = pr.cmid?.d === today() ? num(pr.cmid[c.k]) : 0, pt0 = num(pr[c.k]); let r, v, base;
+    if (m0 > 0 && pt0 > 0 && Math.abs(pt0 / m0 - 1) < 0.5) { r = pt0 / m0 - 1; base = c.units * m0 * u; v = c.valUSD * u - base; }   // since 00:00
+    else if (typeof ch === 'number') { r = ch / 100; base = (c.valUSD / (1 + r)) * u; v = c.valUSD * u - base; }
     else { const y = yest?.k?.[c.k], pt = num(pr[c.k]); if (!y || !y[0]) continue; r = pt / y[0] - 1; v = c.units * (pt - y[0]) * u; base = c.units * y[0] * u; snapUsed++; }
     G.crypto.v += v; G.crypto.base += base; any = true; if (Math.abs(v) >= 0.005) G.crypto.items.push({ t: c.k, r, v });
   }
   const list = CATS.map(([k]) => ({ k, ...G[k] })).filter((g) => g.base > 0 || g.items.length), v = list.reduce((t, g) => t + g.v, 0);
   return { any, v, r: P.total - v > 0 ? v / (P.total - v) : 0, list, snapUsed };
 }
+const exchOpenedLbl = () => { try { const d = new Date(); const ny = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' })), here = new Date(d.toLocaleString('en-US')); const diff = Math.round((here - ny) / 36e5); return String(9 + diff).padStart(2, '0') + ':30'; } catch { return '14:30'; } };
 function todaySheet(CV) {
   const P = portfolio(), dm = dayMove(P); if (!dm.any) return toast('Sem preços de fechamento ainda — puxe para atualizar');
   const wk = [0, 6].includes(new Date().getDay());
   const amt = (v) => `<span class="money ${v < 0 ? 'neg' : v > 0 ? 'pos' : ''}">${signed(CV, v)}</span>`;
   const catRow = (g) => `<div class="tc click" data-c="${g.k}"><div class="mc-row" style="border:0"><span><span class="tc-ch">▸</span> ${g.n}</span><span style="text-align:right">${g.base ? `<span class="${g.v < 0 ? 'neg' : g.v > 0 ? 'pos' : ''}">${signed(pctS, g.v / g.base)}</span> · ` : ''}${amt(g.v)}</span></div>
       <div class="tc-items hidden">${g.items.sort((a, b) => a.v - b.v).map((m) => `<div class="tc-i"><span>${esc(m.t)}</span><span><span class="${m.r < 0 ? 'neg' : 'pos'}">${signed(pctS, m.r)}</span> · ${amt(m.v)}</span></div>`).join('') || '<div class="tc-i muted">sem variação</div>'}</div></div>`;
-  openSheet(`<div class="mc"><div class="mc-top"><div class="small muted">${wk ? 'ações: último pregão (sexta)' : 'ações: desde o fechamento anterior'} · cripto: 24 h · sem câmbio</div><h3 style="margin:2px 0 0">Hoje</h3>
+  openSheet(`<div class="mc"><div class="mc-top"><div class="small muted">desde 00:00 · ${wk ? 'bolsas fechadas hoje' : 'ações contam quando a bolsa abre'} · sem câmbio</div><h3 style="margin:2px 0 0">Hoje</h3>
       <div class="mc-big ${dm.v < 0 ? 'neg' : 'pos'} money">${signed(CV, dm.v)}</div><div style="font-weight:700" class="${dm.r < 0 ? 'neg' : 'pos'}">${signed(pctS, dm.r)}</div></div>
     <div class="small muted" style="margin:10px 0 2px;font-weight:700;letter-spacing:.03em">POR CATEGORIA <span style="font-weight:500;letter-spacing:0">· toque para ver os ativos</span></div>
     ${dm.list.map(catRow).join('')}
     ${dm.snapUsed ? `<div class="small muted" style="margin-top:10px">${dm.snapUsed} ${dm.snapUsed === 1 ? 'ativo sem' : 'ativos sem'} fechamento anterior na fonte de preço — comparado com o último registro do app.</div>` : ''}
+    <div class="small muted" style="margin-top:6px">Londres abre 08:00 · B3 ${new Date().getTimezoneOffset() === 0 ? '13:00' : '14:00'} · EUA ${exchOpenedLbl()} (hora daqui). Cripto: desde a meia-noite.</div>
     <div class="small muted" style="margin-top:6px">Saldos digitados (renda fixa, caixa, cash da T212) não entram: só a variação de mercado.</div>
     <button class="btn block" onclick="closeSheet()" style="margin-top:14px">Fechar</button></div>`, (el) => {
     $$('.tc', el).forEach((t) => (t.onclick = () => { const it = $('.tc-items', t), open = it.classList.toggle('hidden') === false; $('.tc-ch', t).textContent = open ? '▾' : '▸'; }));
