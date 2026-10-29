@@ -408,3 +408,6 @@ html.priv .pb2 b{filter:blur(6px)}
 .item .r{white-space:nowrap; padding-left:8px}
 .chips2{gap:5px}
 .chips2 .dchip, .chips2 .mchip{font-size:12px; padding:4px 8px; gap:4px; white-space:nowrap}
+/* v4.63 — tab bar: icon always above the label, centred */
+.tabs a{display:flex; flex-direction:column; align-items:center; justify-content:flex-start; gap:2px; min-width:0}
+.tabs a span{display:flex; width:auto; margin:0 0 1px}
