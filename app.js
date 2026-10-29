@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.64';
+const APP_VERSION = '4.65';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -961,6 +961,9 @@ function sheetNum(v) {
 }
 const PCQ = { b: {}, f: {}, s: {} };
 const TDQ = { b: {}, f: {}, s: {} }, EXQ = {};   // last trade day per source · exchange prefix from the sheet (LON, EPA…)
+// a new price more than 5× away from the last good one is suspicious — unless the previous close agrees with it (e.g. a split)
+const far = (a, b) => a > 0 && b > 0 && (a / b > 5 || b / a > 5);
+const suspectPx = (a, px, pc) => (num(a.price) > 0 && far(px, num(a.price)) && !(pc > 0 && !far(px, pc) && px / pc < 2 && pc / px < 2)) || (!(num(a.price) > 0) && pc > 0 && far(px, pc));
 const ymdL = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 function tradeDay(v) {   // "28/10 13:56", "28/10/2026 13:56:00", "2026-10-28 …", a sheet serial number or a unix time → 'YYYY-MM-DD'
   if (v === null || v === undefined || v === '') return null;
@@ -987,14 +990,23 @@ const exchOf = (a) => a.exch || (a.market === 'US' ? 'US' : a.market === 'B3' ? 
 // counts only if its exchange has opened today AND (when the source says) the last trade was today — a source's clock alone isn't trusted
 const tradedToday = (a) => exchOpenedToday(exchOf(a)) && (!a.tradeD || a.tradeD === today());   // previous close per source (brapi, Finnhub, Google Sheet column E)
 const FX_SHEET = ['CURRENCY:GBPBRL', 'CURRENCY:USDBRL', 'CURRENCY:EURBRL'];
+// the sheet is downloaded once and shared for 60 s (prices + exchange-rate rows use the same copy); waits up to 20 s and tries twice
+const SHEETC = { url: null, at: 0, p: null };
+function sheetCsv(url) {
+  if (SHEETC.p && SHEETC.url === url && Date.now() - SHEETC.at < 60 * 1000) return SHEETC.p;
+  const one = async () => { const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 20000);
+    try { const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' }); return { ok: r.ok, txt: await r.text() }; } finally { clearTimeout(t); } };
+  SHEETC.url = url; SHEETC.at = Date.now();
+  SHEETC.p = one().catch(async (e) => { if (!navigator.onLine) throw e; await new Promise((r) => setTimeout(r, 1500)); return one(); });
+  SHEETC.p.catch(() => { SHEETC.p = null; });   // a failure isn't reused
+  return SHEETC.p;
+}
 async function sheetQuotes(syms, link) {
   const got = {}, url = sheetCsvUrl(link);
   if (!url) { LASTERR.sheet = 'link inválido — copie o link do botão Compartilhar'; return got; }
   try {
-    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 10000);
-    const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' }); clearTimeout(t);
-    const txt = await r.text();
-    if (!r.ok || /<html/i.test(txt.slice(0, 200))) { LASTERR.sheet = 'sem acesso — no Google Sheets: Compartilhar → "Qualquer pessoa com o link" → Leitor'; return got; }
+    const { ok: rok, txt } = await sheetCsv(url);
+    if (!rok || /<html/i.test(txt.slice(0, 200))) { LASTERR.sheet = 'sem acesso — no Google Sheets: Compartilhar → "Qualquer pessoa com o link" → Leitor'; return got; }
     const all = {}, cur = {}, pcAll = {}, tdAll = {};
     for (const row of csvRows(txt)) { const tk = String(row[0] || '').trim().toUpperCase().replace(/^BVMF:/, ''); const px = sheetNum(row[1]); if (tk && px) { all[tk] = px; const pc0 = sheetNum(row[4]); if (pc0) pcAll[tk] = pc0; const td0 = tradeDay(row[2]); if (td0) tdAll[tk] = td0; const c = String(row[3] || '').trim().toUpperCase(); if (/^(BRL|USD|GBP|GBX|EUR)$/.test(c)) cur[tk] = c; } }
     // also match without the exchange: "VWRP" finds "LON:VWRP" (an exact match always wins)
@@ -1009,7 +1021,7 @@ async function sheetQuotes(syms, link) {
   return got;
 }
 async function setKeyStatus(prov, ok, okMsg) {
-  DB.settings.keyStatus[prov] = { ok, msg: ok ? okMsg : (LASTERR[prov] || 'sem resposta'), at: new Date().toISOString() };
+  (DB.settings.keyStatus ||= {})[prov] = { ok, msg: ok ? okMsg : (LASTERR[prov] || 'sem resposta'), at: new Date().toISOString() };
 }
 let assetBusy = false;
 async function refreshAssetPrices(force) {
@@ -1026,7 +1038,7 @@ async function refreshAssetPrices(force) {
     const gs = gsDue ? [...new Set([...tk('GS'), ...(keys.sheet ? tk('B3') : [])])] : [];
     if (gs.length) DB.prices.gsAt = now();
     const pg = gs.length ? await sheetQuotes(gs, keys.sheet) : {};
-    if (gs.length && keys.sheet) { const own = tk('GS'), n = own.filter((t) => pg[t]).length; DB.prices.sheetHas = tk('B3').filter((t) => pg[t]);
+    if (gs.length && keys.sheet) { const own = tk('GS'), n = own.filter((t) => pg[t]).length; DB.prices.sheetHas = tk('B3').filter((t) => pg[t] && !(A.find((a) => a.ticker === t && a.market === 'B3' && suspectPx(a, pg[t], PCQ.s[t]))));
       await setKeyStatus('sheet', Object.keys(pg).length > 0, `${n}/${own.length} preços${DB.prices.sheetHas.length ? ` + ${DB.prices.sheetHas.length} da B3` : ''}`); }
     const inSheet = new Set(keys.sheet ? DB.prices.sheetHas || [] : []);
     // 2) brapi only for B3 shares the sheet doesn't have
@@ -1034,9 +1046,10 @@ async function refreshAssetPrices(force) {
     if (b3.length) DB.prices.b3At = now(); if (us.length) DB.prices.usAt = now();
     const [pb, pu, pe] = await Promise.all([b3.length ? brapiQuotes(b3, keys.brapi) : {}, us.length ? finnhubQuotes(us, keys.finnhub) : {}, eu.length ? alphaQuotes(eu, keys.alpha) : {}]);
     if (b3.length) await setKeyStatus('brapi', Object.keys(pb).length > 0, `${Object.keys(pb).length}/${b3.length} preços`);
+    else if (keys.brapi && tk('B3').length && inSheet.size === tk('B3').length) (DB.settings.keyStatus ||= {}).brapi = { ok: true, msg: 'em espera — todas as ações vêm da planilha', at: now() };
     if (us.length && keys.finnhub) await setKeyStatus('finnhub', Object.keys(pu).length > 0, `${Object.keys(pu).length}/${us.length} preços`);
     if (eu.length && keys.alpha) { await setKeyStatus('alpha', Object.keys(pe).length > 0, `${Object.keys(pe).length}/${eu.length} preços`); DB.prices.euAt = now(); }
-    let ok = 0, fail = [];
+    let ok = 0, fail = []; const bad = new Set();
     for (const a of A) {
       if (a.market === 'MANUAL') continue;
       const viaSheet = a.market === 'GS' || (a.market === 'B3' && inSheet.has(a.ticker));
@@ -1044,11 +1057,16 @@ async function refreshAssetPrices(force) {
       if (!due) { if (a.priceAt && !a.priceErr) ok++; else if (!a.price) fail.push(a.ticker); continue; }   // fetched moments ago — still fresh
       let [Q, PC, TD] = viaSheet ? [pg, PCQ.s, TDQ.s] : a.market === 'B3' ? [pb, PCQ.b, TDQ.b] : a.market === 'US' ? [pu, PCQ.f, TDQ.f] : [pe, {}, {}];
       if (!Q[a.ticker] && a.market === 'B3' && pg[a.ticker]) [Q, PC, TD] = [pg, PCQ.s, TDQ.s];
-      const px = Q[a.ticker], pc = PC[a.ticker];
-      if (px) { a.price = px; a.priceAt = now(); a.priceErr = null; ok++; if (pc > 0) { a.pc = pc; a.pcAt = today(); }
+      let px = Q[a.ticker]; const pc = PC[a.ticker];
+      if (px && suspectPx(a, px, pc)) {   // e.g. 2580 for a R$ 16 share: keep the last good price, try brapi next time
+        a.suspect = a.suspect && Math.abs(a.suspect.px / px - 1) < 0.05 ? a.suspect : { px, since: now() };
+        if (Date.now() - new Date(a.suspect.since) < 24 * 3600 * 1000) { a.priceErr = `preço suspeito na fonte (${fmtN(px, 2)})`; fail.push(a.ticker); if (viaSheet && a.market === 'B3') bad.add(a.ticker); continue; }
+      }
+      if (px) { delete a.suspect; a.price = px; a.priceAt = now(); a.priceErr = null; ok++; if (pc > 0) { a.pc = pc; a.pcAt = today(); }
         a.tradeD = TD[a.ticker] || null; a.exch = Q === pg ? EXQ[a.ticker] || (a.market === 'B3' || curOf(a) === 'BRL' ? 'BVMF' : null) : a.market === 'US' ? 'US' : a.market === 'B3' ? 'BVMF' : null; if (a.market === 'GS' && sheetQuotes.cur?.[a.ticker]) a.currency = sheetQuotes.cur[a.ticker]; }
       else { a.priceErr = 'não atualizou'; fail.push(a.ticker); }   // keeps the last good price
     }
+    if (bad.size) DB.prices.sheetHas = (DB.prices.sheetHas || []).filter((t) => !bad.has(t));   // brapi takes over that ticker next round
     DB.prices.assetsAt = new Date().toISOString(); await save();
     return { ok, fail };
   } finally { assetBusy = false; }
