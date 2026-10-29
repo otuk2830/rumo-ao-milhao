@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.61';
+const APP_VERSION = '4.62';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1054,6 +1054,9 @@ async function refreshAssetPrices(force) {
 }
 
 let ATV = { seg: 'acoes' };
+const AV_COL = ['#1D4ED8', '#0F766E', '#A16207', '#7C3AED', '#BE185D', '#15803D', '#C2410C', '#0369A1', '#4338CA', '#B91C1C'];
+const avatar = (t) => { const k = String(t || '').replace(/^[A-Z]+:/, '').replace(/[^A-Z]/gi, '').toUpperCase(), h = [...k].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
+  return `<span class="av" style="background:${AV_COL[h % AV_COL.length]}">${esc(k.slice(0, 2) || '?')}</span>`; };
 function segBar(active) {
   return `<div class="seg">${ACLS.map((c) => `<button class="${active === c.k ? 'on' : ''}" data-seg="${c.k}">${c.n}</button>`).join('')}<button class="${active === 'cripto' ? 'on' : ''}" data-seg="cripto">Cripto</button></div>`;
 }
@@ -1067,7 +1070,7 @@ function vAtivos() {
   const pl = withCost.reduce((s, r) => s + r.pl, 0);
   // Exterior is shown in £ (with the R$ value underneath); Painel keeps everything in R$
   const gbp = num(DB.prices.gbpbrl), inGBP = cls === 'stocks' && gbp > 0;
-  const M = (v) => (inGBP ? '£ ' + nf2.format(v / gbp) : brl(v, 2));
+  const M = (v) => (inGBP ? '£ ' + nf2.format(v / gbp) : brl(v, 2)), M0 = (v) => (inGBP ? '£ ' + nf2.format(v / gbp) : brl(v));
   const needGS = rows.some((r) => r.a.market === 'GS') && !keys.sheet, needB3 = rows.some((r) => r.a.market === 'B3') && !keys.brapi, needUS = rows.some((r) => r.a.market === 'US') && !keys.finnhub, needEU = rows.some((r) => r.a.market === 'EU') && !keys.alpha;
   const manualTotal = cls === 'stocks' ? (num(DB.balances.pieStocks) + num(DB.balances.pieReits) + num(DB.balances.pieEtfs)) * num(DB.prices.gbpbrl) : num(DB.balances[cls]);
   $('#view').innerHTML = `${segBar(cls)}
@@ -1089,9 +1092,9 @@ function vAtivos() {
      <button class="btn primary block" id="at-add" style="margin:0 0 8px">＋ Adicionar ativo</button>
      ${(() => {
         const itemHtml = (r) => `<div class="item click" data-id="${r.a.id}">
-        <div><div class="t">${esc(r.a.ticker)} ${r.a.kind ? `<span class="small muted">${esc(r.a.kind)}</span>` : ''}</div>
-        <div class="s">${r.a.qty.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} × ${fmtPx(r.cur, r.pr)}${r.a.market === 'MANUAL' ? ' · manual' : ''}${!num(r.a.avg) ? ' · <span class="warn">sem preço médio</span>' : ''}${r.stale ? ` · <span class="neg">⚠ ${r.a.priceAt ? 'preço de ' + new Date(r.a.priceAt).toLocaleDateString('pt-BR') : 'sem preço'}</span>` : ''}</div></div>
-        <div class="r"><div class="t">${M(r.value)}</div>${inGBP ? `<div class="s">${brl(r.value, 2)}</div>` : ''}${r.pl !== null ? `<div class="s ${r.pl < 0 ? 'neg' : 'pos'}">${signed(pct, r.plPct)}</div>` : ''}</div></div>`;
+        <div class="av-row">${avatar(r.a.ticker)}<div><div class="t">${esc(r.a.ticker)} ${r.a.kind ? `<span class="small muted">${esc(r.a.kind)}</span>` : ''}</div>
+        <div class="s">${r.a.qty.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} × ${fmtPx(r.cur, r.pr)}${r.a.market === 'MANUAL' ? ' · manual' : ''}${!num(r.a.avg) ? ' · <span class="warn">sem preço médio</span>' : ''}${r.stale ? ` · <span class="neg">⚠ ${r.a.priceAt ? 'preço de ' + new Date(r.a.priceAt).toLocaleDateString('pt-BR') : 'sem preço'}</span>` : ''}</div></div></div>
+        <div class="r"><div class="t">${M(r.value)}</div>${inGBP ? `<div class="s">${brl(r.value, 2)}</div>` : ''}${r.pl !== null ? `<div class="s ${r.pl < 0 ? 'neg' : 'pos'}">${signed(M0, r.pl)} · ${signed(pct, r.plPct)}</div>` : ''}</div></div>`;
         const sorted = rows.sort((x, y) => y.value - x.value);
         if (!sorted.length) return '<p class="muted">Nenhum ativo ainda. Toque em ＋ Adicionar ativo.</p>';
         if (cls !== 'stocks') return sorted.map(itemHtml).join('');
@@ -1197,6 +1200,15 @@ function editAsset(id, cls) {
 const TITLES = { painel: 'Painel', atualizar: 'Atualizar', historico: 'Histórico', dividendos: 'Dividendos', cripto: 'Cripto', ativos: 'Ativos', ajustes: 'Ajustes' };
 function route() { return (location.hash || '#painel').slice(1); }
 window.addEventListener('hashchange', () => { if (DB) render(); window.scrollTo(0, 0); });
+// header line: how long ago the prices were fetched
+function topSub() {
+  const el = document.getElementById('top-sub'); if (!el || !DB) return; const u = DB.prices.updatedAt;
+  let t = 'preços ainda não buscados';
+  if (u) { const m = Math.floor((Date.now() - new Date(u)) / 60000);
+    t = m < 1 ? 'atualizado agora' : m < 60 ? `atualizado há ${m} min` : m < 24 * 60 && new Date(u).toDateString() === new Date().toDateString() ? `atualizado às ${new Date(u).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : 'atualizado em ' + fmtDate(u); }
+  el.textContent = t + (navigator.onLine ? '' : ' · offline');
+}
+setInterval(topSub, 30 * 1000);
 let RENDER_WAIT = false;
 function render() {
   if (!DB) return;
@@ -1207,7 +1219,7 @@ function render() {
   charts.forEach((c) => c.destroy()); charts = [];
   const r = TITLES[route()] && route() !== 'graficos' ? route() : 'painel';
   $('#top-title').textContent = TITLES[r];
-  $('#top-sub').textContent = 'Preços: ' + (DB.prices.updatedAt ? fmtDate(DB.prices.updatedAt) : 'ainda não buscados') + (navigator.onLine ? '' : ' · offline');
+  topSub();
   $$('.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === (r === 'cripto' ? 'ativos' : r)));
   requestAnimationFrame(() => { const maxY = Math.max(0, document.documentElement.scrollHeight - innerHeight); if (scrollY > maxY) scrollTo(0, maxY); });
   ({ painel: vPainel, atualizar: vAtualizar, historico: vHistorico, dividendos: vDividendos, cripto: vCripto, ativos: vAtivos, ajustes: vAjustes })[r]();
@@ -1371,12 +1383,15 @@ function vPainel() {
     const mn = Math.min(...pts), mx = Math.max(...pts), W = 300, H = 50, y = (v) => (mx === mn ? H / 2 : H - 4 - ((v - mn) / (mx - mn)) * (H - 8));
     const d = pts.map((v, k) => `${k ? 'L' : 'M'}${((k / (pts.length - 1)) * W).toFixed(1)} ${y(v).toFixed(1)}`).join(' ');
     return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#60A5FA" stop-opacity=".35"/><stop offset="1" stop-color="#60A5FA" stop-opacity="0"/></linearGradient></defs>
-      <path d="${d} L${W} ${H} L0 ${H} Z" fill="url(#sg)"/><path d="${d}" fill="none" stroke="#93C5FD" stroke-width="2" vector-effect="non-scaling-stroke"/></svg><div class="spark-l">${lbl} · toque na linha para o gráfico completo</div>`;
+      <path d="${d} L${W} ${H} L0 ${H} Z" fill="url(#sg)"/><path d="${d}" fill="none" stroke="#93C5FD" stroke-width="2" vector-effect="non-scaling-stroke"/></svg><div class="spark-l">${lbl}</div>`;
   })();
   const bars = (() => {   // last 12 months of real growth; current month live (lighter)
     const byM = Object.fromEntries(R.months.map((m) => [m.month, m.rl ?? m.r])), L = [];   // bars: no-FX return when known
     for (let k = 11; k >= 0; k--) { const m = ymAdd(ym(), -k); L.push({ m, r: m === ym() ? (mLoc ? mLoc.r : mReal) : byM[m] ?? null, live: m === ym() }); }
     const mx = Math.max(0.005, ...L.filter((x) => x.r !== null).map((x) => Math.abs(x.r)));
+    const first = L.findIndex((x) => x.r !== null), F = first > 0 ? L.slice(first) : null;
+    if (F && F.length) return `<div class="pb2">${F.map((x) => { const h = x.r === null ? 0 : Math.max(4, (Math.abs(x.r) / mx) * 30), lb = x.r === null ? '' : `<b class="${x.r < 0 ? 'neg' : 'pos'}">${signed(pct, x.r)}</b>`;
+      return `<div class="c" data-bm="${x.m}" data-br="${x.r ?? ''}"><div class="up">${x.r > 0 ? lb + `<i class="pos${x.live ? ' live' : ''}" style="height:${h}px"></i>` : ''}</div><div class="dn">${x.r < 0 ? `<i class="neg${x.live ? ' live' : ''}" style="height:${h}px"></i>` + lb : x.r === null ? '<span class="na">–</span>' : x.r === 0 ? lb : ''}</div><div class="m">${ymLabel(x.m)}</div></div>`; }).join('')}</div>`;
     return `<div class="pbars">${L.map((x) => { if (x.r === null) return '<div class="pb"><i class="na"></i></div>';
       const h = Math.max(3, (Math.abs(x.r) / mx) * 26); return `<div class="pb" title="${ymLabel(x.m)} ${signed(pct, x.r)}"><i class="${x.r < 0 ? 'neg' : 'pos'}${x.live ? ' live' : ''}" style="height:${h}px;${x.r < 0 ? 'top:28px' : 'bottom:28px'}"></i></div>`; }).join('')}<div class="pzero"></div></div>
       <div class="plab"><span>${ymLabel(L[0].m)}</span><span>últimos 12 meses</span><span>${ymLabel(L[11].m)}</span></div>`;
@@ -1384,7 +1399,8 @@ function vPainel() {
   const nLogM = (DB.divLog || []).filter((e) => e.date.slice(0, 7) === ym()), lastD = nLogM.length ? [...nLogM].sort((a, b) => b.date.localeCompare(a.date))[0] : null;
   const nextDiv = (Math.floor(st.divLife / 10000) + 1) * 10000, divProg = (st.divLife % 10000) / 10000;
   const nextMs = ms.find((m) => !m.hit), etaMs = nextMs && st.cresc12 > 0 ? ymAdd(ym(), Math.ceil(Math.max(0, nextMs.v - P.total) / st.cresc12)) : null;
-  const tile = (ico, bg, lab, val, sub, go, extra = '') => `<div class="card kpi t2 click" onclick="location.hash='${go}'"><span class="ico" style="background:${bg}">${ico}</span><div class="lab">${lab}</div><div class="val">${val}</div><div class="sub">${sub}</div>${extra}</div>`;
+  const TI = { coin: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.5-1-1.6-1.5-3-1.5-1.7 0-3 .9-3 2s1.3 1.7 3 2 3 .9 3 2-1.3 2-3 2c-1.4 0-2.5-.5-3-1.5M12 6v2M12 16v2"/></svg>', trophy: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4h8v5a4 4 0 0 1-8 0zM8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8 20h8"/></svg>', btc: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h5a3 3 0 0 1 0 6H9zM9 12h6a3 3 0 0 1 0 6H9zM9 6v12M11 4v2M11 18v2M8 6h1M8 18h1"/></svg>', down: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11M8 10l4 4 4-4M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>' };
+  const tile = (ico, bg, lab, val, sub, go, extra = '') => { const [ic, fg] = ico.split('|'); return `<div class="card kpi t2 click" onclick="location.hash='${go}'"><span class="ico" style="background:${bg};color:${fg}">${TI[ic] || ic}</span><div class="lab">${lab}</div><div class="val">${val}</div><div class="sub">${sub}</div>${extra}</div>`; };
   $('#view').innerHTML = `
   ${SAVE_ERR ? `<div class="banner" style="border-color:var(--neg)" onclick="location.hash='#ajustes'">⚠ As últimas mudanças não foram salvas no aparelho (${esc(SAVE_ERR)}). Faça um backup agora — toque aqui.</div>` : ''}
   ${backupOld ? `<div class="banner" onclick="location.hash='#ajustes'">💾 Faça um backup — ${s.lastBackup ? 'o último foi há mais de 30 dias' : 'você ainda não fez nenhum'}. Toque aqui.</div>` : ''}
@@ -1393,9 +1409,9 @@ function vPainel() {
     <div class="card hero kpi click" id="hero-tap">
       <div class="lab" style="display:flex;justify-content:space-between;align-items:center">Patrimônio hoje <span style="display:flex;gap:10px;align-items:center"><button class="cur-swap" id="cur-swap" aria-label="Trocar moeda">⇄ ${heroCur === 'BRL' ? 'R$' : heroCur === 'GBP' ? '£' : 'US$'}</button><span class="chev">${heroOpen() ? '▴' : '▾'}</span></span></div>
       <div class="val">${HM[heroCur](P.total)}</div>
-      ${dLoc ? `<span class="dchip ${dChg < 0 ? 'neg' : 'pos'}">${dChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(dChg))}</span> hoje · ${signed(pctS, dLoc.r)}</span>` : ''}
-      ${prevM ? `<div class="mline">este mês <b class="money ${mChg < 0 ? 'neg' : 'pos'}">${signed(CV, mChg)}</b>${apNowGBP ? ` <span class="muted">· inclui ${apNowGBP < 0 ? 'retirada' : 'aporte'} de <span class="money">${(() => { const L = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === ym()); return L.length && L.every((e) => typeof e.brl !== 'number') ? gbp(Math.abs(apNowGBP)) : CV(Math.abs(L.length ? L.reduce((t, e) => t + apBRL(e), 0) : apNowGBP * num(DB.prices.gbpbrl))); })()}</span></span>` : ''}</div>` : ''}
-      <div class="sub">${['BRL', 'GBP', 'USD'].filter((c) => c !== heroCur).map((c) => HM[c](P.total)).join(' · ')}</div>
+      <div class="sub hsub">${['BRL', 'GBP', 'USD'].filter((c) => c !== heroCur).map((c) => HM[c](P.total)).join(' · ')}</div>
+      <div class="chips2">${dLoc ? `<span class="dchip ${dChg < 0 ? 'neg' : 'pos'}">${dChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(dChg))}</span> <small>hoje</small> ${signed(pctS, dLoc.r)}</span>` : ''}${prevM ? `<span class="mchip ${mChg < 0 ? 'neg' : 'pos'}" id="mchip">${mChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(mChg))}</span> <small>no mês</small></span>` : ''}</div>
+      ${prevM && false ? `<div class="mline">este mês <b class="money ${mChg < 0 ? 'neg' : 'pos'}">${signed(CV, mChg)}</b>${apNowGBP ? ` <span class="muted">· inclui ${apNowGBP < 0 ? 'retirada' : 'aporte'} de <span class="money">${(() => { const L = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === ym()); return L.length && L.every((e) => typeof e.brl !== 'number') ? gbp(Math.abs(apNowGBP)) : CV(Math.abs(L.length ? L.reduce((t, e) => t + apBRL(e), 0) : apNowGBP * num(DB.prices.gbpbrl))); })()}</span></span>` : ''}</div>` : ''}
       <div id="spark-tap">${spark}</div>
       ${heroOpen() ? `<div class="hero-list">${[...P.alloc.map((a) => [a.n, a.v, a.c]), ['Caixa', num(DB.balances.caixa), '#94A3B8']].map(([n, v, c]) =>
         `<div><span><i style="background:${c}"></i>${n}</span><b>${HM[heroCur](v)}</b><em>${pct(P.total ? v / P.total : 0)}</em></div>`).join('')}</div>` : ''}
@@ -1415,10 +1431,10 @@ function vPainel() {
       ${bars}
     </div>
     <div class="grid g2">
-      ${tile('💰', 'rgba(14,165,164,.18)', 'Dividendos ' + MONTHS[new Date().getMonth()].toLowerCase(), CV(divNow), lastD ? `${nLogM.length} ${nLogM.length === 1 ? 'pagamento' : 'pagamentos'} · último ${dmy(lastD.date)}` : `${st.year}: ${CV(st.divYear)}`, '#dividendos')}
-      ${tile('🏆', 'rgba(251,191,36,.16)', 'Dividendos na vida', CV(st.divLife), `faltam ${brl(nextDiv - st.divLife)} p/ ${nf0.format(nextDiv / 1000)} mil`, '#dividendos', `<div class="pbar2"><i style="width:${(divProg * 100).toFixed(1)}%"></i></div>`)}
-      ${tile('₿', 'rgba(247,147,26,.18)', 'Cripto hoje', CV(cs.totalBRL), `${typeof c24 === 'number' ? `<span class="${c24 < 0 ? 'neg' : 'pos'}">${c24 < 0 ? '▼' : '▲'} ${pct(Math.abs(c24))}</span> 24h · ` : ''}BTC ${usd(DB.prices.BTC)}`, '#cripto')}
-      ${tile('📥', 'rgba(59,130,246,.18)', 'Aportes ' + st.year, heroCur === 'GBP' ? gbp(aportesYearGBP) : CV(aportesYear), heroCur === 'GBP' ? `<span class="money">${brl(aportesYear)}</span> · plano ${gbp(s.aportePlanGBP)}/mês` : `${gbp(aportesYearGBP)} · plano ${gbp(s.aportePlanGBP)}/mês`, '#historico')}
+      ${tile('coin|#34D399', 'rgba(14,165,164,.18)', 'Dividendos ' + MONTHS[new Date().getMonth()].toLowerCase(), CV(divNow), lastD ? `${nLogM.length} ${nLogM.length === 1 ? 'pagamento' : 'pagamentos'} · último ${dmy(lastD.date)}` : `${st.year}: ${CV(st.divYear)}`, '#dividendos')}
+      ${tile('trophy|#FBBF24', 'rgba(251,191,36,.16)', 'Dividendos na vida', CV(st.divLife), `faltam ${brl(nextDiv - st.divLife)} p/ ${nf0.format(nextDiv / 1000)} mil`, '#dividendos', `<div class="pbar2"><i style="width:${(divProg * 100).toFixed(1)}%"></i></div>`)}
+      ${tile('btc|#FB923C', 'rgba(247,147,26,.18)', 'Cripto hoje', CV(cs.totalBRL), `${typeof c24 === 'number' ? `<span class="${c24 < 0 ? 'neg' : 'pos'}">${c24 < 0 ? '▼' : '▲'} ${pct(Math.abs(c24))}</span> 24h · ` : ''}BTC ${usd(DB.prices.BTC)}`, '#cripto')}
+      ${tile('down|#60A5FA', 'rgba(59,130,246,.18)', 'Aportes ' + st.year, heroCur === 'GBP' ? gbp(aportesYearGBP) : CV(aportesYear), heroCur === 'GBP' ? `<span class="money">${brl(aportesYear)}</span> · plano ${gbp(s.aportePlanGBP)}/mês` : `${gbp(aportesYearGBP)} · plano ${gbp(s.aportePlanGBP)}/mês`, '#historico')}
     </div>
     <div class="card kpi"><div class="meta2">
       <div class="ring" style="--p:${(prog * 100).toFixed(1)}"><div>${pct(prog)}<small>da meta</small></div></div>
@@ -1444,6 +1460,9 @@ function vPainel() {
   $('#cur-swap').onclick = (e) => { e.stopPropagation(); const nx = { BRL: 'GBP', GBP: 'USD', USD: 'BRL' }[heroCur]; try { localStorage.setItem('rumo.cur', nx); } catch {} render(); };
   $('#spark-tap') && ($('#spark-tap').onclick = (e) => { e.stopPropagation(); patSheet(); });
   $('.dchip') && ($('.dchip').onclick = (e) => { e.stopPropagation(); todaySheet(CV); });
+  $$('.pb2 .c').forEach((c) => (c.onclick = (e) => { e.stopPropagation(); const r = c.dataset.br; toast(`${ymLong(c.dataset.bm)}: ${r === '' ? 'sem dados' : signed(pct, Number(r)) + ' (sem aportes' + (mLoc ? ' e sem câmbio' : '') + ')'}${c.dataset.bm === ym() ? ' · mês em andamento' : ''}`); }));
+  $('#mchip') && ($('#mchip').onclick = (e) => { e.stopPropagation(); const L = (DB.apLog || []).filter((x) => x.date.slice(0, 7) === ym()), apR = L.reduce((t, x) => t + apBRL(x), 0);
+    toast(`${MONTHS[new Date().getMonth()]}: ${signed(CV, mChg)} desde o fim de ${MONTHS[(new Date().getMonth() + 11) % 12].toLowerCase()}${L.length ? ` · inclui ${apR < 0 ? 'retirada' : 'aporte'} de ${CV(Math.abs(apR))}` : ''}${mRealV !== null ? ` · sem aportes ${signed(CV, mRealV)}` : ''}`, 6000); });
   $('#hero-tap').onclick = () => { try { localStorage.setItem('rumo.hero', heroOpen() ? '0' : '1'); } catch {} render(); };
   $('#k-perf').onclick = () => {
     if (!prevM) return;

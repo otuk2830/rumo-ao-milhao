@@ -379,3 +379,32 @@ main{min-height:calc(100vh - 70px); min-height:calc(100dvh - 70px); box-sizing:b
 .apx{width:30px;height:30px;border-radius:50%;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:18px;line-height:1;display:inline-flex;align-items:center;justify-content:center;padding:0;flex:none}
 .apx:active{background:var(--neg);color:#fff;border-color:var(--neg)}
 .ap-seg{display:flex}.ap-seg button{flex:1}
+
+/* v4.62 — visual refresh */
+.tabs a span{display:inline-flex; align-items:center; justify-content:center; padding:3px 14px; border-radius:999px; margin-bottom:2px; line-height:1}
+.tabs a span svg{display:block}
+.tabs a.on span{background:rgba(59,130,246,.16)}
+.hero .hsub{margin:0 0 8px; font-size:13px}
+.chips2{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:2px}
+.chips2 .dchip{margin:0}
+.dchip small, .mchip small{font-weight:500; opacity:.8}
+.mchip{display:inline-flex; align-items:center; gap:5px; font-size:13px; font-weight:700; border-radius:999px; padding:4px 10px; cursor:pointer}
+.mchip.pos{background:rgba(74,222,128,.15); color:#86EFAC} .mchip.neg{background:rgba(248,113,113,.15); color:#FCA5A5}
+html.priv .mchip{filter:blur(8px)}
+.kpi .ico{display:inline-flex; align-items:center; justify-content:center}
+.kpi .ico svg{display:block}
+.pb2{display:flex; justify-content:center; gap:14px; margin-top:12px; border-top:1px solid var(--line); padding-top:8px}
+.pb2 .c{flex:1; max-width:130px; display:flex; flex-direction:column; align-items:center; cursor:pointer}
+.pb2 .up{height:50px; width:100%; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; border-bottom:1px dashed var(--faint)}
+.pb2 .dn{height:50px; width:100%; display:flex; flex-direction:column; align-items:center}
+.pb2 i{display:block; width:72%; border-radius:5px}
+.pb2 i.pos{background:var(--green)} .pb2 i.neg{background:var(--red); opacity:.85} .pb2 i.live{opacity:.65}
+.pb2 b{font-size:12px; margin:3px 0}
+.pb2 .na{color:var(--faint); font-size:12px; margin-top:4px}
+.pb2 .m{font-size:11px; color:var(--muted)}
+html.priv .pb2 b{filter:blur(6px)}
+.av-row{display:flex; align-items:center; gap:10px; min-width:0}
+.av{width:34px; height:34px; border-radius:50%; flex:none; display:inline-flex; align-items:center; justify-content:center; color:#fff; font-weight:800; font-size:11px; letter-spacing:.02em}
+.item .r{white-space:nowrap; padding-left:8px}
+.chips2{gap:5px}
+.chips2 .dchip, .chips2 .mchip{font-size:12px; padding:4px 8px; gap:4px; white-space:nowrap}
