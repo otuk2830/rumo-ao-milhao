@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.69';
+const APP_VERSION = '5.0';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -227,7 +227,7 @@ function milestones() {
   });
 }
 function projections(total) {
-  const st = historyStats(), s = DB.settings, meta = num(s.meta), base = st.last ? st.last.month : ym();
+  const st = historyStats(), s = DB.settings, meta = num(s.meta), base = ym();   // total is today's live value, so count from this month
   const falta = Math.max(0, meta - total);
   let ritmo = null, cenario = null;
   if (falta === 0) ritmo = cenario = base;
@@ -257,7 +257,9 @@ async function refreshPrices(silent) {
   const b = document.getElementById('btn-refresh'); b?.classList.add('spin');
   try { return await refreshPricesNow(silent); } finally { setTimeout(() => b?.classList.remove('spin'), 400); }
 }
+const PREVIEW = !!window.RUMO_PREVIEW;
 async function refreshPricesNow(silent) {
+  if (PREVIEW) { if (!silent) toast('Na prévia os preços não são buscados — valores de exemplo'); return false; }
   if (!navigator.onLine) { if (!silent) toast('Sem internet — usando os últimos preços salvos'); return false; }
   const p = DB.prices; let ok = 0;
   const assetsP = refreshAssetPrices(!silent).catch((e) => { console.warn('assets', e); return null; });
@@ -464,6 +466,38 @@ document.addEventListener('visibilitychange', () => {
   else if (DB) maybeRefreshPrices();
 });
 $('#w-empty').onclick = async () => { DB = emptyDB(); await save(); enterApp(); };
+if (PREVIEW && $('#w-demo')) { $('#w-demo').classList.remove('hidden'); $('#w-demo').onclick = async () => { DB = demoDB(); await save(); enterApp(); }; }
+// invented example portfolio for the preview (no real data)
+function demoDB() {
+  const D = emptyDB(), now = new Date().toISOString(), td = today();
+  Object.assign(D.prices, { gbpbrl: 7.26, usdbrl: 5.43, eurbrl: 6.31, BTC: 64852, ETH: 1803, XRP: 0.97, SOL: 73.29, BTC_24h: 1.02, ETH_24h: -0.2, XRP_24h: 2.59, SOL_24h: 4.4, updatedAt: now, assetsAt: now, fxSrc: 'planilha' });
+  D.settings.aportePlanGBP = 1000; D.settings.auto = { acoes: true, fiis: true, stocks: true }; D.settings.lastBackup = now;
+  const A = (cls, ticker, name, qty, price, avg, pc, extra = {}) => ({ id: uid(), cls, ticker, name, market: 'MANUAL', manualPrice: price, price, currency: 'BRL', avgCur: 'ASSET', qty, avg, pc, pcAt: td, priceAt: now, ...extra });
+  D.assets = [
+    A('acoes', 'BBSE3', 'BB Seguridade', 180, 43.12, 28.1, 42.8), A('acoes', 'ITSA4', 'Itaúsa', 500, 13.32, 8.05, 13.37), A('acoes', 'EGIE3', 'Engie Brasil', 200, 27.5, 29.0, 27.42),
+    A('acoes', 'BBAS3', 'Banco do Brasil', 300, 17.78, 19.9, 18.07), A('acoes', 'SAPR4', 'Sanepar', 600, 6.7, 4.52, 6.63), A('acoes', 'TAEE11', 'Taesa', 50, 40.42, 36.1, 40.2),
+    A('fiis', 'HGLG11', 'CSHG Logística', 120, 160.2, 165.4, 160.0), A('fiis', 'XPML11', 'XP Malls', 200, 105.3, 110.2, 104.9), A('fiis', 'MXRF11', 'Maxi Renda', 1500, 9.81, 10.2, 9.84), A('fiis', 'KNRI11', 'Kinea Renda Imobiliária', 100, 150.1, 145.0, 149.6),
+    A('stocks', 'VWRP', 'Vanguard FTSE All-World', 60, 143.96, 120, 143.0, { currency: 'GBP', kind: 'ETF', avgCur: 'GBP' }),
+    A('stocks', 'O', 'Realty Income', 40, 57.1, 45, 56.8, { currency: 'USD', kind: 'REIT', avgCur: 'GBP' }),
+    A('stocks', 'AAPL', 'Apple', 8, 228.4, 150, 226.0, { currency: 'USD', kind: 'Stock', avgCur: 'GBP' }),
+  ];
+  Object.assign(D.balances, { t212cash: 3000, rfBrasil: 25000, caixa: 5000 });
+  D.crypto = { people: ['Eu'], pre: { BTC: { Eu: 0.15 }, ETH: { Eu: 0.2 }, XRP: { Eu: 150 } }, fees: {}, log: [] };
+  D.prices.cmid = { d: td, BTC: 64200, ETH: 1810, XRP: 0.95, SOL: 72 };
+  DB = D; const P = portfolio(), n = natNow(P), c = catNow(P), T = P.total;
+  // the last 13 closed months: steady growth with £1.000 a month
+  const y = Number(ym().slice(0, 4)), last = Number(ym().slice(5)) - 1;
+  for (let m = last - 13; m <= last; m++) { const f = 0.62 + 0.38 * ((m + 14 - last) / 15) + (((m % 3) + 3) % 3 === 0 ? -0.012 : 0.008);
+    D.history.push({ month: ymAdd(`${y}-01`, m - 1), pat: Math.round(T * f * 0.985), aporteGBP: 1000, fx: 7.1 + m * 0.01, usd: 5.35, divFII: 950 + m * 12, divAcoes: 120 + (m % 4) * 40, divStocks: 18 + m, cat: Object.fromEntries(Object.entries(c).map(([k, v]) => [k, Math.round(v * f * 0.985)])), nat: { brl: n.brl * f * 0.985, gbp: n.gbp * f * 0.985, usd: n.usd * f * 0.985 }, savedAt: now }); }
+  // daily records for the last 25 days
+  for (let i = 25; i >= 1; i--) { const t = new Date(Date.now() - i * 864e5), f = 1 - i * 0.0006 + Math.sin(i / 2.5) * 0.004;
+    D.daily.push({ d: ymdL(t), v: T * f, g: 7.26, u: 5.43, c: Object.fromEntries(Object.entries(c).map(([k, v]) => [k, v * f])), n: { brl: n.brl * f, gbp: n.gbp * f, usd: n.usd * f } }); }
+  const dm = (k) => ym() + '-' + String(k).padStart(2, '0');
+  D.divLog = [{ id: uid(), type: 'fii', cur: 'BRL', amount: 132.0, date: dm(5), ticker: 'HGLG11' }, { id: uid(), type: 'fii', cur: 'BRL', amount: 165.0, date: dm(8), ticker: 'MXRF11' }, { id: uid(), type: 'acoes', cur: 'BRL', amount: 48.6, date: dm(10), ticker: 'BBSE3' }, { id: uid(), type: 'reits', cur: 'GBP', amount: 0.74, date: dm(12), ticker: 'O', g: 7.26 }];
+  D.apLog = [{ id: uid(), gbp: 1000, dest: 'gbp', date: dm(5), g: 7.24, note: 'exemplo' }];
+  D.draft = { month: ym(), divFII: null, divAcoes: null, divStocks: null, aporteGBP: null }; DB = null;
+  return D;
+}
 $('#w-import').onclick = () => pickImport(true);
 
 const PRICE_EVERY = 5 * 60 * 1000;   // while the app is open: shares every 5 min (Finnhub is real-time), the Google Sheet every 15
@@ -662,6 +696,7 @@ async function fxPair(date, cur) {   // USD/BRL or EUR/BRL of a past day
   return null;
 }
 async function fillMissingFx() {
+  if (PREVIEW) return;
   if (!DB || !navigator.onLine) return; let changed = false;
   for (const h of DB.history) {
     if (h.fx || h.aporteGBP === null || h.aporteGBP === undefined || !num(h.aporteGBP)) continue;
@@ -748,26 +783,29 @@ function growthBreak(from, to, apBRLv, divBRL, loc) {
   const inv = loc ? loc.gainR : real, fx = loc ? real - loc.gainR : null;   // investment result (no FX) and the exchange-rate part
   return { chg, ap: apBRLv, real, div: divBRL, val: inv - divBRL, fx, rl: loc ? loc.r : null, pct: from.v ? real / (from.v + 0.5 * apBRLv) : 0, cats };
 }
-function yearTable() {   // returns by year (was on the Gráficos tab)
+function yearTable() {   // one line per year, no-FX return when known
   const R = returnsData(); if (!R.years.length) return '';
-  return `<div class="small muted" style="margin:14px 0 2px;font-weight:700;letter-spacing:.03em">POR ANO</div>
-    <div class="yt h"><span style="text-align:left">Ano</span><span>sem câmbio</span><span>em R$</span><span>meses</span></div>
-    ${[...R.years].reverse().map((y) => `<div class="yt"><b>${y.year}</b><span>${y.rl !== null ? `<b class="${y.rl < 0 ? 'neg' : 'pos'}">${signed(pct, y.rl)}</b>${y.full ? '' : `<small> (${y.nl} m)</small>`}` : '<span class="muted">–</span>'}</span><span class="${y.r < 0 ? 'neg' : 'pos'}">${signed(pct, y.r)}</span><span>${y.n}</span></div>`).join('')}
-    <div class="yt" style="border:0"><b>Total</b><span class="muted">desde ${R.since ? ymLabel(R.since) : '–'}</span><span class="${R.total < 0 ? 'neg' : 'pos'}">${signed(pct, R.total)}</span><span>${R.months.length}</span></div>`;
+  return `<div class="ps-h">Por ano</div><div class="ps-card">${[...R.years].reverse().map((y) => { const v = y.rl !== null ? y.rl : y.r;
+    return `<div class="ps-step"><span>${y.year}<small> · ${y.n} ${y.n === 1 ? 'mês' : 'meses'}</small></span><b class="${v < 0 ? 'neg' : 'pos'}">${signed(pct, v)}</b></div>`; }).join('')}</div>`;
 }
-function breakHtml(B, title, sub) {
-  const ln = (l, v, cls = '', b = false) => `<div class="mc-row"><span>${l}</span>${b ? '<b' : '<span'} class="${cls}" style="text-align:right">${v}${b ? '</b>' : '</span>'}</div>`;
-  const sg = (v) => signed((x) => brl(x), v), cl = (v) => (v < 0 ? 'neg' : 'pos');
-  return `<div class="mc"><div class="mc-top"><div class="small muted">${sub}</div><h3 style="margin:2px 0 0">${title}</h3>
-    <div class="mc-big ${cl(B.real)}">${sg(B.real)}</div>
-    ${B.rl !== null ? `<div style="font-weight:700" class="${cl(B.rl)}">${signed(pct, B.rl)} dos investimentos (sem câmbio)</div><div class="small muted">em R$, com câmbio: ${signed(pct, B.pct)}</div>` : `<div style="font-weight:700" class="${cl(B.real)}">${signed(pct, B.pct)} de crescimento real</div>`}</div>
-    ${ln('Variação do patrimônio', sg(B.chg))}${ln('− Aportes (dinheiro novo)', B.ap ? '−' + brl(B.ap) : brl(0))}${ln('= Crescimento real', sg(B.real), cl(B.real), true)}
-    <div class="small muted" style="margin:12px 0 2px;font-weight:700;letter-spacing:.03em">DE ONDE VEIO</div>
-    ${ln('💰 Dividendos recebidos', sg(B.div), cl(B.div))}${B.fx !== null ? ln('📈 Preços (valorização)', sg(B.val), cl(B.val)) + ln('💱 Câmbio (libra/dólar × real)', sg(B.fx), cl(B.fx)) : ln('📈 Preços e câmbio', sg(B.val), cl(B.val))}
-    ${B.fx === null ? '<div class="small muted" style="margin-top:6px">Preços e câmbio aparecem separados a partir do próximo mês (o app começou a guardar o valor de cada moeda agora).</div>' : ''}
-    ${B.cats ? `<div class="small muted" style="margin:12px 0 2px;font-weight:700;letter-spacing:.03em">POR CATEGORIA (inclui aportes e dividendos que ficaram lá)</div>${B.cats.map((c) => ln(c.n, sg(c.d), Math.abs(c.d) < 0.5 ? '' : cl(c.d))).join('')}`
-      : '<div class="small muted" style="margin-top:10px">A divisão por categoria aparece a partir do próximo mês salvo (o app começou a guardar o valor de cada categoria agora).</div>'}
-    <button class="btn block" onclick="closeSheet()" style="margin-top:14px">Fechar</button></div>`;
+function breakHtml(B, title, sub) {   // plain-language: what changed, how much was new money, what the investments did, and why
+  const R = (v) => (Math.abs(v) < 0.5 ? 0 : v), sg = (v) => signed((x) => brl(x), R(v)), cl = (v) => (R(v) < 0 ? 'neg' : R(v) > 0 ? 'pos' : '');
+  const why = [['Dividendos', B.div], ...(B.fx !== null ? [['Preços', B.val], ['Câmbio', B.fx]] : [['Preços e câmbio', B.val]])];
+  const mx = Math.max(1, ...why.map((w) => Math.abs(w[1])));
+  const pc = B.rl !== null ? B.rl : B.pct;
+  return `<div class="ps">
+    <div class="ps-top"><div class="ps-sub">${sub}</div><h3>${title}</h3>
+      <div class="ps-big ${pc < 0 ? 'neg' : pc > 0 ? 'pos' : ''}">${signed(pct, pc)}</div>
+      <div class="ps-sub">os investimentos ${R(B.real) < 0 ? 'perderam' : 'renderam'} <b class="${cl(B.real)}">${brl(Math.abs(R(B.real)))}</b></div></div>
+    <div class="ps-card">
+      <div class="ps-step"><span>Seu patrimônio ${B.chg < 0 ? 'caiu' : 'subiu'}</span><b>${brl(Math.abs(R(B.chg)))}</b></div>
+      ${R(B.ap) ? `<div class="ps-step"><span>${B.ap > 0 ? 'mas foi dinheiro novo (aportes)' : 'e você retirou'}</span><b>${brl(Math.abs(B.ap))}</b></div>` : ''}
+      <div class="ps-step ps-res"><span>Resultado dos investimentos</span><b class="${cl(B.real)}">${sg(B.real)}</b></div>
+    </div>
+    <div class="ps-h">Por quê</div>
+    <div class="ps-card">${why.map(([n, v]) => `<div class="ps-why"><span>${n}</span><div class="ps-bar"><i class="${cl(v)}" style="width:${(Math.abs(R(v)) / mx * 100).toFixed(1)}%"></i></div><b class="${cl(v)}">${sg(v)}</b></div>`).join('')}</div>
+    ${B.rl !== null && Math.abs(B.pct - B.rl) >= 0.0005 ? `<div class="ps-note">Contando a variação da libra e do dólar, em reais: ${signed(pct, B.pct)}.</div>` : ''}
+    <button class="btn block" onclick="closeSheet()" style="margin-top:16px">Fechar</button></div>`;
 }
 async function dailySnap() {
   if (!DB || !DB.prices.updatedAt || Date.now() - new Date(DB.prices.updatedAt) > 2 * 3600 * 1000) return;   // only with fresh prices
@@ -1041,6 +1079,7 @@ async function setKeyStatus(prov, ok, okMsg) {
 }
 let assetBusy = false;
 async function refreshAssetPrices(force) {
+  if (PREVIEW) return null;
   const A = DB?.assets || []; if (!A.length || assetBusy || !navigator.onLine) return null;
   if (!force && DB.prices.assetsAt && Date.now() - new Date(DB.prices.assetsAt) < 5 * 60 * 1000) return null;
   assetBusy = true;
@@ -1094,7 +1133,7 @@ const AV_COL = ['#1D4ED8', '#0F766E', '#A16207', '#7C3AED', '#BE185D', '#15803D'
 const avatar = (t) => { const k = String(t || '').replace(/^[A-Z]+:/, '').replace(/[^A-Z]/gi, '').toUpperCase(), h = [...k].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
   return `<span class="av" style="background:${AV_COL[h % AV_COL.length]}">${esc(k.slice(0, 2) || '?')}</span>`; };
 function segBar(active) {
-  return `<div class="seg">${ACLS.map((c) => `<button class="${active === c.k ? 'on' : ''}" data-seg="${c.k}">${c.n}</button>`).join('')}<button class="${active === 'cripto' ? 'on' : ''}" data-seg="cripto">Cripto</button></div>`;
+  return `<div class="seg hy cw-seg">${ACLS.map((c) => `<button class="${active === c.k ? 'on' : ''}" data-seg="${c.k}">${c.n}</button>`).join('')}<button class="${active === 'cripto' ? 'on' : ''}" data-seg="cripto">Cripto</button></div>`;
 }
 function wireSeg() {
   $$('#view [data-seg]').forEach((b) => (b.onclick = () => { if (b.dataset.seg === 'cripto') location.hash = '#cripto'; else { ATV.seg = b.dataset.seg; if (route() !== 'ativos') location.hash = '#ativos'; else render(); } }));
@@ -1109,22 +1148,21 @@ function vAtivos() {
   const M = (v) => (inGBP ? '£ ' + nf2.format(v / gbp) : brl(v, 2)), M0 = (v) => (inGBP ? '£ ' + nf2.format(v / gbp) : brl(v));
   const needGS = rows.some((r) => r.a.market === 'GS') && !keys.sheet, needB3 = rows.some((r) => r.a.market === 'B3') && !keys.brapi, needUS = rows.some((r) => r.a.market === 'US') && !keys.finnhub, needEU = rows.some((r) => r.a.market === 'EU') && !keys.alpha;
   const manualTotal = cls === 'stocks' ? (num(DB.balances.pieStocks) + num(DB.balances.pieReits) + num(DB.balances.pieEtfs)) * num(DB.prices.gbpbrl) : num(DB.balances[cls]);
-  $('#view').innerHTML = `${segBar(cls)}
-  <div class="grid split">
-   <div class="grid" style="align-content:start">
-    <div class="card hero kpi"><div class="lab">${info.n} — pelos ativos</div><div class="val">${M(total)}</div>${inGBP ? `<div class="sub" style="margin-top:-2px">≈ ${brl(total, 2)}</div>` : ''}
+  $('#view').innerHTML = `<div class="gwrap cw">${segBar(cls)}
+  
+   
+    <div class="gl cw-hero"><div class="lab">${info.n}</div><div class="val">${M(total)}</div>${inGBP ? `<div class="sub" style="margin-top:-2px">≈ ${brl(total, 2)}</div>` : ''}
       <div class="sub">${rows.length} ${rows.length === 1 ? 'ativo' : 'ativos'}${withCost.length ? ` · lucro <span class="${pl < 0 ? 'neg' : 'pos'}">${signed(pct, cost ? pl / cost : 0)}</span> <span class="money">(${signed(M0, pl)})</span>` : ''}</div></div>
-    ${!auto || needGS || needB3 || needUS || needEU ? `<div class="card">
+    ${!auto || needGS || needB3 || needUS || needEU ? `<div class="gl">
       <label class="toggle"><input type="checkbox" id="at-auto" ${auto ? 'checked' : ''}><span><b>Usar estes ativos no patrimônio</b><br><span class="small muted">${auto ? 'Ligado: o total de ' + info.n + ' é calculado aqui (preços ao vivo).' : 'Desligado: vale o total digitado em Atualizar (<span class="money">' + (inGBP ? M(manualTotal) : brl(manualTotal)) + '</span>).'}</span></span></label>
       <div class="small muted" style="margin-top:8px">Preços: ${DB.prices.assetsAt ? fmtDate(DB.prices.assetsAt) : 'ainda não buscados'} · atualizam sozinhos a cada 5 min</div>
-      <button class="btn block" id="at-refresh">⟳ Atualizar preços agora</button>
+      <button class="btn block" id="at-refresh"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg> Atualizar preços agora</button>
       ${needGS ? '<div class="banner" style="margin:10px 0 0">Para preços de FIIs, cole o link da sua planilha do Google em ⚙︎ Ajustes → Chaves de preço → Google Sheets.</div>' : ''}
       ${needB3 ? '<div class="banner" style="margin:10px 0 0">Para preços da B3, crie a chave grátis em <b>brapi.dev</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
       ${needUS ? '<div class="banner" style="margin:10px 0 0">Para preços dos EUA, crie a chave grátis em <b>finnhub.io</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
       ${needEU ? '<div class="banner" style="margin:10px 0 0">Para Londres/Europa, crie a chave grátis em <b>alphavantage.co</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
     </div>` : ''}
-   </div>
-   <div class="card" style="align-content:start"><div class="ahd"><h2 style="margin:0">${info.n}</h2><a id="at-add" class="aadd">＋ Adicionar</a></div>
+   <div class="gl"><div class="ahd"><h2 style="margin:0">Ativos</h2><a id="at-add" class="aadd"><svg style="vertical-align:-3px" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> Adicionar</a></div>
      ${(() => {
         const itemHtml = (r) => { const op = ATV.open === r.a.id, stale = r.stale ? ` <span class="neg">⚠</span>` : '';
           const hoje = (() => { const a = r.a; if (a.market === 'MANUAL') return null; if (!tradedToday(a)) return 0; return a.pc > 0 && a.pcAt === today() ? priceOf(a) / a.pc - 1 : null; })();
@@ -1200,7 +1238,7 @@ function editAsset(id, cls) {
     <div class="field"><label>Preço manual<small>usado se for "Manual" ou se o automático falhar</small></label>${inp('ea-man', a.manualPrice)}</div>
     ${id ? `<div class="small muted">Último preço automático: ${a.price ? fmtPx(curOf(a), a.price) + ' em ' + fmtDate(a.priceAt) : '–'}${a.priceErr ? ' · ⚠ ' + esc(a.priceErr) : ''}</div>` : ''}
     <button class="btn primary block" id="ea-save">Salvar</button>
-    ${id ? '<button class="btn block" id="ea-buy">＋ Comprei mais</button><button class="btn danger block" id="ea-del">Apagar</button>' : ''}
+    ${id ? '<button class="btn block" id="ea-buy"><svg style="vertical-align:-4px" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> Comprei mais</button><button class="btn danger block" id="ea-del">Apagar</button>' : ''}
     <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
     $$('input.pt', el).forEach(liveFormat);
     const curRow = (changed) => {
@@ -1249,7 +1287,7 @@ function editAsset(id, cls) {
 }
 
 /* ---------------- rendering ---------------- */
-const TITLES = { painel: 'Painel', atualizar: 'Atualizar', historico: 'Histórico', dividendos: 'Dividendos', cripto: 'Cripto', ativos: 'Ativos', ajustes: 'Ajustes' };
+const TITLES = { painel: 'Painel', atualizar: 'Registrar', historico: 'Histórico', dividendos: 'Dividendos', cripto: 'Cripto', ativos: 'Carteira', ajustes: 'Ajustes' };
 function route() { return (location.hash || '#painel').slice(1); }
 window.addEventListener('hashchange', () => { if (DB) render(); window.scrollTo(0, 0); });
 // header line: how long ago the prices were fetched
@@ -1258,7 +1296,7 @@ function topSub() {
   let t = 'preços ainda não buscados';
   if (u) { const m = Math.floor((Date.now() - new Date(u)) / 60000);
     t = m < 1 ? 'atualizado agora' : m < 60 ? `atualizado há ${m} min` : m < 24 * 60 && new Date(u).toDateString() === new Date().toDateString() ? `atualizado às ${new Date(u).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : 'atualizado em ' + fmtDate(u); }
-  el.textContent = t + (navigator.onLine ? '' : ' · offline');
+  el.textContent = PREVIEW ? 'prévia · valores de exemplo' : t + (navigator.onLine ? '' : ' · offline');
 }
 setInterval(topSub, 30 * 1000);
 let RENDER_WAIT = false;
@@ -1274,6 +1312,7 @@ function render() {
   topSub();
   $$('.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === (r === 'cripto' ? 'ativos' : r)));
   requestAnimationFrame(() => { const maxY = Math.max(0, document.documentElement.scrollHeight - innerHeight); if (scrollY > maxY) scrollTo(0, maxY); });
+  document.body.classList.add('glassy');   // the whole app uses the glass style
   ({ painel: vPainel, atualizar: vAtualizar, historico: vHistorico, dividendos: vDividendos, cripto: vCripto, ativos: vAtivos, ajustes: vAjustes })[r]();
 }
 $('#btn-settings').onclick = () => { location.hash = '#ajustes'; };
@@ -1391,6 +1430,13 @@ function todaySheet(CV) {
     $$('.tc', el).forEach((t) => (t.onclick = () => { const it = $('.tc-items', t), open = it.classList.toggle('hidden') === false; $('.tc-ch', t).textContent = open ? '▾' : '▸'; }));
   });
 }
+let COUNTED = false;   // the patrimônio counts up once each time the app opens
+function countUp(el, v, fmt) {
+  if (COUNTED || !el || !(v > 0)) return; COUNTED = true;
+  try { if (matchMedia('(prefers-reduced-motion: reduce)').matches) return; } catch {}
+  const t0 = performance.now(), D = 700, step = (t) => { const k = Math.min(1, (t - t0) / D), e = 1 - Math.pow(1 - k, 3); el.textContent = fmt(v * e); if (k < 1) requestAnimationFrame(step); else el.textContent = fmt(v); };
+  requestAnimationFrame(step);
+}
 function vPainel() {
   const P = portfolio(), st = historyStats(), pr = projections(P.total), ms = milestones(), s = DB.settings, cs = P.cs;
   const meta = num(s.meta), prog = meta ? Math.min(1, P.total / meta) : 0;
@@ -1409,7 +1455,7 @@ function vPainel() {
   const mRealV = prevM && apNowGBP !== null && apNowGBP !== undefined ? mChg - apMonthBRL(ym(), DB.prices.gbpbrl, apNowGBP) : null;
   const mReal = (() => { const dm = dailyMonth(ym()); if (dm) return dm.r; if (!prevM || !prevM.pat) return null;
     const apNow = apNowGBP; if (apNow === null || apNow === undefined) return null;
-    return (P.total - prevM.pat - apNow * num(DB.prices.gbpbrl)) / prevM.pat; })();
+    return (P.total - prevM.pat - apMonthBRL(ym(), DB.prices.gbpbrl, apNow)) / prevM.pat; })();
   // crypto 24h move, weighted by what you hold of each coin
   const c24 = (() => { let now = 0, before = 0, any = false; for (const x of cs.coins) { const ch = DB.prices[x.k + '_24h']; if (typeof ch !== 'number' || !x.valUSD) continue; any = true; now += x.valUSD; before += x.valUSD / (1 + ch / 100); } return any && before ? now / before - 1 : null; })();
   const aportesYearGBP = DB.history.filter((h) => h.month.startsWith(st.year) && h.aporteGBP).reduce((a, h) => a + h.aporteGBP, 0);
@@ -1442,80 +1488,100 @@ function vPainel() {
     for (let k = 11; k >= 0; k--) { const m = ymAdd(ym(), -k); L.push({ m, r: m === ym() ? (mLoc ? mLoc.r : mReal) : byM[m] ?? null, live: m === ym() }); }
     const mx = Math.max(0.005, ...L.filter((x) => x.r !== null).map((x) => Math.abs(x.r)));
     const first = L.findIndex((x) => x.r !== null), F = first > 0 ? L.slice(first) : null;
-    if (F && F.length) return `<div class="pb2">${F.map((x) => { const h = x.r === null ? 0 : Math.max(4, (Math.abs(x.r) / mx) * 30), lb = x.r === null ? '' : `<b class="${x.r < 0 ? 'neg' : 'pos'}">${signed(pct, x.r)}</b>`;
-      return `<div class="c" data-bm="${x.m}" data-br="${x.r ?? ''}"><div class="up">${x.r > 0 ? lb + `<i class="pos${x.live ? ' live' : ''}" style="height:${h}px"></i>` : ''}</div><div class="dn">${x.r < 0 ? `<i class="neg${x.live ? ' live' : ''}" style="height:${h}px"></i>` + lb : x.r === null ? '<span class="na">–</span>' : x.r === 0 ? lb : ''}</div><div class="m">${ymLabel(x.m)}</div></div>`; }).join('')}</div>`;
-    return `<div class="pbars">${L.map((x) => { if (x.r === null) return '<div class="pb"><i class="na"></i></div>';
-      const h = Math.max(3, (Math.abs(x.r) / mx) * 26); return `<div class="pb" title="${ymLabel(x.m)} ${signed(pct, x.r)}"><i class="${x.r < 0 ? 'neg' : 'pos'}${x.live ? ' live' : ''}" style="height:${h}px;${x.r < 0 ? 'top:28px' : 'bottom:28px'}"></i></div>`; }).join('')}<div class="pzero"></div></div>
-      <div class="plab"><span>${ymLabel(L[0].m)}</span><span>últimos 12 meses</span><span>${ymLabel(L[11].m)}</span></div>`;
+    void F;
+    const INI = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+    return `<div class="pb3">${L.map((x) => { const h = x.r === null ? 0 : Math.max(4, (Math.abs(x.r) / mx) * 30), c = x.r < 0 ? 'neg' : 'pos';
+      return `<div class="c${x.live ? ' cur' : ''}" data-bm="${x.m}" data-br="${x.r ?? ''}"><div class="up">${x.r !== null && x.r >= 0 ? `<i class="${c}" style="height:${h}px"></i>` : ''}</div><div class="dn">${x.r < 0 ? `<i class="${c}" style="height:${h}px"></i>` : ''}</div><div class="m">${INI[Number(x.m.slice(5)) - 1]}</div></div>`; }).join('')}</div>`;
   })();
   const nLogM = (DB.divLog || []).filter((e) => e.date.slice(0, 7) === ym()), lastD = nLogM.length ? [...nLogM].sort((a, b) => b.date.localeCompare(a.date))[0] : null;
   const nextDiv = (Math.floor(st.divLife / 10000) + 1) * 10000, divProg = (st.divLife % 10000) / 10000;
   const nextMs = ms.find((m) => !m.hit), etaMs = nextMs && st.cresc12 > 0 ? ymAdd(ym(), Math.ceil(Math.max(0, nextMs.v - P.total) / st.cresc12)) : null;
   const TI = { coin: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.5-1-1.6-1.5-3-1.5-1.7 0-3 .9-3 2s1.3 1.7 3 2 3 .9 3 2-1.3 2-3 2c-1.4 0-2.5-.5-3-1.5M12 6v2M12 16v2"/></svg>', trophy: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4h8v5a4 4 0 0 1-8 0zM8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8 20h8"/></svg>', btc: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h5a3 3 0 0 1 0 6H9zM9 12h6a3 3 0 0 1 0 6H9zM9 6v12M11 4v2M11 18v2M8 6h1M8 18h1"/></svg>', down: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11M8 10l4 4 4-4M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>' };
   const tile = (ico, bg, lab, val, sub, go, extra = '') => { const [ic, fg] = ico.split('|'); return `<div class="card kpi t2 click" onclick="location.hash='${go}'"><span class="ico" style="background:${bg};color:${fg}">${TI[ic] || ic}</span><div class="lab">${lab}</div><div class="val">${val}</div><div class="sub">${sub}</div>${extra}</div>`; };
+  // ---- glass layout
+  const GC = { fiis: 'var(--g-c1)', crypto: 'var(--g-c2)', rf: 'var(--g-c3)', acoes: 'var(--g-c4)', stocks: 'var(--g-c5)', caixa: 'var(--g-c6)' };
+  const GO = { acoes: "ATV.seg='acoes';location.hash='#ativos'", fiis: "ATV.seg='fiis';location.hash='#ativos'", stocks: "ATV.seg='stocks';location.hash='#ativos'", crypto: "location.hash='#cripto'", rf: "location.hash='#atualizar'", caixa: "location.hash='#atualizar'" };
+  const cats = [...P.alloc.map((a) => ({ k: a.k, n: a.k === 'crypto' ? 'Cripto' : a.n, v: a.v, cur: a.cur, tgt: a.tgt })), { k: 'caixa', n: 'Caixa', v: num(DB.balances.caixa), cur: null, tgt: null }].sort((x, y) => y.v - x.v);
+  const nx = P.alloc.find((a) => a.n === P.next.n), hitN = ms.filter((m) => m.hit).length, win = ms.slice(Math.max(0, Math.min(hitN - 2, ms.length - 5)), Math.max(0, Math.min(hitN - 2, ms.length - 5)) + 5);
+  const msL = (v) => (v >= 1e6 ? nf0.format(v / 1e6) + ' mi' : nf0.format(v / 1000) + ' mil');
+  const R0 = 44, C0 = 2 * Math.PI * R0;
+  const DO = '1';
+  const divM = `<div class="gll">${lastD ? `${nLogM.length} ${nLogM.length === 1 ? 'pagamento' : 'pagamentos'} · último ${dmy(lastD.date)}` : 'nenhum ainda'}</div>`;
+  const divCard = `<div class="gl click gdiv" onclick="location.hash='#dividendos'">
+     <div class="glh"><span class="gll">Dividendos de ${MONTHS[new Date().getMonth()].toLowerCase()}</span><span class="gch">›</span></div>
+     <div class="gtot money" style="font-size:36px;margin:4px 0 2px">${CV(divNow)}</div>${divM}
+     <div class="gdiv2"><div><div class="gll">${st.year}</div><div class="gk money">${CV(st.divYear + (DB.draft.month === ym() && !DB.history.some((h) => h.month === ym()) ? divNow : 0))}</div></div>
+       <div><div class="gll">Na vida</div><div class="gk money">${CV(st.divLife)}</div><div class="gbar"><i style="width:${(divProg * 100).toFixed(1)}%"></i></div><div class="gll" style="margin-top:4px;font-size:11.5px">faltam ${brl(nextDiv - st.divLife)} p/ ${nf0.format(nextDiv / 1000)} mil</div></div></div></div>`;
+  const divLine = `<a class="gdline click" onclick="location.hash='#dividendos'"><span class="money">${CV(divNow)}</span> em dividendos em ${MONTHS[new Date().getMonth()].toLowerCase()} ›</a>`;
+  const divTiles = `<div class="gtwo">
+     <div class="gl click" onclick="location.hash='#dividendos'"><div class="gll">Dividendos ${MONTHS[new Date().getMonth()].toLowerCase()}</div><div class="gk money">${CV(divNow)}</div><div class="gll">${lastD ? `${nLogM.length} ${nLogM.length === 1 ? 'pagamento' : 'pagamentos'}` : 'nenhum ainda'}</div></div>
+     <div class="gl click" onclick="location.hash='#dividendos'"><div class="gll">Dividendos na vida</div><div class="gk money">${CV(st.divLife)}</div><div class="gbar"><i style="width:${(divProg * 100).toFixed(1)}%"></i></div><div class="gll" style="margin-top:5px">faltam ${brl(nextDiv - st.divLife)} p/ ${nf0.format(nextDiv / 1000)} mil</div></div></div>`;
+  const divTry = '';
   $('#view').innerHTML = `
   ${SAVE_ERR ? `<div class="banner" style="border-color:var(--neg)" onclick="location.hash='#ajustes'">⚠ As últimas mudanças não foram salvas no aparelho (${esc(SAVE_ERR)}). Faça um backup agora — toque aqui.</div>` : ''}
-  ${backupOld ? `<div class="banner" onclick="location.hash='#ajustes'">💾 Faça um backup — ${s.lastBackup ? 'o último foi há mais de 30 dias' : 'você ainda não fez nenhum'}. Toque aqui.</div>` : ''}
-  <div class="grid split">
-   <div class="grid" style="align-content:start">
-    <div class="card hero kpi click" id="hero-tap">
-      <div class="lab" style="display:flex;justify-content:space-between;align-items:center">Patrimônio hoje <span style="display:flex;gap:10px;align-items:center"><button class="cur-swap" id="cur-swap" aria-label="Trocar moeda">⇄ ${heroCur === 'BRL' ? 'R$' : heroCur === 'GBP' ? '£' : 'US$'}</button><span class="chev">${heroOpen() ? '▴' : '▾'}</span></span></div>
-      <div class="val">${HM[heroCur](P.total)}</div>
-      <div class="sub hsub">${['BRL', 'GBP', 'USD'].filter((c) => c !== heroCur).map((c) => HM[c](P.total)).join(' · ')}</div>
-      <div class="chips2">${dLoc ? `<span class="dchip ${dChg < 0 ? 'neg' : 'pos'}">${dChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(dChg))}</span> <small>hoje</small> ${signed(pctS, dLoc.r)}</span>` : ''}${prevM ? `<span class="mchip ${mChg < 0 ? 'neg' : 'pos'}" id="mchip">${mChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(mChg))}</span> <small>no mês</small></span>` : ''}</div>
-      ${prevM && false ? `<div class="mline">este mês <b class="money ${mChg < 0 ? 'neg' : 'pos'}">${signed(CV, mChg)}</b>${apNowGBP ? ` <span class="muted">· inclui ${apNowGBP < 0 ? 'retirada' : 'aporte'} de <span class="money">${(() => { const L = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === ym()); return L.length && L.every((e) => typeof e.brl !== 'number') ? gbp(Math.abs(apNowGBP)) : CV(Math.abs(L.length ? L.reduce((t, e) => t + apBRL(e), 0) : apNowGBP * num(DB.prices.gbpbrl))); })()}</span></span>` : ''}</div>` : ''}
-      <div id="spark-tap">${spark}</div>
-      ${heroOpen() ? `<div class="hero-list">${[...P.alloc.map((a) => [a.n, a.v, a.c]), ['Caixa', num(DB.balances.caixa), '#94A3B8']].map(([n, v, c]) =>
-        `<div><span><i style="background:${c}"></i>${n}</span><b>${HM[heroCur](v)}</b><em>${pct(P.total ? v / P.total : 0)}</em></div>`).join('')}</div>` : ''}
-    </div>
-    <div class="card kpi click" id="k-perf">
-      <div style="display:flex;justify-content:space-between;align-items:center"><span class="lab">Desempenho · sem aportes${mLoc ? ' e sem câmbio' : ''}</span><span class="small muted">ⓘ</span></div>
-      <div class="perf2">
-        <div><div class="small muted">${MONTHS[new Date().getMonth()]}</div>
-          ${mLoc && mReal !== null ? `<div class="pv ${mLoc.r < 0 ? 'neg' : 'pos'}">${signed(pct, mLoc.r)}</div><div class="small muted"><span class="money">${signed(CV, mLoc.gainR)}</span> · em R$ ${signed(pct, mReal)}</div>`
-          : prevM && mReal !== null ? `<div class="pv ${mReal < 0 ? 'neg' : 'pos'}">${signed(pct, mReal)}</div><div class="small muted"><span class="money">${signed(CV, mRealV)}</span> · em R$</div>`
-            : `<div class="pv">–</div><div class="small muted">${prevM ? 'informe o aporte do mês' : 'precisa de um mês salvo'}</div>`}</div>
-        <div><div class="small muted">${st.year}</div>
-          ${Ry && Ry.full && Ry.rl !== null ? `<div class="pv ${Ry.rl < 0 ? 'neg' : 'pos'}">${signed(pct, Ry.rl)}</div><div class="small muted">${Ry.n} ${Ry.n === 1 ? 'mês' : 'meses'} · em R$ ${signed(pct, Ry.r)}</div>`
-          : Ry ? `<div class="pv ${Ry.r < 0 ? 'neg' : 'pos'}">${signed(pct, Ry.r)}</div><div class="small muted">${Ry.n} ${Ry.n === 1 ? 'mês' : 'meses'} · em R$${Ry.rl !== null ? ` · sem câmbio ${signed(pct, Ry.rl)} (${Ry.nl} m)` : ''}</div>`
-            : '<div class="pv">–</div><div class="small muted">começa com os aportes</div>'}</div>
-      </div>
-      ${bars}
-    </div>
-    <div class="grid g2">
-      ${tile('coin|#34D399', 'rgba(14,165,164,.18)', 'Dividendos ' + MONTHS[new Date().getMonth()].toLowerCase(), CV(divNow), lastD ? `${nLogM.length} ${nLogM.length === 1 ? 'pagamento' : 'pagamentos'} · último ${dmy(lastD.date)}` : `${st.year}: ${CV(st.divYear)}`, '#dividendos')}
-      ${tile('trophy|#FBBF24', 'rgba(251,191,36,.16)', 'Dividendos na vida', CV(st.divLife), `faltam ${brl(nextDiv - st.divLife)} p/ ${nf0.format(nextDiv / 1000)} mil`, '#dividendos', `<div class="pbar2"><i style="width:${(divProg * 100).toFixed(1)}%"></i></div>`)}
-      ${tile('btc|#FB923C', 'rgba(247,147,26,.18)', 'Cripto hoje', CV(cs.totalBRL), `${typeof c24 === 'number' ? `<span class="${c24 < 0 ? 'neg' : 'pos'}">${c24 < 0 ? '▼' : '▲'} ${pct(Math.abs(c24))}</span> 24h · ` : ''}BTC ${usd(DB.prices.BTC)}`, '#cripto')}
-      ${tile('down|#60A5FA', 'rgba(59,130,246,.18)', 'Aportes ' + st.year, heroCur === 'GBP' ? gbp(aportesYearGBP) : CV(aportesYear), heroCur === 'GBP' ? `<span class="money">${brl(aportesYear)}</span> · plano ${gbp(s.aportePlanGBP)}/mês` : `${gbp(aportesYearGBP)} · plano ${gbp(s.aportePlanGBP)}/mês`, '#historico')}
-    </div>
-    <div class="card kpi"><div class="meta2">
-      <div class="ring" style="--p:${(prog * 100).toFixed(1)}"><div>${pct(prog)}<small>da meta</small></div></div>
-      <div style="min-width:0"><div class="lab">Meta ${brl(meta)}</div><div class="mfal">Faltam <span class="money">${CV(pr.falta)}</span></div>
-        <div class="small muted">No ritmo atual: <b style="color:var(--ink)">${pr.ritmo ? ymLabel(pr.ritmo) : '–'}</b><br>Cenário <span class="money">${gbp(s.aportePlanGBP)}</span>/mês, ${pct(s.retornoAnual)} a.a.: <b style="color:var(--ink)">${pr.cenario ? ymLabel(pr.cenario) : '–'}</b></div></div>
-    </div></div>
+  ${backupOld ? `<div class="banner" onclick="location.hash='#ajustes'">Faça um backup — ${s.lastBackup ? 'o último foi há mais de 30 dias' : 'você ainda não fez nenhum'}. Toque aqui.</div>` : ''}
+  <div class="gwrap">${divTry}
+   <div class="gl">
+     <div class="glh"><span class="gll">Patrimônio <button class="geye" id="p-eye" aria-label="Esconder valores"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span><button class="gswap" id="cur-swap" aria-label="Trocar moeda"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M7 4L3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/></svg> ${heroCur === 'BRL' ? 'R$' : heroCur === 'GBP' ? '£' : 'US$'}</button></div>
+     <div class="gtot money">${HM[heroCur](P.total)}</div>
+     <div class="chips2">${dLoc ? `<span class="dchip ${dChg < 0 ? 'neg' : 'pos'}">${dChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(dChg))}</span> <small>hoje</small> ${signed(pctS, dLoc.r)}</span>` : ''}${prevM ? `<span class="mchip ${mChg < 0 ? 'neg' : 'pos'}" id="mchip">${mChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(mChg))}</span> <small>no mês</small></span>` : ''}</div>
+     ${DO === '2' || DO === '3' ? divLine : ''}
+     <div class="gll gsub">${['BRL', 'GBP', 'USD'].filter((c) => c !== heroCur).map((c) => `<span class="money">${HM[c](P.total)}</span>`).join('&nbsp;&nbsp;')}</div>
+     <div id="spark-tap" class="gspark">${spark}</div>
    </div>
-   <div class="grid" style="align-content:start">
-    <div class="card click" onclick="location.hash='#atualizar'">
-      <h2>Próximo aporte → <span class="blue">${P.next.n}</span></h2>
-      ${P.alloc.map((a) => `<div class="alloc-row"><span><b style="color:${a.c}">${a.n}</b><div class="small" style="margin-top:1px">${CV(a.v)}</div></span>
-        <div class="track"><div style="width:${Math.min(100, a.cur * 100 / .5)}%;background:${a.c}"></div><span style="left:${Math.min(100, a.tgt * 100 / .5)}%"></span></div>
-        <span class="r">${pct(a.cur)}</span><span class="r" style="color:${a.gap > 0 ? 'var(--amber)' : 'var(--green)'};font-weight:700">${signed((v) => CV(v).replace(/^(R\$|£|US\$) /, ''), a.gap)}</span></div>`).join('')}
-      <div class="small" style="margin-top:6px">Barra = atual · traço = meta · laranja = falta para a meta · caixa <span class="money">${CV(num(DB.balances.caixa))}</span> fora das metas</div>
-    </div>
-    <div class="card"><h2>Marcos do patrimônio</h2>
-      <div class="mrow" id="mrow">${ms.map((m) => `<div class="${m.hit ? 'ok' : m === nextMs ? 'next' : ''}">${m.v >= 1e6 ? nf0.format(m.v / 1e6) + ' mi' : nf0.format(m.v / 1000) + 'k'}<b>${m.hit ? ymLabel(m.hit) : m === nextMs && etaMs ? '~' + ymLabel(etaMs) : '–'}</b></div>`).join('')}</div>
-      <div class="small" style="margin-top:6px">Verde = atingido (2 meses seguidos acima) · contorno = próximo, com data estimada no ritmo atual.</div>
-    </div>
+
+   <div class="gl">
+     <div class="gll">Onde está</div>
+     ${cats.map((c) => `<div class="grow click" onclick="${GO[c.k]}"><div class="grl"><span class="gdot" style="background:${GC[c.k]}"></span><span class="gn">${c.n}</span><span class="gvs money">${CV(c.v)}</span><span class="gpb">${pct(P.total ? c.v / P.total : 0).replace(/(\d),(\d)\d%/, '$1,$2%')}</span><span class="gch">›</span></div>
+       ${c.cur !== null ? `<div class="gbl"><div class="gtrk"><i style="width:${Math.min(100, (c.cur / 0.5) * 100).toFixed(1)}%;background:${GC[c.k]}"></i><span style="left:${Math.min(100, (c.tgt / 0.5) * 100).toFixed(1)}%"></span></div><span class="gtl1 ${c.cur < c.tgt ? 'gbelow' : ''}">${c.cur < c.tgt ? `faltam <span class="money">${CV(c.tgt * (P.total - num(DB.balances.caixa)) - c.v)}</span>` : 'acima da meta'}</span></div>` : '<div class="gbl"><span class="gtl1">fora das metas</span></div>'}</div>`).join('')}
    </div>
+
+   ${divCard}
+   <div class="gl gstrip click" onclick="location.hash='#cripto'">
+     <div><div class="gll">Cripto</div><div class="gk money">${CV(cs.totalBRL)}</div></div>
+     <div class="gcoins">${cs.coins.filter((x) => x.units > 1e-8).sort((a, b) => b.valUSD - a.valUSD).slice(0, 2).map((x) => { const ch = DB.prices[x.k + '_24h']; return `<div><span class="gll">${x.k}</span> <b>${usd(DB.prices[x.k], DB.prices[x.k] < 100 ? 2 : 0)}</b>${typeof ch === 'number' ? ` <span class="${ch < 0 ? 'neg' : 'pos'}">${ch < 0 ? '▼' : '▲'}${pct(Math.abs(ch) / 100)}</span>` : ''}</div>`; }).join('')}</div>
+     <span class="gch">›</span></div>
+   <div class="gl">
+     <div class="gmeta">
+       <svg width="104" height="104" viewBox="0 0 110 110" aria-hidden="true"><circle cx="55" cy="55" r="${R0}" fill="none" stroke="var(--g-track)" stroke-width="9"/>
+         <circle cx="55" cy="55" r="${R0}" fill="none" stroke="url(#gmg)" stroke-width="9" stroke-linecap="round" stroke-dasharray="${(C0 * prog).toFixed(1)} ${C0.toFixed(1)}" transform="rotate(-90 55 55)"/>
+         <defs><linearGradient id="gmg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--g-acc1)"/><stop offset="1" stop-color="var(--g-acc2)"/></linearGradient></defs>
+         <text x="55" y="60" text-anchor="middle" class="gring">${(prog * 100).toFixed(1).replace('.', ',')}%</text></svg>
+       <div style="min-width:0"><div class="gll">Rumo a ${brl(meta)}</div><div class="gbig2">${pr.ritmo ? ymLabel(pr.ritmo) : pr.cenario ? ymLabel(pr.cenario) : '—'}</div><div class="gll">${pr.ritmo ? 'no ritmo atual' : pr.cenario ? 'no plano' : 'precisa de 12 meses salvos'} · faltam <span class="money">${CV(pr.falta)}</span></div>
+       ${pr.ritmo && pr.cenario ? `<div class="gll gplan">plano <span class="money">${gbp(s.aportePlanGBP)}</span>/mês: <b>${ymLabel(pr.cenario)}</b></div>` : ''}</div>
+     </div>
+     <div class="gms">${win.map((m) => `<div class="${m.hit ? 'ok' : m === nextMs ? 'nx' : ''}"><b></b>${msL(m.v)}${m === nextMs && etaMs ? `<small>${ymLabel(etaMs)}</small>` : ''}</div>`).join('')}</div>
+   </div>
+
+
+   <div class="gl click" id="k-perf">
+     <div class="glh"><span class="gll">Desempenho · sem aportes${mLoc ? ' e sem câmbio' : ''}</span><span class="gll">ⓘ</span></div>
+     <div class="perf2">
+       <div><div class="gll">${MONTHS[new Date().getMonth()]}</div>
+         ${mLoc && mReal !== null ? `<div class="pv ${mLoc.r < 0 ? 'neg' : 'pos'}">${signed(pct, mLoc.r)}</div><div class="gll"><span class="money">${signed(CV, mLoc.gainR)}</span> · em R$ ${signed(pct, mReal)}</div>`
+         : prevM && mReal !== null ? `<div class="pv ${mReal < 0 ? 'neg' : 'pos'}">${signed(pct, mReal)}</div><div class="gll"><span class="money">${signed(CV, mRealV)}</span> · em R$</div>`
+           : `<div class="pv">–</div><div class="gll">${prevM ? 'informe o aporte do mês' : 'precisa de um mês salvo'}</div>`}</div>
+       <div><div class="gll">${st.year}</div>
+         ${Ry && Ry.full && Ry.rl !== null ? `<div class="pv ${Ry.rl < 0 ? 'neg' : 'pos'}">${signed(pct, Ry.rl)}</div><div class="gll">${Ry.n} ${Ry.n === 1 ? 'mês' : 'meses'} · em R$ ${signed(pct, Ry.r)}</div>`
+         : Ry ? `<div class="pv ${Ry.r < 0 ? 'neg' : 'pos'}">${signed(pct, Ry.r)}</div><div class="gll">${Ry.n} ${Ry.n === 1 ? 'mês' : 'meses'} · em R$</div>`
+           : '<div class="pv">–</div><div class="gll">começa com os aportes</div>'}</div>
+     </div>
+     ${bars}<div class="pb3sel" id="pb3sel"></div>
+   </div>
+
   </div>`;
   { const r = $('#mrow'), k = ms.indexOf(nextMs); if (r && k > 0) r.scrollLeft = Math.max(0, (k - 2) * 70); }   // show the last 2 reached + the next one
+  $$('[data-do]').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.divopt', b.dataset.do); } catch {} render(); }));
   $('#cur-swap').onclick = (e) => { e.stopPropagation(); const nx = { BRL: 'GBP', GBP: 'USD', USD: 'BRL' }[heroCur]; try { localStorage.setItem('rumo.cur', nx); } catch {} render(); };
+  $('#p-eye') && ($('#p-eye').onclick = (e) => { e.stopPropagation(); $('#btn-eye').click(); });
+  countUp($('.gwrap .gtot'), P.total, HM[heroCur]);
   $('#spark-tap') && ($('#spark-tap').onclick = (e) => { e.stopPropagation(); patSheet(); });
   $('.dchip') && ($('.dchip').onclick = (e) => { e.stopPropagation(); todaySheet(CV); });
-  $$('.pb2 .c').forEach((c) => (c.onclick = (e) => { e.stopPropagation(); const r = c.dataset.br; toast(`${ymLong(c.dataset.bm)}: ${r === '' ? 'sem dados' : signed(pct, Number(r)) + ' (sem aportes' + (mLoc ? ' e sem câmbio' : '') + ')'}${c.dataset.bm === ym() ? ' · mês em andamento' : ''}`); }));
+  { const sel = $('#pb3sel'), cs = $$('.pb3 .c'), show = (c) => { cs.forEach((x) => x.classList.toggle('sel', x === c)); const r = c.dataset.br; sel.innerHTML = `${ymLong(c.dataset.bm)}${c.dataset.bm === ym() ? ' · em andamento' : ''} <b class="${r === '' ? '' : Number(r) < 0 ? 'neg' : 'pos'}">${r === '' ? 'sem dados' : signed(pct, Number(r))}</b>`; };
+    cs.forEach((c) => (c.onclick = (e) => { e.stopPropagation(); show(c); })); cs.length && show(cs[cs.length - 1]); }
   $('#mchip') && ($('#mchip').onclick = (e) => { e.stopPropagation(); const L = (DB.apLog || []).filter((x) => x.date.slice(0, 7) === ym()), apR = L.reduce((t, x) => t + apBRL(x), 0);
     toast(`${MONTHS[new Date().getMonth()]}: ${signed(CV, mChg)} desde o fim de ${MONTHS[(new Date().getMonth() + 11) % 12].toLowerCase()}${L.length ? ` · inclui ${apR < 0 ? 'retirada' : 'aporte'} de ${CV(Math.abs(apR))}` : ''}${mRealV !== null ? ` · sem aportes ${signed(CV, mRealV)}` : ''}`, 6000); });
-  $('#hero-tap').onclick = () => { try { localStorage.setItem('rumo.hero', heroOpen() ? '0' : '1'); } catch {} render(); };
+  $('#hero-tap') && ($('#hero-tap').onclick = () => { try { localStorage.setItem('rumo.hero', heroOpen() ? '0' : '1'); } catch {} render(); });
   $('#k-perf').onclick = () => {
     if (!prevM) return;
     const from = { v: prevM.pat, c: prevM.cat || null }, D = DB.daily || [], base = [...D].filter((x) => x.d < ym() + '-01').pop();
@@ -1642,64 +1708,59 @@ function vAtualizar() {
       ${ATU.open === k ? `<div class="cs-b">${body}</div>` : ''}</div>`;
   const ae = lastAp(), de = lastDiv();
   const autoVal = (au.acoes ? P.v.acoes : 0) + (au.fiis ? P.v.fiis : 0) + (au.stocks ? P.v.stocks : 0);
+  const mN = MONTHS[Number(d.month.slice(5)) - 1], isNow = d.month === ym();
+  const apL = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === d.month), apSum = apL.reduce((t, e) => t + num(e.gbp), 0);
+  const bal = (lab, key, cur) => `<div class="au-bal"><div class="au-bl"><b>${lab}</b><small>${balAt[key] ? 'atualizado ' + last(key) : 'ainda não atualizado'}</small></div>
+      <div class="au-in"><div class="au-f"><span>${cur === 'GBP' ? '£' : 'R$'}</span><input inputmode="decimal" data-k="b.${key}" value="${showNum('b.' + key, b[key])}"></div>${cur === 'GBP' ? `<small data-calc="b.${key}">${brl(num(b[key]) * num(p.gbpbrl))}</small>` : ''}</div></div>`;
+  const dvL = (DB.divLog || []).filter((e) => e.date.slice(0, 7) === d.month), dvR = dvL.length ? dvL.reduce((t, e) => t + num(e.amount) * (e.cur === 'GBP' ? num(e.g || p.gbpbrl) : e.cur === 'USD' ? num(e.u || p.usdbrl) : 1), 0) : dvTot;
+  const autoRow = (lab, cls) => `<div class="au-row click" onclick="ATV.seg='${cls}';location.hash='#ativos'"><span>${lab}</span><b>${brl(classTotal(cls))}</b><span class="gch">›</span></div>`;
+  const endD = (() => { const n = ymAdd(d.month, 1); return '1º de ' + MONTHS[Number(n.slice(5)) - 1].toLowerCase(); })();
   $('#view').innerHTML = `
-  <div class="grid split"><div class="grid" style="align-content:start">
-   <div class="card kpi at-head">
-     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span class="lab">Fechamento do mês</span>
-       <button class="month-btn" id="f-month"><svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>${ymLong(d.month)}</span><span class="mb-chev">▾</span></button></div>
-     <div class="at-prog"><i style="width:${(nDone / nNeed) * 100}%"></i></div>
-     <div class="at-st"><span><b>${nDone} de ${nNeed}</b> ${nDone === nNeed ? 'prontos — pode salvar' : 'prontos'}</span><span>${exists ? 'já salvo' + (exists.savedAt ? ' em ' + new Date(exists.savedAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '') + ' · salvar de novo substitui' : 'ainda não salvo'}</span></div>
+  <div class="gwrap au">
+   <div class="gl">
+     <div class="glh"><span class="gll">Patrimônio de ${mN.toLowerCase()}</span><button class="gswap" id="f-month">${ymLabel(d.month)} <span class="gdown"></span></button></div>
+     <div class="gtot money" id="f-total" style="font-size:34px">${brl(P.total)}</div>
+     <div class="gll" id="f-cats" style="display:none"></div>
+     <div class="au-st">${exists ? `<span class="au-ok">✓</span> salvo no Histórico${exists.savedAt ? ' em ' + new Date(exists.savedAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : ''}${exists.auto ? ' (sozinho)' : ''}` : isNow ? `o app salva sozinho em ${endD}` : 'ainda não salvo'}</div>
    </div>
-   <div class="card cl">
-    ${stepH(1, s1, false, 'Aporte do mês', apN ? `${gbp(d.aporteGBP || 0, 2)} · ${apN} ${apN === 1 ? 'lançamento' : 'lançamentos'}${ae && ae.date.slice(0, 7) === d.month ? ' · ' + dmy(ae.date) + ' → ' + BLK[ae.dest || 'gbp'].n : ''}` : s1 ? `${gbp(d.aporteGBP, 2)}${num(d.aporteGBP) ? '' : ' · sem aporte'}` : 'ainda não informado',
-      `<button class="btn primary block" id="f-ap">＋ Fiz um aporte</button>
-       ${ae ? `<div class="small muted" style="margin:8px 0">Último: <b>${dmy(ae.date)}</b> · ${ae.gbp < 0 ? '−' : ''}${apTxt(ae)}${ae.note ? ' (' + esc(ae.note) + ')' : ''} · <a href="#" id="f-ap-all">ver todos</a></div>` : ''}
-       ${apN ? `<div class="field"><label>Aporte do mês (£)<small>somado sozinho</small></label><div class="calc">${gbp(d.aporteGBP || 0, 2)}<div class="small">${brl((d.aporteGBP || 0) * p.gbpbrl)}</div></div></div>`
-         : `${fieldRow('Ou digite o total (£)', 'd.aporteGBP', d.aporteGBP, 'dinheiro NOVO que entrou', d.aporteGBP ? brl(d.aporteGBP * p.gbpbrl) : '')}<button class="btn block" id="f-ap0" style="margin-top:8px">Não houve aporte este mês (£0)</button>`}`)}
-    ${stepH(2, s2, false, 'Dividendos', dvN ? `${brl(dvTot, 2)} · ${dvN} ${dvN === 1 ? 'lançamento' : 'lançamentos'}${de && de.date.slice(0, 7) === d.month ? ' · último ' + dmy(de.date) : ''}` : s2 ? brl(dvTot, 2) : 'nenhum lançado ainda',
-      `<button class="btn primary block" id="f-div">＋ Recebi dividendos</button>
-       ${[['FIIs (R$)', 'divFII', (v) => brl(v, 2)], ['Ações (R$)', 'divAcoes', (v) => brl(v, 2)], ['Stocks + REITs (£)', 'divStocks', (v) => gbp(v, 2)]].map(([lab, f, fm]) => {
-         const L = (DB.divLog || []).filter((e) => e.date.slice(0, 7) === d.month && DTYPES[e.type].f === f);
-         if (!L.length) return fieldRow(lab, 'd.' + f, d[f], null, f === 'divStocks' && d[f] ? brl(d[f] * p.gbpbrl) : '');
-         return `<div class="field click" onclick="location.hash='#dividendos'"><label>${lab}<small>${L.length} ${L.length === 1 ? 'lançamento' : 'lançamentos'} ›</small></label><div class="calc">${fm(d[f] || 0)}</div></div>`;
-       }).join('')}
-       ${!dvN ? '<button class="btn block" id="f-div0" style="margin-top:8px">✓ Pronto</button>' : ''}`)}
-    ${stepH(3, s3, false, 'Saldos que você digita', s3 ? 'todos conferidos' : `<span class="warn">${manual.filter((k) => !fresh(k)).length} de 3 para conferir</span>`,
-      `${balRow('Trading 212 cash (£)', 't212cash', b.t212cash, brl(b.t212cash * p.gbpbrl))}
-       ${balRow('Renda fixa Brasil (R$)', 'rfBrasil', b.rfBrasil)}
-       ${balRow('Caixa (R$)', 'caixa', b.caixa)}
-       <button class="btn block" id="f-bal-ok" style="margin-top:8px">✓ Pronto — nada mudou nos outros</button>`)}
-    ${stepH(4, s4, !nonAuto.length, 'Ações, FIIs e Exterior', nonAuto.length ? (s4 ? 'todos conferidos' : `<span class="warn">${nonAuto.filter((k) => !fresh(k)).length} para conferir</span>`) : `automático pelos ativos · ${brl(autoVal)}`,
-      `${au.acoes ? calcRow('Ações', 'acoes') : balRow('Ações (R$)', 'acoes', b.acoes)}
-       ${au.fiis ? calcRow('FIIs', 'fiis') : balRow('FIIs (R$)', 'fiis', b.fiis)}
-       ${au.stocks ? calcRow('Exterior (Trading 212)', 'stocks') : `${balRow('Pie Stocks (£)', 'pieStocks', b.pieStocks, brl(b.pieStocks * p.gbpbrl))}${balRow('Pie REITs (£)', 'pieReits', b.pieReits, brl(b.pieReits * p.gbpbrl))}${balRow("Pie ETF's (£)", 'pieEtfs', b.pieEtfs, brl(b.pieEtfs * p.gbpbrl))}`}
-       <div class="small muted" style="margin-top:8px">Comprou ou vendeu algo? Ajuste a quantidade em Ativos (“Comprei mais”).</div>
-       ${nonAuto.length ? '<button class="btn block" id="f-cls-ok" style="margin-top:8px">✓ Pronto — nada mudou</button>' : ''}`)}
-    ${stepH(5, s5, true, 'Câmbio, cripto e preços', s5 ? `£1 = R$ ${nf2.format(p.gbpbrl || 0)}${p.fxSrc ? ` <small>(${p.fxSrc === 'planilha' ? 'ao vivo' : 'BCE'})</small>` : ''} · BTC ${usd(p.BTC)} · ${fmtDate(p.updatedAt).split(' ')[1] || ''}` : '<span class="warn">preços antigos — toque para buscar</span>',
-      `<div id="fx-box" class="${FXEDIT ? '' : 'locked'}">
-       ${fieldRow('Libra → Real (GBP/BRL)', 'p.gbpbrl', p.gbpbrl)}
-       ${fieldRow('Dólar → Real (USD/BRL)', 'p.usdbrl', p.usdbrl)}
-       ${COINS.map((c) => fieldRow(c.k + ' (US$)', 'p.' + c.k, p[c.k])).join('')}</div>
-       <div class="small muted" style="margin:6px 0">Buscados em ${p.updatedAt ? fmtDate(p.updatedAt) : '–'}. Cripto: quantidades na aba Cripto.</div>
-       <button class="btn primary block" id="f-prices">⟳ Buscar preços agora</button>
-       <button class="btn block" id="f-fxedit" style="margin-top:8px">${FXEDIT ? '✓ Pronto' : '✎ Corrigir à mão'}</button>`)}
+
+   <div class="au-act"><button class="gl" id="f-ap"><i><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></i><b>Aporte</b><small>ou retirada</small></button><button class="gl" id="f-div"><i><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></i><b>Dividendo</b><small>recebido</small></button></div>
+
+   <div class="gl">
+     <div class="gll" style="margin-bottom:4px">Em ${mN.toLowerCase()}</div>
+     <div class="au-row ${apL.length ? 'click' : ''}" id="f-ap-all"><span>Aportes</span><b>${apL.length ? `${apSum < 0 ? '−' : ''}${gbp(Math.abs(apSum))}` : d.aporteGBP === 0 ? 'nenhum' : '—'}</b><span class="gll">${apL.length ? `${apL.length}×` : d.aporteGBP === 0 ? '' : '<a href="#" id="f-ap0">não houve</a>'}</span>${apL.length ? '<span class="gch">›</span>' : ''}</div>
+     <div class="au-row click" onclick="location.hash='#dividendos'"><span>Dividendos</span><b>${dvN || dvR ? brl(dvR) : '—'}</b><span class="gll">${dvN ? dvN + '×' : ''}</span><span class="gch">›</span></div>
    </div>
-   <div class="card">
-     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><span class="lab">Patrimônio de ${MONTHS[Number(d.month.slice(5)) - 1]}</span><b id="f-total" class="at-tot">${brl(P.total)}</b></div>
-     <div class="small muted" id="f-cats" style="margin:4px 0 12px">${P.alloc.map((a) => a.n + ' ' + brl(a.v)).join(' · ')} · Caixa ${brl(num(b.caixa))}</div>
-     <button class="btn primary block" id="f-save">Salvar ${MONTHS[Number(d.month.slice(5)) - 1]} no Histórico</button>
-     <div class="small muted" style="text-align:center;margin-top:8px">Pode salvar quantas vezes quiser — vale o último.</div>
+
+   <div class="gl">
+     <div class="glh"><span class="gll">Saldos que você digita</span></div>
+     ${bal('Trading 212 · caixa', 't212cash', 'GBP')}${bal('Renda fixa Brasil', 'rfBrasil', 'BRL')}${bal('Caixa', 'caixa', 'BRL')}
+     ${!au.acoes ? bal('Ações', 'acoes', 'BRL') : ''}${!au.fiis ? bal('FIIs', 'fiis', 'BRL') : ''}${!au.stocks ? bal('Pie Stocks', 'pieStocks', 'GBP') + bal('Pie REITs', 'pieReits', 'GBP') + bal("Pie ETF's", 'pieEtfs', 'GBP') : ''}
    </div>
-  </div></div>`;
-  $$('#view [data-step]').forEach((h) => (h.onclick = () => { const k = Number(h.dataset.step); ATU.open = ATU.open === k ? 0 : k; render(); }));
+
+   <div class="gl">
+     <div class="glh"><span class="gll">Automático</span><span class="gll">${s5 ? 'atualizado ' + (fmtDate(p.updatedAt).split(' ')[1] || '') : '<span class="au-due">preços antigos</span>'}</span></div>
+     ${au.acoes ? autoRow('Ações', 'acoes') : ''}${au.fiis ? autoRow('FIIs', 'fiis') : ''}${au.stocks ? autoRow('Exterior', 'stocks') : ''}
+     <div class="au-row"><span>Libra <small class="gll">£1</small></span><b>R$ ${nf2.format(p.gbpbrl || 0)}</b><span class="gsp"></span></div>
+     <div class="au-row"><span>Dólar <small class="gll">US$1</small></span><b>R$ ${nf2.format(p.usdbrl || 0)}</b><span class="gsp"></span></div>
+     <div class="au-row click" onclick="location.hash='#cripto'"><span>Cripto</span><b>BTC ${usd(p.BTC)}</b><span class="gch">›</span></div>
+     <div id="fx-box" class="${FXEDIT ? 'au-fx' : 'hidden'}">${fieldRow('Libra → Real', 'p.gbpbrl', p.gbpbrl)}${fieldRow('Dólar → Real', 'p.usdbrl', p.usdbrl)}${COINS.map((c) => fieldRow(c.k + ' (US$)', 'p.' + c.k, p[c.k])).join('')}</div>
+     <div class="au-two"><button class="gbtn2" id="f-prices"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg> Buscar agora</button><button class="gbtn2" id="f-fxedit">${FXEDIT ? '✓ Pronto' : '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg> Corrigir'}</button></div>
+   </div>
+
+   <button class="gbtn2 au-save" id="f-save">Salvar ${mN.toLowerCase()} agora</button>
+   <div class="gll" style="text-align:center;margin-top:-4px">${isNow ? `Não precisa: no ${endD} o app salva sozinho.` : 'Salvar de novo substitui o anterior.'}</div>
+  </div>`;
+  if (!apL.length && $('#f-ap-all')) $('#f-ap-all').id = '';
   const stamp = async (keys) => { const t = new Date().toISOString(); for (const k of keys) balAt[k] = t; await save(); };
-  $('#f-bal-ok') && ($('#f-bal-ok').onclick = async () => { await stamp(manual); ATU.open = 0; render(); });
+  $('#f-bal-ok') && ($('#f-bal-ok').onclick = async () => { await stamp([...manual, ...nonAuto]); toast('✓ Saldos conferidos'); render(); });
   $('#f-cls-ok') && ($('#f-cls-ok').onclick = async () => { await stamp(nonAuto); ATU.open = 0; render(); });
   $('#f-ap0') && ($('#f-ap0').onclick = async () => { d.aporteGBP = 0; await save(); ATU.open = 0; render(); });
   $('#f-div0') && ($('#f-div0').onclick = async () => { d.divOk = true; await save(); ATU.open = 0; render(); });
   $('#f-div') && ($('#f-div').onclick = () => editDiv(null));
   $('#f-ap') && ($('#f-ap').onclick = () => editAp(null));
   $('#f-ap-all') && ($('#f-ap-all').onclick = (e) => { e.preventDefault(); openApList(); });
+  $('#f-ap0') && ($('#f-ap0').onclick = async (e) => { e.preventDefault(); e.stopPropagation(); d.aporteGBP = 0; await save(); render(); });
   $('#f-month').onclick = () => pickMonth(d.month, async (m) => {
     const h = DB.history.find((x) => x.month === m);
     DB.draft = { month: m, divFII: h?.divFII ?? null, divAcoes: h?.divAcoes ?? null, divStocks: h?.divStocks ?? null, aporteGBP: h?.aporteGBP ?? null };
@@ -1720,7 +1781,9 @@ function vAtualizar() {
     const [grp, key] = inp.dataset.k.split('.'); const v = parsePT(inp.value);
     const target = grp === 'p' ? DB.prices : grp === 'b' ? DB.balances : DB.draft;
     target[key] = grp === 'd' ? v : (v ?? 0);
-    if (grp === 'b') balAt[key] = new Date().toISOString();   // remember when each balance was last updated
+    if (grp === 'b') { balAt[key] = new Date().toISOString(); inp.value = showNum(inp.dataset.k, target[key]);   // no full redraw: a tap on a button right after typing still works
+      const st = inp.closest('.au-bal')?.querySelector('.au-bl small'); if (st) { st.textContent = 'atualizado ' + last(key); st.classList.remove('au-due'); }
+      await save(); return; }
     await save(); render();
   }));
   $('#f-prices') && ($('#f-prices').onclick = () => refreshPrices(false));
@@ -1748,28 +1811,44 @@ function vAtualizar() {
 /* ----- Histórico ----- */
 function vHistorico() {
   const H = DB.history, R = returnsData(), rByM = Object.fromEntries(R.months.map((m) => [m.month, m])), rByY = Object.fromEntries(R.years.map((y) => [y.year, y]));
-  const years = [...new Set(H.map((h) => h.month.slice(0, 4)))].sort().reverse(), thisY = years[0];
-  let open = {}; try { open = JSON.parse(localStorage.getItem('rumo.hy') || '{}'); } catch {}
-  const isOpen = (y) => (y in open ? open[y] : y === thisY);
-  const yearHtml = (y) => {
-    const M = H.filter((h) => h.month.startsWith(y)), lastM = [...M].reverse().find((h) => typeof h.pat === 'number'), prevEnd = [...H].filter((h) => h.month < y + '-01' && typeof h.pat === 'number').pop();
-    const ap = M.reduce((a, h) => a + num(h.aporteGBP), 0), dv = M.reduce((a, h) => a + divTotal(h), 0), Y = rByY[y];
-    const chg = lastM && prevEnd ? lastM.pat - prevEnd.pat : null, ro = Y ? (Y.full && Y.rl !== null ? Y.rl : Y.r) : null;
-    const rows = isOpen(y) ? [...M].reverse().map((h) => {
-      const i = H.indexOf(h), prev = H[i - 1], varP = prev && typeof prev.pat === 'number' && typeof h.pat === 'number' && ymDiff(prev.month, h.month) === 1 ? h.pat - prev.pat : null, rm = rByM[h.month];
-      const r = rm ? rm.rl ?? rm.r : null, w = r === null ? 0 : Math.min(50, (Math.abs(r) / 0.05) * 50);
-      return `<div class="mo click" data-m="${h.month}"><span class="n">${MONTHS[Number(h.month.slice(5)) - 1]}</span><span class="v">${typeof h.pat === 'number' ? brl(h.pat) : '–'}</span>
-        <span class="s"><span class="gb">${r !== null ? `<i style="${r < 0 ? 'right:50%' : 'left:50%'};width:${w}%;background:${r < 0 ? 'var(--red)' : 'var(--green)'}"></i>` : ''}</span>
-        ${r !== null ? `<b class="${r < 0 ? 'neg' : 'pos'}">${signed(pct, r)}</b>` : '<span>sem aporte</span>'}
-        ${h.aporteGBP !== null && h.aporteGBP !== undefined ? ` · aporte ${gbp(h.aporteGBP)}` : ''} · div ${brl(divTotal(h))}${r === null && varP !== null ? ` · <span class="${varP < 0 ? 'neg' : ''}">${signed(brl, varP)}</span>` : ''}${h.note ? ' · ' + esc(h.note) : ''}</span></div>`;
-    }).join('') : '';
-    return `<div class="yr click" data-y="${y}"><div><b>${isOpen(y) ? '▾' : '▸'} ${y}</b><div class="small muted">${M.length} ${M.length === 1 ? 'mês' : 'meses'}${ap ? ' · aportes ' + gbp(ap) : ''} · div ${brl(dv)}</div></div>
-      <div class="r"><b>${lastM ? brl(lastM.pat) : '–'}</b><div class="small muted">${ro !== null ? `<span class="${ro < 0 ? 'neg' : 'pos'}">${signed(pct, ro)}</span> real · ${Y.n} ${Y.n === 1 ? 'mês medido' : 'meses medidos'}` : chg !== null ? `${signed(brl, chg)} no ano` : ''}</div></div></div>${rows}`;
-  };
-  $('#view').innerHTML = `<div class="card list">${years.map(yearHtml).join('') || '<p class="muted" style="padding:16px">Nenhum mês salvo ainda.</p>'}</div>
-    <button class="btn block" id="h-add" style="margin-top:12px">+ Adicionar mês manualmente</button>`;
-  $$('#view .yr').forEach((el) => (el.onclick = () => { open[el.dataset.y] = !isOpen(el.dataset.y); try { localStorage.setItem('rumo.hy', JSON.stringify(open)); } catch {} render(); }));
-  $$('#view .mo').forEach((el) => (el.onclick = () => monthCard(el.dataset.m)));
+  const years = [...new Set(H.map((h) => h.month.slice(0, 4)))].sort().reverse();
+  let sel = years[0]; try { const v = localStorage.getItem('rumo.hsel'); if (years.includes(v) || v === 'all') sel = v; } catch {}
+  const ALL = sel === 'all';
+  const pts = H.filter((h) => typeof h.pat === 'number');
+  const lastP = pts[pts.length - 1], firstP = pts[0];
+  const M = ALL ? H : H.filter((h) => h.month.startsWith(sel)), Y = ALL ? { rl: R.months.length && R.months.every((m) => m.rl !== null && m.rl !== undefined) ? R.months.reduce((f, m) => f * (1 + m.rl), 1) - 1 : null, r: R.total, n: R.months.length } : rByY[sel], prevEnd = [...pts].filter((h) => h.month < sel + '-01').pop(), lastM = [...M].reverse().find((h) => typeof h.pat === 'number');
+  const ap = M.reduce((a, h) => a + num(h.aporteGBP), 0), dv = M.reduce((a, h) => a + divTotal(h), 0), ro = Y ? (Y.rl !== null && (ALL || Y.full) ? Y.rl : Y.r) : null;
+  const chg = ALL ? (firstP && lastP && firstP !== lastP ? lastP.pat - firstP.pat : null) : lastM && prevEnd ? lastM.pat - prevEnd.pat : null;
+  const mx = Math.max(0.01, ...M.map((h) => { const r = rByM[h.month]; return r ? Math.abs(r.rl ?? r.r) : 0; }));
+  const yRows = () => { const yr = years.map((y) => { const Yy = rByY[y], r = Yy ? (Yy.rl !== null ? Yy.rl : Yy.r) : null, lm = [...H].reverse().find((h) => h.month.startsWith(y) && typeof h.pat === 'number'), n = H.filter((h) => h.month.startsWith(y)).length; return { y, r, lm, n }; }), m2 = Math.max(0.01, ...yr.map((x) => Math.abs(x.r || 0)));
+    return yr.map(({ y, r, lm, n }) => `<div class="hm click" data-y="${y}"><div class="hm-l"><b>${y}</b><small>${n} ${n === 1 ? 'mês' : 'meses'}</small></div>
+      <div class="hm-b">${r !== null ? `<i class="${r < 0 ? 'neg' : 'pos'}" style="width:${Math.max(4, (Math.abs(r) / m2) * 100).toFixed(0)}%"></i>` : ''}</div>
+      <div class="hm-r"><b class="money">${lm ? brl(lm.pat) : '–'}</b><small class="${r === null ? '' : r < 0 ? 'neg' : 'pos'}">${r !== null ? signed(pct, r) : '—'}</small></div><span class="gch">›</span></div>`).join(''); };
+  const rows = ALL ? yRows() : [...M].reverse().map((h) => { const rm = rByM[h.month], r = rm ? rm.rl ?? rm.r : null, w = r === null ? 0 : Math.max(4, (Math.abs(r) / mx) * 100);
+    return `<div class="hm click" data-m="${h.month}"><div class="hm-l"><b>${MONTHS[Number(h.month.slice(5)) - 1]}</b><small>${h.aporteGBP ? (h.aporteGBP < 0 ? 'retirada ' : 'aporte ') + gbp(Math.abs(h.aporteGBP)) : h.aporteGBP === 0 ? 'sem aporte' : 'aporte não informado'}</small></div>
+      <div class="hm-b">${r !== null ? `<i class="${r < 0 ? 'neg' : 'pos'}" style="width:${w.toFixed(0)}%"></i>` : ''}</div>
+      <div class="hm-r"><b class="money">${typeof h.pat === 'number' ? brl(h.pat) : '–'}</b><small class="${r === null ? '' : r < 0 ? 'neg' : 'pos'}">${r !== null ? signed(pct, r) : '—'}</small></div><span class="gch">›</span></div>`; }).join('');
+  $('#view').innerHTML = `<div class="gwrap hi">
+   <div class="gl">
+     <div class="glh"><span class="gll">Último mês salvo${lastP ? ' · ' + ymLong(lastP.month).toLowerCase() : ''}</span></div>
+     <div class="gtot money" style="font-size:30px">${lastP ? brl(lastP.pat) : '–'}</div>
+     ${firstP && lastP && firstP !== lastP ? `<div class="gll" style="margin-top:4px"><span class="${lastP.pat - firstP.pat < 0 ? 'neg' : 'pos'}">${signed(brl, lastP.pat - firstP.pat)}</span> desde ${ymLong(firstP.month).toLowerCase()}, quando o histórico começa</div>` : ''}
+   </div>
+   ${years.length ? `<div class="hy"><button data-y="all" class="hall ${ALL ? 'on' : ''}">Tudo</button>${years.map((y) => `<button data-y="${y}" class="${y === sel ? 'on' : ''}">${y}</button>`).join('')}</div>
+   <div class="gl">
+     <div class="hsum">
+       <div><div class="gll">Rendimento${ALL ? '' : ' ' + sel}</div><b class="${ro === null ? '' : ro < 0 ? 'neg' : 'pos'}">${ro !== null ? signed(pct, ro) : '—'}</b></div>
+       <div><div class="gll">Aportes</div><b class="money">${gbp(ap)}</b></div>
+       <div><div class="gll">Dividendos</div><b class="money">${brl(dv)}</b></div>
+     </div>
+     ${chg !== null ? `<div class="gll" style="margin-top:8px">Patrimônio ${chg < 0 ? 'caiu' : 'subiu'} <span class="money">${brl(Math.abs(chg))}</span> ${ALL ? ' desde ' + ymLabel(firstP.month) + ' · rendimento sem aportes' + (Y.rl !== null ? ' e sem câmbio' : ', em R$') : ' no ano · rendimento sem aportes' + (Y && Y.rl !== null && Y.full ? ' e sem câmbio' : ', em R$')}</div>` : ''}
+   </div>
+   <div class="gl hlist">${rows}</div>` : '<div class="gl"><div class="gll">Nenhum mês salvo ainda. O app salva cada mês sozinho no dia 1º.</div></div>'}
+   <button class="gbtn2" id="h-add"><svg style="vertical-align:-4px" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> Adicionar mês à mão</button>
+  </div>`;
+  { const on = $('#view .hy .on'), bar = $('#view .hy'); if (on && bar) bar.scrollLeft = on.offsetLeft - bar.clientWidth / 2 + on.offsetWidth / 2; }   // keep the chosen year in view
+  $$('#view .hy button').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.hsel', b.dataset.y); } catch {} render(); }));
+  $$('#view .hm').forEach((el) => (el.onclick = () => { if (el.dataset.y) { try { localStorage.setItem('rumo.hsel', el.dataset.y); } catch {} render(); window.scrollTo(0, 0); } else monthCard(el.dataset.m); }));
   $('#h-add').onclick = () => editMonth(null);
 }
 // tap a month in Histórico → summary card; tap outside to close, "Editar mês" for the form
@@ -1779,19 +1858,20 @@ function monthCard(m) {
   const ap = h.aporteGBP !== null && h.aporteGBP !== undefined && h.fx ? apMonthBRL(h.month, h.fx, h.aporteGBP) : null, rend = varP !== null && ap !== null ? varP - ap : null;
   const rm = returnsData().months.find((x) => x.month === m), nLog = (DB.divLog || []).filter((e) => e.date.slice(0, 7) === m).length;
   const row = (l, v, cls = '') => `<div class="mc-row"><span>${l}</span><b class="${cls}">${v}</b></div>`;
-  openSheet(`<div class="mc">
-    <div class="mc-top"><div class="small muted">${prev ? 'vs ' + ymLong(prev.month) : 'primeiro mês'}</div><h3 style="margin:2px 0 0">${ymLong(m)}</h3>
-      <div class="mc-big">${typeof h.pat === 'number' ? brl(h.pat) : '–'}</div>
-      ${varP !== null ? `<div class="${varP < 0 ? 'neg' : 'pos'}" style="font-weight:700">${varP < 0 ? '▼' : '▲'} ${signed(brl, varP)} no mês</div>` : ''}</div>
-    ${rend !== null ? row('Rendimento (sem aporte)', `${signed(brl, rend)}${rm ? ' · ' + signed(pct, rm.r) : ''}`, rend < 0 ? 'neg' : 'pos') : row('Rendimento', '<span class="muted">sem aporte informado</span>')}
-    ${row('Aporte', h.aporteGBP === null || h.aporteGBP === undefined ? '–' : `${gbp(h.aporteGBP)}${ap ? ' <span class="muted">(' + brl(ap) + ')</span>' : ''}`)}
-    ${row('Dividendos', brl(divTotal(h), 2))}
-    <div class="mc-sub">FIIs ${brl(num(h.divFII), 2)} · Ações ${brl(num(h.divAcoes), 2)} · Stocks ${gbp(num(h.divStocks), 2)}${nLog ? ` · ${nLog} ${nLog === 1 ? 'lançamento' : 'lançamentos'}` : ''}</div>
-    ${row('Câmbio', h.fx ? '£1 = R$ ' + nf2.format(h.fx) : '–')}
-    ${h.note ? row('Nota', esc(h.note)) : ''}
-    ${prev && typeof prev.pat === 'number' && typeof h.pat === 'number' && ap !== null ? '<button class="btn block" id="mc-why" style="margin-top:14px">📊 De onde veio o crescimento</button>' : ''}
-    <button class="btn primary block" id="mc-edit" style="margin-top:${prev && ap !== null ? 8 : 14}px">✎ Editar mês</button>
-    <button class="btn block" onclick="closeSheet()">Fechar</button></div>`, (el) => { $('#mc-edit', el).onclick = () => { closeSheet(); editMonth(m); };
+  const lmC = rm && rm.rl !== null && rm.rl !== undefined ? localMonth(m) : null, r = rm ? (lmC ? rm.rl : rm.r) : null, rendC = lmC ? lmC.gainR : rend, st = (l, v, cls = '') => `<div class="ps-step"><span>${l}</span><b class="${cls}">${v}</b></div>`;
+  openSheet(`<div class="ps">
+    <div class="ps-top"><div class="ps-sub">${prev ? 'vs ' + ymLong(prev.month) : 'primeiro mês'}</div><h3>${ymLong(m)}</h3>
+      <div class="ps-big">${typeof h.pat === 'number' ? brl(h.pat) : '–'}</div>
+      ${varP !== null ? `<div class="ps-sub">patrimônio ${varP < 0 ? 'caiu' : 'subiu'} <b class="${varP < 0 ? 'neg' : 'pos'}">${brl(Math.abs(varP))}</b> no mês</div>` : ''}</div>
+    <div class="ps-card">
+      ${st('Rendimento', r !== null ? `${signed(pct, r)}${rendC !== null ? ' · ' + signed(brl, rendC) : ''}` : '<span class="muted">informe o aporte</span>', r === null ? '' : r < 0 ? 'neg' : 'pos')}
+      ${st(h.aporteGBP < 0 ? 'Retirada' : 'Aporte', h.aporteGBP === null || h.aporteGBP === undefined ? '—' : `${gbp(Math.abs(h.aporteGBP))}${ap ? ' <small>' + brl(Math.abs(ap)) + '</small>' : ''}`)}
+      ${st('Dividendos', brl(divTotal(h), 2) + (nLog ? ` <small>${nLog}×</small>` : ''))}
+      ${st('Câmbio', h.fx ? '£1 = R$ ' + nf2.format(h.fx) : '—')}
+      ${h.note ? st('Nota', esc(h.note)) : ''}
+    </div>
+    ${prev && typeof prev.pat === 'number' && typeof h.pat === 'number' && ap !== null ? '<button class="btn block" id="mc-why" style="margin-top:14px">Por que subiu ou caiu?</button>' : ''}
+    <div class="ask-b" style="margin-top:8px"><button class="btn" onclick="closeSheet()">Fechar</button><button class="btn primary" id="mc-edit">Editar mês</button></div></div>`, (el) => { $('#mc-edit', el).onclick = () => { closeSheet(); editMonth(m); };
     $('#mc-why', el) && ($('#mc-why', el).onclick = () => openSheet(breakHtml(growthBreak({ v: prev.pat, c: prev.cat }, { v: h.pat, c: h.cat }, ap, divTotal(h), localMonth(m)), ymLong(m), 'vs ' + ymLong(prev.month)))); });
 }
 function editMonth(m) {
@@ -1845,36 +1925,49 @@ function vDividendos() {
   const rankRow = ([t, v], n) => `<div class="rk"><em>${n + 1}</em><b>${esc(t)}</b><div class="rkb"><i style="width:${(v / rMax) * 100}%"></i></div><span class="money">${brl(v, 2)}</span></div>`;
   const ld = lastDiv();
   let tblOpen = false; try { tblOpen = localStorage.getItem('rumo.dtbl') === '1'; } catch {}
-  $('#view').innerHTML = `
-  <div class="grid split"><div class="grid" style="align-content:start">
-  <div class="card"><button class="btn primary block" id="dv-add">＋ Recebi dividendos</button>
-    ${ld ? `<div class="small muted" style="margin-top:8px">Último: <b>${new Date(ld.date + 'T12:00').toLocaleDateString('pt-BR')}</b> · ${divLabel(ld)}${ld.ticker ? ' (' + esc(ld.ticker) + ')' : ''}</div>` : '<div class="small muted" style="margin-top:8px">Lance cada pagamento quando ele cair — o total do mês soma sozinho.</div>'}</div>
-  <div class="card kpi">
-    <div class="lab">${thisY} até ${upTo ? MONTHS[upTo - 1].toLowerCase() : '–'}</div><div class="dv-big money">${brl(tySum)}</div>
-    ${vs !== null ? `<span class="dchip ${vs < 0 ? 'neg' : 'pos'}">${vs < 0 ? '▼' : '▲'} ${pct(Math.abs(vs))} vs ${lastY} no mesmo período</span>` : ''}
-    <div class="small muted" style="margin-top:8px">média <span class="money">${brl(upTo ? tySum / upTo : 0)}</span>/mês · melhor mês: ${MON3[best]} <span class="money">${brl(ty[best])}</span></div>
-    <div class="dvbars">${ty.map((v, i) => `<div title="${MONTHS[i]}"><i class="ly" style="height:${(ly[i] / bMax) * 100}%"></i>${v ? `<i class="ty" style="height:${(v / bMax) * 100}%"></i>` : ''}</div>`).join('')}</div>
-    <div class="plab"><span>Jan</span><span><span style="color:#14B8A6">■</span> ${thisY} · <span style="color:var(--muted)">■</span> ${lastY}</span><span>Dez</span></div>
-    <div class="small muted" style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">Na vida: <b class="money" style="color:var(--title)">${brl(life)}</b> · últimos 12 meses <span class="money">${brl(last12)}</span> (≈ <span class="money">${brl(last12 / 12)}</span>/mês)</div>
-  </div>
-  <div class="card kpi"><div class="lab">Quem mais paga</div>
-    <div class="seg rk-seg">${[['mes', 'Este mês'], ['12m', '12 meses'], ['all', 'Sempre']].map(([v, l]) => `<button class="${rk === v ? 'on' : ''}" data-rk="${v}">${l}</button>`).join('')}</div>
-    ${rank.length ? rank.slice(0, 5).map(rankRow).join('') + (rank.length > 5 ? `<button class="btn block" id="rk-all" style="margin-top:8px">Ver todos (${rank.length})</button>` : '') : '<p class="small muted">Nenhum dividendo lançado neste período. O ranking usa os tickers dos lançamentos.</p>'}
-  </div>
-  </div><div class="grid" style="align-content:start">
-  <div class="card"><h2>Últimos lançamentos</h2>${divLogList(5)}${(DB.divLog || []).length > 5 ? `<button class="btn block" id="dv-all" style="margin-top:8px">Ver todos (${DB.divLog.length})</button>` : ''}</div>
-  <div class="card"><div class="cs-h" id="tbl-tog" style="padding:0"><div class="cs-t"><b>Tabela completa (${yrs[0]}–${yrs[yrs.length - 1]})</b><span>dividendos por mês, em R$</span></div><span class="cs-c">${tblOpen ? '⌄' : '›'}</span></div>
-    ${tblOpen ? `<div class="tbl-wrap" style="margin-top:10px"><table>
-    <tr><th></th>${yrs.map((y) => `<th>${y}</th>`).join('')}</tr>
-    ${MONTHS.map((mn, i) => `<tr><td>${mn}</td>${yrs.map((y) => { const v = cell(y, i); return `<td class="${v > 0 && v === max ? 'max' : ''}">${v ? nf0.format(v) : ''}</td>`; }).join('')}</tr>`).join('')}
-    <tr class="tot"><td>Total do ano</td>${tot.map((v) => `<td>${nf0.format(v)}</td>`).join('')}</tr>
-    <tr><td>Média mensal</td>${tot.map((v, i) => `<td>${cnt[i] ? nf0.format(v / cnt[i]) : ''}</td>`).join('')}</tr>
-    <tr><td>Crescimento</td>${tot.map((v, i) => { const g = i && tot[i - 1] && cnt[i] === 12 ? v / tot[i - 1] - 1 : null; return `<td class="${g > 0 ? 'pos' : g < 0 ? 'neg' : ''}">${g === null ? '' : pct(g)}</td>`; }).join('')}</tr>
-    </table></div><div class="small" style="margin-top:6px">Azul = maior dividendo mensal de todos. Arraste para o lado. Crescimento só para anos completos.</div>` : ''}</div>
-  <div class="card"><h2>Marcos de R$ 10 mil</h2>
-    <div class="mrow" id="dmrow">${mile.map((x) => `<div class="ok">${nf0.format(x.v / 1000)}k<b>${ymLabel(x.m)}</b></div>`).join('')}<div class="next">${nf0.format((Math.floor(life / step) + 1) * step / 1000)}k<b>faltam ${nf0.format(Math.ceil(((Math.floor(life / step) + 1) * step - life)))}</b></div></div>
-    <div class="small" style="margin-top:6px">Data em que o total recebido passou de cada marco.</div></div>
-  </div></div>`;
+  const nextV = (Math.floor(life / step) + 1) * step, mWin = [...mile.slice(-3).map((x) => ({ v: x.v, d: ymLabel(x.m), ok: true })), { v: nextV, d: 'faltam ' + nf0.format(Math.ceil(nextV - life)), ok: false }];
+  $('#view').innerHTML = `<div class="gwrap dv">
+   <div class="gl">
+     <div class="glh"><span class="gll">${thisY} até ${upTo ? MONTHS[upTo - 1].toLowerCase() : '–'}</span>${vs !== null ? `<span class="dchip ${vs < 0 ? 'neg' : 'pos'}">${vs < 0 ? '▼' : '▲'} ${pct(Math.abs(vs))} vs ${lastY}</span>` : ''}</div>
+     <div class="gtot money dv-big">${brl(tySum)}</div>
+     <div class="gll">média <span class="money">${brl(upTo ? tySum / upTo : 0)}</span>/mês${ty[best] ? ` · melhor: ${MONTHS[best].toLowerCase()}` : ''}</div>
+     <div class="dvb2">${ty.map((v, i) => `<div class="c${i === new Date().getMonth() ? ' cur' : ''}" data-dm="${i}"><div class="bx"><i class="ly" style="height:${(ly[i] / bMax) * 100}%"></i><i class="ty" style="height:${(v / bMax) * 100}%"></i></div><span>${'JFMAMJJASOND'[i]}</span></div>`).join('')}</div>
+     <div class="dvleg"><span><i class="ty"></i>${thisY}</span><span><i class="ly"></i>${lastY}</span><span id="dv-sel"></span></div>
+   </div>
+
+   <button class="gl dv-add" id="dv-add"><i><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></i><div><b>Dividendo recebido</b><small>${ld ? `último: ${dmy(ld.date)} · ${divLabel(ld)}${ld.ticker ? ' · ' + esc(ld.ticker) : ''}` : 'lance cada pagamento quando cair'}</small></div></button>
+
+   <div class="gl">
+     <div class="glh"><span class="gll">Na vida</span><span class="gll">12 meses: <span class="money">${brl(last12)}</span></span></div>
+     <div class="gk money" style="font-size:24px">${brl(life)}</div>
+     <div class="gtrk" style="margin:10px 0 0"><i style="width:${(((life % step) / step) * 100).toFixed(1)}%;background:linear-gradient(90deg,var(--g-acc2),var(--g-acc1))"></i></div>
+     <div class="gms" style="margin-top:12px">${mWin.map((m) => `<div class="${m.ok ? 'ok' : 'nx'}"><b></b>${nf0.format(m.v / 1000)} mil<small>${m.d}</small></div>`).join('')}</div>
+   </div>
+
+   <div class="gl">
+     <div class="glh"><span class="gll">Quem mais paga</span></div>
+     <div class="hy dv-rk">${[['mes', 'Este mês'], ['12m', '12 meses'], ['all', 'Sempre']].map(([v, l]) => `<button class="${rk === v ? 'on' : ''}" data-rk="${v}">${l}</button>`).join('')}</div>
+     ${rank.length ? rank.slice(0, 5).map(rankRow).join('') + (rank.length > 5 ? `<button class="gbtn2" id="rk-all">Ver todos (${rank.length})</button>` : '') : '<div class="gll" style="padding:8px 0">Nenhum dividendo neste período.</div>'}
+   </div>
+
+   <div class="gl dvl">
+     <div class="glh"><span class="gll">Últimos pagamentos</span></div>
+     ${divLogList(5)}${(DB.divLog || []).length > 5 ? `<button class="gbtn2" id="dv-all">Ver todos (${DB.divLog.length})</button>` : ''}
+   </div>
+
+   <div class="gl">
+     <div class="au-row click" id="tbl-tog" style="border:0;padding:2px 0"><span>Tabela por ano <small class="gll">${yrs[0]}–${yrs[yrs.length - 1]}</small></span><span class="gch">${tblOpen ? '⌄' : '›'}</span></div>
+     ${tblOpen ? `<div class="tbl-wrap dvt" style="margin-top:10px"><table>
+     <tr><th></th>${yrs.map((y) => `<th>${y}</th>`).join('')}</tr>
+     ${MONTHS.map((mn, i) => `<tr><td>${MON3[i]}</td>${yrs.map((y) => { const v = cell(y, i); return `<td class="${v > 0 && v === max ? 'max' : ''}">${v ? nf0.format(v) : ''}</td>`; }).join('')}</tr>`).join('')}
+     <tr class="tot"><td>Total</td>${tot.map((v) => `<td>${nf0.format(v)}</td>`).join('')}</tr>
+     <tr><td>Média</td>${tot.map((v, i) => `<td>${cnt[i] ? nf0.format(v / cnt[i]) : ''}</td>`).join('')}</tr>
+     <tr><td>Cresc.</td>${tot.map((v, i) => { const g = i && tot[i - 1] && cnt[i] === 12 ? v / tot[i - 1] - 1 : null; return `<td class="${g > 0 ? 'pos' : g < 0 ? 'neg' : ''}">${g === null ? '' : pct(g)}</td>`; }).join('')}</tr>
+     </table></div><div class="gll" style="margin-top:6px;font-size:11.5px">Em destaque: o maior mês de todos. Crescimento só para anos completos.</div>` : ''}
+   </div>
+  </div>`;
+  { const sel = $('#dv-sel'), show = (i) => { $$('.dvb2 .c').forEach((c) => c.classList.toggle('sel', Number(c.dataset.dm) === i)); sel.innerHTML = `${MONTHS[i]}: <b class="money">${brl(ty[i])}</b>${ly[i] ? ` <span class="money">· ${brl(ly[i])}</span>` : ''}`; };
+    $$('.dvb2 .c').forEach((c) => (c.onclick = () => show(Number(c.dataset.dm)))); show(Math.max(0, upTo - 1)); }
   const tw = $('#view .tbl-wrap'); if (tw) tw.scrollLeft = tw.scrollWidth;
   const dm = $('#dmrow'); if (dm) dm.scrollLeft = dm.scrollWidth;
   $('#dv-add').onclick = () => editDiv(null); wireDivList();
@@ -1904,21 +1997,20 @@ function coinCards(cs, p) {
 function vCripto() {
   const cs = cryptoSummary(), P = portfolio(), c = DB.crypto, p = DB.prices;
   const log = [...c.log].reverse();
-  $('#view').innerHTML = `${segBar('cripto')}
-  <div class="grid split">
-  <div class="grid" style="align-content:start">
-   <div class="card hero kpi"><div class="lab">Total em cripto</div><div class="val">${brl(cs.totalBRL)}</div>
+  $('#view').innerHTML = `<div class="gwrap cw">${segBar('cripto')}
+  
+  
+   <div class="gl cw-hero"><div class="lab">Total em cripto</div><div class="val">${brl(cs.totalBRL)}</div>
      <div class="sub">${usd(cs.totalUSD)} · ${gbp(cs.totalBRL / (p.gbpbrl || 1))} · ${P.total ? pct(cs.totalBRL / P.total) : '–'} do patrimônio</div></div>
-   <div class="card"><h2>Por moeda</h2>${coinCards(cs, p)}</div>
-   <div class="card"><h2>Bitcoin por pessoa</h2>
+   <div class="gl"><h2>Por moeda</h2>${coinCards(cs, p)}</div>
+   <div class="gl"><h2>Bitcoin por pessoa</h2>
      ${c.people.map((w) => { const u = cs.coins[0].net[w]; return `<div class="row"><span class="l">${esc(w)} <span class="small">${u.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></span><span class="r">${brl(u * p.BTC * p.usdbrl)}</span></div>`; }).join('')}
      ${cs.coins[0].fee ? `<div class="row"><span class="l small">Taxas de transferência</span><span class="r small">−${cs.coins[0].fee.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></div>` : ''}</div>
-   <div class="card"><h2>Bitcoin — lucro / prejuízo</h2>
+   ${cs.btcPL.qty ? `<div class="gl"><h2>Bitcoin — lucro / prejuízo</h2>
      <div class="small" style="margin-bottom:6px">Só compras do registro (BTC de antes do registro não tem preço pago).</div>
      ${[['Total', cs.btcPL], ...c.people.map((w) => [w, cs.btcPLby[w]])].filter(([, x]) => x.qty).map(([n, x]) => `<div class="row"><span class="l"><b>${esc(n)}</b><div class="small">pago ${usd(x.cost)} · médio ${usd(x.avg)}</div></span>
-       <span class="r ${x.pl < 0 ? 'neg' : 'pos'}">${signed(usd, x.pl)}<div class="small">${signed(pct, x.plPct)}</div></span></div>`).join('')}</div>
-  </div>
-  <div class="card" style="align-content:start"><h2>Registro de operações</h2>
+       <span class="r ${x.pl < 0 ? 'neg' : 'pos'}">${signed(usd, x.pl)}<div class="small">${signed(pct, x.plPct)}</div></span></div>`).join('')}</div>` : ''}
+  <div class="gl"><h2>Registro de operações</h2>
     <button class="btn primary block" id="c-add" style="margin:0 0 8px">+ Nova operação</button>
     ${log.map((x) => { const imp = x.op === 'Buy' && x.qty && x.price ? x.value / (x.qty * x.price) - 1 : null; const bad = imp !== null && (imp < -0.005 || imp > 0.06);
       return `<div class="item click" data-id="${x.id}"><div><div class="t">${x.op === 'Buy' ? 'Compra' : x.op === 'Sold' ? 'Venda' : 'Recebido'} · ${x.coin}</div><div class="s">${esc(x.name)} · ${x.date ? new Date(x.date + 'T12:00').toLocaleDateString('pt-BR') : ''}${bad ? ' · <span class="neg">⚠ confira os valores</span>' : ''}</div></div>
@@ -2193,7 +2285,7 @@ async function exportExcel() {
 
 /* ---------------- boot ---------------- */
 applyTheme();
-if ('serviceWorker' in navigator) {
+if (!PREVIEW && 'serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((r) => r.update()).catch(() => {});
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded && !DB) { reloaded = true; location.reload(); } });
