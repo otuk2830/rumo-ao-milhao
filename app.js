@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '5.1';
+const APP_VERSION = '5.5';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1746,7 +1746,7 @@ function vAtualizar() {
      ${au.acoes ? autoRow('Ações', 'acoes') : ''}${au.fiis ? autoRow('FIIs', 'fiis') : ''}${au.stocks ? autoRow('Exterior', 'stocks') : ''}
      <div class="au-row"><span>Libra <small class="gll">£1</small></span><b>R$ ${nf2.format(p.gbpbrl || 0)}</b><span class="gsp"></span></div>
      <div class="au-row"><span>Dólar <small class="gll">US$1</small></span><b>R$ ${nf2.format(p.usdbrl || 0)}</b><span class="gsp"></span></div>
-     <div class="au-row click" onclick="location.hash='#cripto'"><span>Cripto</span><b>BTC ${usd(p.BTC)}</b><span class="gch">›</span></div>
+     <div class="au-row click" onclick="location.hash='#cripto'"><span>Cripto</span><b class="money">${brl(P.v.crypto)}</b><span class="gch">›</span></div>
      <div id="fx-box" class="${FXEDIT ? 'au-fx' : 'hidden'}">${fieldRow('Libra → Real', 'p.gbpbrl', p.gbpbrl)}${fieldRow('Dólar → Real', 'p.usdbrl', p.usdbrl)}${COINS.map((c) => fieldRow(c.k + ' (US$)', 'p.' + c.k, p[c.k])).join('')}</div>
      <div class="au-two"><button class="gbtn2" id="f-prices"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg> Buscar agora</button><button class="gbtn2" id="f-fxedit">${FXEDIT ? '✓ Pronto' : '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg> Corrigir'}</button></div>
    </div>
@@ -1817,34 +1817,39 @@ function vHistorico() {
   const years = [...new Set(H.map((h) => h.month.slice(0, 4)))].sort().reverse();
   let sel = years[0]; try { const v = localStorage.getItem('rumo.hsel'); if (years.includes(v) || v === 'all') sel = v; } catch {}
   const ALL = sel === 'all';
+  // every amount in the currency chosen with ⇄ (same as the Painel), each month at its own rates
+  let hc = 'BRL'; try { hc = { BRL: 1, GBP: 1, USD: 1 }[localStorage.getItem('rumo.cur')] ? localStorage.getItem('rumo.cur') : 'BRL'; } catch {}
+  const pr = DB.prices, F = hc === 'GBP' ? gbp : hc === 'USD' ? usd : brl, sym = { BRL: 'R$', GBP: '£', USD: 'US$' }[hc];
+  const cv = (v, h) => (hc === 'GBP' ? v / num(h?.fx || pr.gbpbrl || 1) : hc === 'USD' ? v / num(h?.usd || pr.usdbrl || 1) : v);
+  const apC = (h) => { if (h.aporteGBP === null || h.aporteGBP === undefined) return null; if (hc === 'GBP') return num(h.aporteGBP); const b = apMonthBRL(h.month, h.fx || pr.gbpbrl, h.aporteGBP); return hc === 'USD' ? b / num(h.usd || pr.usdbrl || 1) : b; };
   const pts = H.filter((h) => typeof h.pat === 'number');
   const lastP = pts[pts.length - 1], firstP = pts[0];
   const M = ALL ? H : H.filter((h) => h.month.startsWith(sel)), Y = ALL ? { rl: R.months.length && R.months.every((m) => m.rl !== null && m.rl !== undefined) ? R.months.reduce((f, m) => f * (1 + m.rl), 1) - 1 : null, r: R.total, n: R.months.length } : rByY[sel], prevEnd = [...pts].filter((h) => h.month < sel + '-01').pop(), lastM = [...M].reverse().find((h) => typeof h.pat === 'number');
-  const ap = M.reduce((a, h) => a + num(h.aporteGBP), 0), dv = M.reduce((a, h) => a + divTotal(h), 0), ro = Y ? (Y.rl !== null && (ALL || Y.full) ? Y.rl : Y.r) : null;
-  const chg = ALL ? (firstP && lastP && firstP !== lastP ? lastP.pat - firstP.pat : null) : lastM && prevEnd ? lastM.pat - prevEnd.pat : null;
+  const ap = M.reduce((a, h) => a + num(apC(h)), 0), dv = M.reduce((a, h) => a + cv(divTotal(h), h), 0), ro = Y ? (Y.rl !== null && (ALL || Y.full) ? Y.rl : Y.r) : null;
+  const chg = ALL ? (firstP && lastP && firstP !== lastP ? cv(lastP.pat, lastP) - cv(firstP.pat, firstP) : null) : lastM && prevEnd ? cv(lastM.pat, lastM) - cv(prevEnd.pat, prevEnd) : null;
   const mx = Math.max(0.01, ...M.map((h) => { const r = rByM[h.month]; return r ? Math.abs(r.rl ?? r.r) : 0; }));
   const yRows = () => { const yr = years.map((y) => { const Yy = rByY[y], r = Yy ? (Yy.rl !== null ? Yy.rl : Yy.r) : null, lm = [...H].reverse().find((h) => h.month.startsWith(y) && typeof h.pat === 'number'), n = H.filter((h) => h.month.startsWith(y)).length; return { y, r, lm, n }; }), m2 = Math.max(0.01, ...yr.map((x) => Math.abs(x.r || 0)));
     return yr.map(({ y, r, lm, n }) => `<div class="hm click" data-y="${y}"><div class="hm-l"><b>${y}</b><small>${n} ${n === 1 ? 'mês' : 'meses'}</small></div>
       <div class="hm-b">${r !== null ? `<i class="${r < 0 ? 'neg' : 'pos'}" style="width:${Math.max(4, (Math.abs(r) / m2) * 100).toFixed(0)}%"></i>` : ''}</div>
-      <div class="hm-r"><b class="money">${lm ? brl(lm.pat) : '–'}</b><small class="${r === null ? '' : r < 0 ? 'neg' : 'pos'}">${r !== null ? signed(pct, r) : '—'}</small></div><span class="gch">›</span></div>`).join(''); };
+      <div class="hm-r"><b class="money">${lm ? F(cv(lm.pat, lm)) : '–'}</b><small class="${r === null ? '' : r < 0 ? 'neg' : 'pos'}">${r !== null ? signed(pct, r) : '—'}</small></div><span class="gch">›</span></div>`).join(''); };
   const rows = ALL ? yRows() : [...M].reverse().map((h) => { const rm = rByM[h.month], r = rm ? rm.rl ?? rm.r : null, w = r === null ? 0 : Math.max(4, (Math.abs(r) / mx) * 100);
-    return `<div class="hm click" data-m="${h.month}"><div class="hm-l"><b>${MONTHS[Number(h.month.slice(5)) - 1]}</b><small>${h.aporteGBP ? (h.aporteGBP < 0 ? 'retirada ' : 'aporte ') + gbp(Math.abs(h.aporteGBP)) : h.aporteGBP === 0 ? 'sem aporte' : 'aporte não informado'}</small></div>
+    return `<div class="hm click" data-m="${h.month}"><div class="hm-l"><b>${MONTHS[Number(h.month.slice(5)) - 1]}</b><small>${h.aporteGBP ? (h.aporteGBP < 0 ? 'retirada ' : 'aporte ') + F(Math.abs(apC(h))) : h.aporteGBP === 0 ? 'sem aporte' : 'aporte não informado'}</small></div>
       <div class="hm-b">${r !== null ? `<i class="${r < 0 ? 'neg' : 'pos'}" style="width:${w.toFixed(0)}%"></i>` : ''}</div>
-      <div class="hm-r"><b class="money">${typeof h.pat === 'number' ? brl(h.pat) : '–'}</b><small class="${r === null ? '' : r < 0 ? 'neg' : 'pos'}">${r !== null ? signed(pct, r) : '—'}</small></div><span class="gch">›</span></div>`; }).join('');
+      <div class="hm-r"><b class="money">${typeof h.pat === 'number' ? F(cv(h.pat, h)) : '–'}</b><small class="${r === null ? '' : r < 0 ? 'neg' : 'pos'}">${r !== null ? signed(pct, r) : '—'}</small></div><span class="gch">›</span></div>`; }).join('');
   $('#view').innerHTML = `<div class="gwrap hi">
    <div class="gl">
-     <div class="glh"><span class="gll">Último mês salvo${lastP ? ' · ' + ymLong(lastP.month).toLowerCase() : ''}</span></div>
-     <div class="gtot money" style="font-size:30px">${lastP ? brl(lastP.pat) : '–'}</div>
-     ${firstP && lastP && firstP !== lastP ? `<div class="gll" style="margin-top:4px"><span class="${lastP.pat - firstP.pat < 0 ? 'neg' : 'pos'}">${signed(brl, lastP.pat - firstP.pat)}</span> desde ${ymLong(firstP.month).toLowerCase()}, quando o histórico começa</div>` : ''}
+     <div class="glh"><span class="gll">Último mês salvo${lastP ? ' · ' + ymLong(lastP.month).toLowerCase() : ''}</span><button class="gswap" id="h-swap" aria-label="Trocar moeda"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M7 4L3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/></svg> ${sym}</button></div>
+     <div class="gtot money" style="font-size:30px">${lastP ? F(cv(lastP.pat, lastP)) : '–'}</div>
+     ${firstP && lastP && firstP !== lastP ? `<div class="gll" style="margin-top:4px"><span class="${cv(lastP.pat, lastP) - cv(firstP.pat, firstP) < 0 ? 'neg' : 'pos'}">${signed(F, cv(lastP.pat, lastP) - cv(firstP.pat, firstP))}</span> desde ${ymLong(firstP.month).toLowerCase()}, quando o histórico começa</div>` : ''}
    </div>
    ${years.length ? `<div class="hy"><button data-y="all" class="hall ${ALL ? 'on' : ''}">Tudo</button>${years.map((y) => `<button data-y="${y}" class="${y === sel ? 'on' : ''}">${y}</button>`).join('')}</div>
    <div class="gl">
      <div class="hsum">
-       <div><div class="gll">Rendimento${ALL ? '' : ' ' + sel}</div><b class="${ro === null ? '' : ro < 0 ? 'neg' : 'pos'}">${ro !== null ? signed(pct, ro) : '—'}</b></div>
-       <div><div class="gll">Aportes</div><b class="money">${gbp(ap)}</b></div>
-       <div><div class="gll">Dividendos</div><b class="money">${brl(dv)}</b></div>
+       <div><div class="gll">Rendimento${ALL ? '' : ' ' + sel}</div><b class="${ro === null ? '' : ro < 0 ? 'neg' : 'pos'}">${ro !== null ? signed(pct, ro) : '—'}</b>${Y && M.length && Y.n < M.filter((h) => typeof h.pat === 'number').length - (ALL ? 1 : 0) ? `<small class="hmeas">${Y.n} de ${M.filter((h) => typeof h.pat === 'number').length - (ALL ? 1 : 0)} meses medidos</small>` : ''}</div>
+       <div><div class="gll">Aportes</div><b class="money">${F(ap)}</b></div>
+       <div><div class="gll">Dividendos</div><b class="money">${F(dv)}</b></div>
      </div>
-     ${chg !== null ? `<div class="gll" style="margin-top:8px">Patrimônio ${chg < 0 ? 'caiu' : 'subiu'} <span class="money">${brl(Math.abs(chg))}</span> ${ALL ? ' desde ' + ymLabel(firstP.month) + ' · rendimento sem aportes' + (Y.rl !== null ? ' e sem câmbio' : ', em R$') : ' no ano · rendimento sem aportes' + (Y && Y.rl !== null && Y.full ? ' e sem câmbio' : ', em R$')}</div>` : ''}
+     <div class="gll" style="margin-top:8px">Rendimento = só o resultado dos investimentos (sem aportes${ro !== null && Y && Y.rl !== null && (ALL || Y.full) ? ', sem câmbio' : ''}).${chg !== null ? `<br>O patrimônio total ${chg < 0 ? 'caiu' : 'subiu'} <span class="money">${F(Math.abs(chg))}</span> ${ALL ? 'desde ' + ymLabel(firstP.month) : 'no ano'}, contando os aportes.` : ''}</div>
    </div>
    <div class="gl hlist">${rows}</div>` : '<div class="gl"><div class="gll">Nenhum mês salvo ainda. O app salva cada mês sozinho no dia 1º.</div></div>'}
    <button class="gbtn2" id="h-add"><svg style="vertical-align:-4px" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> Adicionar mês à mão</button>
@@ -1853,6 +1858,7 @@ function vHistorico() {
   $$('#view .hy button').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.hsel', b.dataset.y); } catch {} render(); }));
   $$('#view .hm').forEach((el) => (el.onclick = () => { if (el.dataset.y) { try { localStorage.setItem('rumo.hsel', el.dataset.y); } catch {} render(); window.scrollTo(0, 0); } else monthCard(el.dataset.m); }));
   $('#h-add').onclick = () => editMonth(null);
+  $('#h-swap') && ($('#h-swap').onclick = () => { const nx = { BRL: 'GBP', GBP: 'USD', USD: 'BRL' }[hc]; try { localStorage.setItem('rumo.cur', nx); } catch {} render(); });
 }
 // tap a month in Histórico → summary card; tap outside to close, "Editar mês" for the form
 function monthCard(m) {

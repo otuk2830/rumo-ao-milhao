@@ -766,3 +766,8 @@ body.glassy .arow.open .ach::before{transform:rotate(135deg)}
 .gtot, .cw-hero .val, .ps-big{font-weight:300}
 .gk, .gbig2, .hsum b, .gpb, .pv{font-weight:400}
 .gsp{width:12px; flex:0 0 12px} .au-row small.gll{margin-left:4px}
+/* table: the month column stays put with a solid background, so scrolled numbers slide under it instead of showing through */
+:root{--g-cell:#F3F1EC} html.dark{--g-cell:#19191B}
+.dvt td:first-child, .dvt th:first-child{background:var(--g-cell) !important; -webkit-backdrop-filter:none; backdrop-filter:none; z-index:2; box-shadow:8px 0 8px -6px rgba(0,0,0,.45); padding-right:12px}
+.dvt tr.tot td:first-child{background:var(--g-cell) !important}
+.hmeas{display:block; font-size:11px; color:var(--g-acc2); margin-top:2px}
