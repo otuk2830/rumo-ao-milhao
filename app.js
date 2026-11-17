@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '5.5';
+const APP_VERSION = '5.7';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -62,8 +62,12 @@ function toast(msg, ms = 2600) {
   const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden');
   clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add('hidden'), ms);
 }
+// while a sheet is open the page behind it is pinned, so swiping a long list never scrolls the page underneath (iPhone ignores overflow:hidden)
+let SHEET_Y = null;
+function lockPage() { if (SHEET_Y !== null) return; SHEET_Y = window.scrollY; Object.assign(document.body.style, { position: 'fixed', top: -SHEET_Y + 'px', left: '0', right: '0' }); }
+function unlockPage() { if (SHEET_Y === null) return; const y = SHEET_Y; SHEET_Y = null; Object.assign(document.body.style, { position: '', top: '', left: '', right: '' }); window.scrollTo(0, y); }
 function openSheet(html, onMount) {
-  $('#sheet').innerHTML = html; $('#modal').classList.remove('hidden');
+  $('#sheet').innerHTML = html; $('#sheet').scrollTop = 0; $('#modal').classList.remove('hidden'); lockPage();
   if (onMount) onMount($('#sheet'));
 }
 // Sim / Não dialog in Portuguese (the iPhone's own confirm box always says OK / Cancel in the phone's language)
@@ -76,7 +80,7 @@ function ask(msg, { yes = 'Sim', no = 'Não', danger = false } = {}) {
     document.body.appendChild(w);
   });
 }
-function closeSheet() { $('#modal').classList.add('hidden'); $('#sheet').innerHTML = ''; }
+function closeSheet() { $('#modal').classList.add('hidden'); $('#sheet').innerHTML = ''; unlockPage(); }
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeSheet(); });
 
 /* ---------------- crypto (encryption) ---------------- */
@@ -1840,7 +1844,8 @@ function vHistorico() {
    <div class="gl">
      <div class="glh"><span class="gll">Último mês salvo${lastP ? ' · ' + ymLong(lastP.month).toLowerCase() : ''}</span><button class="gswap" id="h-swap" aria-label="Trocar moeda"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M7 4L3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/></svg> ${sym}</button></div>
      <div class="gtot money" style="font-size:30px">${lastP ? F(cv(lastP.pat, lastP)) : '–'}</div>
-     ${firstP && lastP && firstP !== lastP ? `<div class="gll" style="margin-top:4px"><span class="${cv(lastP.pat, lastP) - cv(firstP.pat, firstP) < 0 ? 'neg' : 'pos'}">${signed(F, cv(lastP.pat, lastP) - cv(firstP.pat, firstP))}</span> desde ${ymLong(firstP.month).toLowerCase()}, quando o histórico começa</div>` : ''}
+     ${(() => { const y1 = lastP && pts.find((h) => h.month === ymAdd(lastP.month, -12)); if (!y1) return ''; const d = cv(lastP.pat, lastP) - cv(y1.pat, y1);
+       return `<div class="gll" style="margin-top:4px"><span class="${d < 0 ? 'neg' : 'pos'}">${signed(F, d)}</span> em 12 meses (vs ${ymLong(y1.month).toLowerCase()}), contando os aportes</div>`; })()}
    </div>
    ${years.length ? `<div class="hy"><button data-y="all" class="hall ${ALL ? 'on' : ''}">Tudo</button>${years.map((y) => `<button data-y="${y}" class="${y === sel ? 'on' : ''}">${y}</button>`).join('')}</div>
    <div class="gl">

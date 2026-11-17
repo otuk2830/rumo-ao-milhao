@@ -771,3 +771,4 @@ body.glassy .arow.open .ach::before{transform:rotate(135deg)}
 .dvt td:first-child, .dvt th:first-child{background:var(--g-cell) !important; -webkit-backdrop-filter:none; backdrop-filter:none; z-index:2; box-shadow:8px 0 8px -6px rgba(0,0,0,.45); padding-right:12px}
 .dvt tr.tot td:first-child{background:var(--g-cell) !important}
 .hmeas{display:block; font-size:11px; color:var(--g-acc2); margin-top:2px}
+.sheet{overscroll-behavior:contain; -webkit-overflow-scrolling:touch} .modal{overscroll-behavior:contain; touch-action:pan-y}
