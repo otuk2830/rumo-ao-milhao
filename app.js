@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '4.65';
+const APP_VERSION = '4.67';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1852,6 +1852,22 @@ function vDividendos() {
 }
 
 /* ----- Cripto ----- */
+const COINMETA = { BTC: ['Bitcoin', '₿', '#F7931A'], ETH: ['Ethereum', 'Ξ', '#627EEA'], XRP: ['XRP', '✕', '#23292F'], SOL: ['Solana', '◎', 'linear-gradient(135deg,#9945FF,#14F195)'] };
+// biggest coin as a large card (price, 24h, what you hold, share of your crypto); the rest as compact rows
+function coinCards(cs, p) {
+  const L = cs.coins.filter((x) => Math.abs(x.units) >= 1e-8).map((x) => ({ ...x, us: p.usdbrl ? x.valBRL / p.usdbrl : x.units * num(p[x.k]) })).sort((a, b) => b.us - a.us);
+  if (!L.length) return '<p class="muted">Nenhuma moeda.</p>';
+  const tot = L.reduce((t, x) => t + x.us, 0) || 1, px = (x) => usd(p[x.k], p[x.k] < 100 ? 2 : 0);
+  const ch = (x, word) => { const c = p[x.k + '_24h']; return typeof c === 'number' ? `<span class="cchip ${c < 0 ? 'dn' : 'up'}">${c < 0 ? '▼' : '▲'} ${pct(Math.abs(c) / 100)}${word ? ' 24h' : ''}</span>` : ''; };
+  const ic = (x, sm) => { const m = COINMETA[x.k] || [x.k, x.k[0], '#334155']; return `<span class="cic${sm ? ' sm' : ''}" style="background:${m[2]}">${m[1]}</span>`; };
+  const qty = (x) => x.units.toLocaleString('pt-BR', { maximumFractionDigits: x.dec });
+  // every coin gets the same card: icon · name · quantity | price · 24h, then what you hold and its share
+  return L.map((b) => `<div class="ctile"><div class="ctop">${ic(b)}<div><div class="cn">${(COINMETA[b.k] || [b.k])[0]}</div><div class="small">${qty(b)} ${b.k}</div></div>
+      <div class="cr"><div class="small">preço</div><div class="cpx">${px(b)}</div>${ch(b, true)}</div></div>
+    <div class="chave"><span class="small">Você tem</span><span><b class="money">${usd(b.us)}</b> <span class="small money">· ${brl(b.valBRL)}</span></span></div>
+    <div class="cbar"><i style="width:${Math.max(1, (b.us / tot) * 100).toFixed(1)}%;background:${b.k === 'XRP' ? '#94A3B8' : b.k === 'SOL' ? '#9945FF' : (COINMETA[b.k] || [])[2] || 'var(--blue)'}"></i></div>
+    <div class="small" style="margin-top:4px">${pct(b.us / tot)} da sua cripto</div></div>`).join('');
+}
 function vCripto() {
   const cs = cryptoSummary(), P = portfolio(), c = DB.crypto, p = DB.prices;
   const log = [...c.log].reverse();
@@ -1860,9 +1876,7 @@ function vCripto() {
   <div class="grid" style="align-content:start">
    <div class="card hero kpi"><div class="lab">Total em cripto</div><div class="val">${brl(cs.totalBRL)}</div>
      <div class="sub">${usd(cs.totalUSD)} · ${gbp(cs.totalBRL / (p.gbpbrl || 1))} · ${P.total ? pct(cs.totalBRL / P.total) : '–'} do patrimônio</div></div>
-   <div class="card"><h2>Por moeda</h2>
-     ${cs.coins.filter((x) => Math.abs(x.units) >= 1e-8).map((x) => { const ch = p[x.k + '_24h']; return `<div class="row"><span class="l"><b>${x.k}</b> <span class="small">${x.units.toLocaleString('pt-BR', { maximumFractionDigits: x.dec })}</span>
-       <div class="coinpx">${usd(p[x.k], p[x.k] < 100 ? 2 : 0)}${typeof ch === 'number' ? ` <span class="${ch < 0 ? 'neg' : 'pos'}">${ch < 0 ? '▼' : '▲'} ${pct(Math.abs(ch) / 100)} 24h</span>` : ''}</div></span><span class="r">${usd(p.usdbrl ? x.valBRL / p.usdbrl : x.units * num(p[x.k]))}<div class="small">${brl(x.valBRL)}</div></span></div>`; }).join('')}</div>
+   <div class="card"><h2>Por moeda</h2>${coinCards(cs, p)}</div>
    <div class="card"><h2>Bitcoin por pessoa</h2>
      ${c.people.map((w) => { const u = cs.coins[0].net[w]; return `<div class="row"><span class="l">${esc(w)} <span class="small">${u.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></span><span class="r">${brl(u * p.BTC * p.usdbrl)}</span></div>`; }).join('')}
      ${cs.coins[0].fee ? `<div class="row"><span class="l small">Taxas de transferência</span><span class="r small">−${cs.coins[0].fee.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></div>` : ''}</div>
