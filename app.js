@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '5.0';
+const APP_VERSION = '5.1';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1611,12 +1611,15 @@ async function patSheet() {
     if (!window.Chart) { try { await loadScript('chart.umd.js'); } catch { try { await loadScript('https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'); } catch { return; } } }
     Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif'; Chart.defaults.color = cssVar('--muted');
     patChart?.destroy();
-    patChart = new Chart($('#ch-pat2', el), { type: 'line', data: { datasets: [{ data: b0.pts, borderColor: '#3B82F6', backgroundColor: 'rgba(59,130,246,.15)', fill: true, pointRadius: b0.pts.length < 40 ? 2 : 0, tension: .2, borderWidth: 2 }] },
-      options: { maintainAspectRatio: false, parsing: false, plugins: { legend: { display: false }, tooltip: { callbacks: { title: (c) => new Date(c[0].raw.x).toLocaleDateString('pt-BR'), label: (c) => fmt(c.raw.y) } } },
-        scales: { x: { type: 'linear', min: b0.pts[0]?.x, max: b0.pts[b0.pts.length - 1]?.x, grid: { display: false }, ticks: { maxTicksLimit: 5, callback: b0.dl } }, y: { grid: gridOpts(), ticks: kTicks } } } });
+    const gv = (n) => getComputedStyle(document.body).getPropertyValue(n).trim(), acc = gv('--g-acc1') || '#E9DFC9', acc2 = gv('--g-acc2') || '#C9B087';
+    Chart.defaults.color = gv('--g-mut') || cssVar('--muted');
+    const fillG = (ctx) => { const { chart } = ctx, a = chart.chartArea; if (!a) return 'transparent'; const g = chart.ctx.createLinearGradient(0, a.top, 0, a.bottom); g.addColorStop(0, acc2 + '55'); g.addColorStop(1, acc2 + '00'); return g; };
+    patChart = new Chart($('#ch-pat2', el), { type: 'line', data: { datasets: [{ data: b0.pts, borderColor: acc, backgroundColor: fillG, fill: true, pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: acc, tension: .25, borderWidth: 2 }] },
+      options: { maintainAspectRatio: false, parsing: false, animation: { duration: 350 }, interaction: { mode: 'index', intersect: false }, plugins: { legend: { display: false }, tooltip: { callbacks: { title: (c) => new Date(c[0].raw.x).toLocaleDateString('pt-BR'), label: (c) => fmt(c.raw.y) } } },
+        scales: { x: { type: 'linear', min: b0.pts[0]?.x, max: b0.pts[b0.pts.length - 1]?.x, grid: { display: false }, ticks: { maxTicksLimit: 5, callback: b0.dl } }, y: { grid: { color: gv('--g-bd') || cssVar('--line') }, border: { display: false }, ticks: kTicks } } } });
     $$('[data-rg]', el).forEach((b) => (b.onclick = () => { const rg = b.dataset.rg; try { localStorage.setItem('rumo.range', rg); } catch {}
       $$('[data-rg]', el).forEach((x) => x.classList.toggle('on', x === b)); const n = build(rg), ds = patChart.data.datasets[0];
-      ds.data = n.pts; ds.pointRadius = n.pts.length < 40 ? 2 : 0; Object.assign(patChart.options.scales.x, { min: n.pts[0]?.x, max: n.pts[n.pts.length - 1]?.x }); patChart.options.scales.x.ticks.callback = n.dl; patChart.update(); $('#ps', el).innerHTML = stats(n.pts); }));
+      ds.data = n.pts; Object.assign(patChart.options.scales.x, { min: n.pts[0]?.x, max: n.pts[n.pts.length - 1]?.x }); patChart.options.scales.x.ticks.callback = n.dl; patChart.update('none'); /* redraw straight away: animating between ranges of different lengths made the line jump */ $('#ps', el).innerHTML = stats(n.pts); }));
   });
 }
 const patRange = () => { try { return localStorage.getItem('rumo.range') || 'all'; } catch { return 'all'; } };
