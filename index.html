@@ -3,26 +3,38 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0A0A0B">
+<meta name="theme-color" content="#0A0A0B" id="m-theme">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!-- launch screen: graphite with the champagne ring, one image per iPhone size -->
+<link rel="apple-touch-startup-image" media="screen and (device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/splash-1320x2868.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/splash-1206x2622.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/splash-1290x2796.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/splash-1179x2556.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/splash-1284x2778.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/splash-1170x2532.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/splash-1242x2688.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/splash-1125x2436.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="splash/splash-828x1792.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="splash/splash-750x1334.jpg">
 <meta name="apple-mobile-web-app-title" content="Rumo ao Milhão">
 <meta name="robots" content="noindex">
 <title>Rumo ao Milhão</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="icon-192.png">
-<link rel="stylesheet" href="app.css?v=5.7">
+<link rel="stylesheet" href="app.css?v=6.0">
 <script>/* theme before paint (not sensitive, kept outside the encrypted data) */
 (function(){var t='auto';try{t=localStorage.getItem('rumo.theme')||'auto'}catch(e){}
-var d=t==='dark'||(t==='auto'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);try{if(localStorage.getItem('rumo.hide')==='1')document.documentElement.classList.add('priv')}catch(e){}})();</script>
+var d=t==='dark'||(t==='auto'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);try{var mt=document.getElementById('m-theme');if(mt)mt.setAttribute('content',d?'#0A0A0B':'#EFECE6');if(!d){var sb=document.querySelector('meta[name=apple-mobile-web-app-status-bar-style]');if(sb)sb.setAttribute('content','default')}}catch(e){}try{if(localStorage.getItem('rumo.hide')==='1')document.documentElement.classList.add('priv')}catch(e){}})();</script>
 </head>
 <body>
 <!-- Lock / setup screen -->
 <section id="lock" class="lock hidden">
   <div class="lock-inner">
-    <div class="logo">R$</div>
+    <div class="logo lkring"><svg viewBox="0 0 100 100" width="76" height="76" aria-hidden="true"><defs><linearGradient id="lkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F3EEE4"/><stop offset="1" stop-color="#B89A6C"/></linearGradient></defs><circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="4"/><circle class="lkarc" cx="50" cy="50" r="40" fill="none" stroke="url(#lkg)" stroke-width="4" stroke-linecap="round" stroke-dasharray="188 252" transform="rotate(-90 50 50)"/><text x="50" y="58" text-anchor="middle" fill="#F3EEE4" font-size="24" font-weight="300">R$</text></svg></div>
+    <p class="lock-hi" id="lock-hi"></p>
     <h1>Rumo ao Milhão</h1>
     <p id="lock-msg">Digite seu PIN</p>
     <div class="dots" id="dots"><i></i><i></i><i></i><i></i><i></i><i></i></div>
@@ -71,6 +83,6 @@ var d=t==='dark'||(t==='auto'&&matchMedia('(prefers-color-scheme: dark)').matche
 <div id="toast" class="toast hidden"></div>
 <input type="file" id="file-in" accept=".json,application/json" class="hidden">
 
-<script src="app.js?v=5.7"></script>
+<script src="app.js?v=6.0"></script>
 </body>
 </html>

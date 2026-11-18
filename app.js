@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '5.7';
+const APP_VERSION = '6.0';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -67,7 +67,12 @@ let SHEET_Y = null;
 function lockPage() { if (SHEET_Y !== null) return; SHEET_Y = window.scrollY; Object.assign(document.body.style, { position: 'fixed', top: -SHEET_Y + 'px', left: '0', right: '0' }); }
 function unlockPage() { if (SHEET_Y === null) return; const y = SHEET_Y; SHEET_Y = null; Object.assign(document.body.style, { position: '', top: '', left: '', right: '' }); window.scrollTo(0, y); }
 function openSheet(html, onMount) {
-  $('#sheet').innerHTML = html; $('#sheet').scrollTop = 0; $('#modal').classList.remove('hidden'); lockPage();
+  const X = '<div class="sh-top"><button class="sh-x" aria-label="Fechar" onclick="closeSheet()"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>';
+  clearTimeout(SHEET_T); const md = $('#modal');
+  $('#sheet').innerHTML = X + html; $('#sheet').scrollTop = 0; const was = !md.classList.contains('hidden') && md.classList.contains('show');
+  md.classList.remove('hidden'); lockPage(); if (!was) { md.classList.remove('show'); void md.offsetWidth; requestAnimationFrame(() => md.classList.add('show')); }
+  // long lists: a close button appears pinned at the top once you scroll down
+  const sh = $('#sheet'); sh.classList.remove('scrolled'); sh.onscroll = () => sh.classList.toggle('scrolled', sh.scrollTop > 120);
   if (onMount) onMount($('#sheet'));
 }
 // Sim / Não dialog in Portuguese (the iPhone's own confirm box always says OK / Cancel in the phone's language)
@@ -80,7 +85,9 @@ function ask(msg, { yes = 'Sim', no = 'Não', danger = false } = {}) {
     document.body.appendChild(w);
   });
 }
-function closeSheet() { $('#modal').classList.add('hidden'); $('#sheet').innerHTML = ''; unlockPage(); }
+let SHEET_T = null;
+function closeSheet() { const md = $('#modal'); md.classList.remove('show'); unlockPage(); clearTimeout(SHEET_T);
+  SHEET_T = setTimeout(() => { md.classList.add('hidden'); $('#sheet').innerHTML = ''; }, 260); }
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeSheet(); });
 
 /* ---------------- crypto (encryption) ---------------- */
@@ -257,9 +264,10 @@ async function fetchJSON(url) {
   catch (e) { if (e.status && e.status !== 429 && e.status < 500) throw e; await new Promise((r) => setTimeout(r, e.status === 429 ? 2500 : 1200)); return fetchJSON1(url); }
 }
 // the ⟳ button spins while prices load, so a tap always shows something happening
-async function refreshPrices(silent) {
-  const b = document.getElementById('btn-refresh'); b?.classList.add('spin');
-  try { return await refreshPricesNow(silent); } finally { setTimeout(() => b?.classList.remove('spin'), 400); }
+async function refreshPrices(silent, fromPull) {
+  const b = fromPull ? null : document.getElementById('btn-refresh'); b?.classList.add('spin'); document.body.classList.add('loading'); const u0 = DB?.prices?.updatedAt;
+  try { const r = await refreshPricesNow(silent); if (PREVIEW && !silent) await new Promise((z) => setTimeout(z, 900)); return r; }
+  finally { setTimeout(() => { b?.classList.remove('spin'); document.body.classList.remove('loading'); const el = document.getElementById('top-sub'); if (el && DB?.prices?.updatedAt && DB.prices.updatedAt !== u0) { el.classList.remove('justnow'); void el.offsetWidth; el.classList.add('justnow'); } }, 400); }
 }
 const PREVIEW = !!window.RUMO_PREVIEW;
 async function refreshPricesNow(silent) {
@@ -390,7 +398,9 @@ function showLock(mode) {
   $('#app').classList.add('hidden'); $('#welcome').classList.add('hidden'); $('#lock').classList.remove('hidden');
   let pin = '', first = '', confirming = false;
   const meta = getMeta();
+  PG_I = 0;
   const msg = $('#lock-msg'), dots = $('#dots'), foot = $('#lock-foot');
+  { const h = new Date().getHours(), g = h < 5 ? 'Boa noite' : h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite'; const hi = $('#lock-hi'); if (hi) hi.textContent = g; }
   const changing = mode === 'setup' && !!DKRAW;
   const setMsg = () => {
     msg.textContent = mode === 'unlock' ? 'Digite seu PIN' : confirming ? 'Confirme o PIN' : changing ? 'Crie o novo PIN' : 'Crie um PIN de 6 dígitos';
@@ -495,7 +505,7 @@ function demoDB() {
     D.history.push({ month: ymAdd(`${y}-01`, m - 1), pat: Math.round(T * f * 0.985), aporteGBP: 1000, fx: 7.1 + m * 0.01, usd: 5.35, divFII: 950 + m * 12, divAcoes: 120 + (m % 4) * 40, divStocks: 18 + m, cat: Object.fromEntries(Object.entries(c).map(([k, v]) => [k, Math.round(v * f * 0.985)])), nat: { brl: n.brl * f * 0.985, gbp: n.gbp * f * 0.985, usd: n.usd * f * 0.985 }, savedAt: now }); }
   // daily records for the last 25 days
   for (let i = 25; i >= 1; i--) { const t = new Date(Date.now() - i * 864e5), f = 1 - i * 0.0006 + Math.sin(i / 2.5) * 0.004;
-    D.daily.push({ d: ymdL(t), v: T * f, g: 7.26, u: 5.43, c: Object.fromEntries(Object.entries(c).map(([k, v]) => [k, v * f])), n: { brl: n.brl * f, gbp: n.gbp * f, usd: n.usd * f } }); }
+    D.daily.push({ d: ymdL(t), a: Object.fromEntries(D.assets.map((as, k) => [as.id, [+(as.price * (1 - i * 0.0012 * ((k % 3) - 1) + Math.sin(i / 2 + k) * 0.012)).toFixed(2), as.qty]])), v: T * f, g: 7.26, u: 5.43, c: Object.fromEntries(Object.entries(c).map(([k, v]) => [k, v * f])), n: { brl: n.brl * f, gbp: n.gbp * f, usd: n.usd * f } }); }
   const dm = (k) => ym() + '-' + String(k).padStart(2, '0');
   D.divLog = [{ id: uid(), type: 'fii', cur: 'BRL', amount: 132.0, date: dm(5), ticker: 'HGLG11' }, { id: uid(), type: 'fii', cur: 'BRL', amount: 165.0, date: dm(8), ticker: 'MXRF11' }, { id: uid(), type: 'acoes', cur: 'BRL', amount: 48.6, date: dm(10), ticker: 'BBSE3' }, { id: uid(), type: 'reits', cur: 'GBP', amount: 0.74, date: dm(12), ticker: 'O', g: 7.26 }];
   D.apLog = [{ id: uid(), gbp: 1000, dest: 'gbp', date: dm(5), g: 7.24, note: 'exemplo' }];
@@ -585,7 +595,7 @@ function editDiv(id) {
       const old = DB.divLog.find((e) => e.id === o.id)?.date.slice(0, 7);
       const i = DB.divLog.findIndex((e) => e.id === o.id); if (i > -1) DB.divLog[i] = o; else DB.divLog.push(o);
       applyDivLog(m); if (old && old !== m) applyDivLog(old);
-      await save(); closeSheet(); render(); fillMissingFx(); toast(`✓ ${divLabel(o)}${o.ticker ? ' · ' + o.ticker : ''} em ${ymLong(m)}`);
+      await save(); closeSheet(); render(); fillMissingFx(); doneTick(); toast(`✓ ${divLabel(o)}${o.ticker ? ' · ' + o.ticker : ''} em ${ymLong(m)}`);
     };
     if (id) $('#dv-del', el).onclick = async () => {
       if (!(await ask('Apagar este dividendo?', { yes: 'Sim, apagar', danger: true }))) return;
@@ -651,7 +661,7 @@ function editAp(id) {
       const i = DB.apLog.findIndex((e) => e.id === o.id); if (i > -1) DB.apLog[i] = o; else DB.apLog.push(o);
       applyApLog(m); if (old && old !== m) { if (apSum(old) === null) { if (DB.draft.month === old) DB.draft.aporteGBP = null; const h = DB.history.find((q) => q.month === old); if (h) h.aporteGBP = null; } else applyApLog(old); }
       await save(); closeSheet(); render(); fillMissingFx();
-      toast(`✓ ${o.gbp < 0 ? 'Retirada' : 'Aporte'} de ${apTxt(o)} em ${new Date(o.date + 'T12:00').toLocaleDateString('pt-BR')} — atualize hoje os saldos/quantidades que mudaram`, 5000);
+      doneTick(); toast(`✓ ${o.gbp < 0 ? 'Retirada' : 'Aporte'} de ${apTxt(o)} em ${new Date(o.date + 'T12:00').toLocaleDateString('pt-BR')} — atualize hoje os saldos/quantidades que mudaram`, 5000);
     };
     if (id) $('#ap-del', el).onclick = async () => { if (await delAp(id)) { closeSheet(); render(); } };
   });
@@ -1282,7 +1292,7 @@ function editAsset(id, cls) {
         $('#b-go', e2).onclick = async () => {
           const q = parsePT($('#b-q', e2).value), p = parsePT($('#b-p', e2).value); if (!q) return toast('Digite a quantidade');
           if (p && (a.avg || !a.qty)) a.avg = (num(a.qty) * num(a.avg) + q * p) / (num(a.qty) + q);
-          a.qty = num(a.qty) + q; await save(); closeSheet(); render(); toast(`✓ ${a.ticker}: agora ${a.qty.toLocaleString('pt-BR', { maximumFractionDigits: 8 })}`);
+          a.qty = num(a.qty) + q; await save(); closeSheet(); render(); doneTick(); toast(`✓ ${a.ticker}: agora ${a.qty.toLocaleString('pt-BR', { maximumFractionDigits: 8 })}`);
         };
       });
       $('#ea-del', el).onclick = async () => { if (!(await ask('Apagar ' + a.ticker + '?', { yes: 'Sim, apagar', danger: true }))) return; DB.assets = DB.assets.filter((x) => x.id !== id); await save(); closeSheet(); render(); };
@@ -1318,26 +1328,30 @@ function render() {
   requestAnimationFrame(() => { const maxY = Math.max(0, document.documentElement.scrollHeight - innerHeight); if (scrollY > maxY) scrollTo(0, maxY); });
   document.body.classList.add('glassy');   // the whole app uses the glass style
   ({ painel: vPainel, atualizar: vAtualizar, historico: vHistorico, dividendos: vDividendos, cripto: vCripto, ativos: vAtivos, ajustes: vAjustes })[r]();
+  if (r !== LAST_R) { const v = $('#view'); v.classList.remove('vfade'); void v.offsetWidth; v.classList.add('vfade'); LAST_R = r; }
 }
+let LAST_R = null;
 $('#btn-settings').onclick = () => { location.hash = '#ajustes'; };
+{ let tk = false; window.addEventListener('scroll', () => { if (tk) return; tk = true; requestAnimationFrame(() => { tk = false; const h = document.querySelector('header.top'); if (!h) return; const y = window.scrollY, on = h.classList.contains('small'); if (!on && y > 44) h.classList.add('small'); else if (on && y < 14) h.classList.remove('small'); }); }, { passive: true }); }
 $('#btn-lock').onclick = lockNow;
 // pull down from the top of any tab to refresh all prices (same as ⟳)
 (() => {
-  const ind = document.createElement('div'); ind.id = 'ptr'; ind.innerHTML = '<span>⟳</span>'; document.body.appendChild(ind);
+  const ind = document.createElement('div'); ind.id = 'ptr'; ind.innerHTML = '<svg viewBox="0 0 32 32" width="26" height="26"><circle cx="16" cy="16" r="12" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="2.4"/><circle class="pr" cx="16" cy="16" r="12" fill="none" stroke="#D9C7A3" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="0 76" transform="rotate(-90 16 16)"/></svg>'; document.body.appendChild(ind);
   let y0 = null, dist = 0, busy = false;
   const can = () => DB && !busy && window.scrollY <= 0 && $('#modal').classList.contains('hidden') && !$('#app').classList.contains('hidden');
   document.addEventListener('touchstart', (e) => { y0 = can() && e.touches.length === 1 ? e.touches[0].clientY : null; dist = 0; if (y0 !== null) ind.style.top = ($('header.top').getBoundingClientRect().bottom + 8) + 'px'; }, { passive: true });
   document.addEventListener('touchmove', (e) => {
     if (y0 === null) return; dist = Math.max(0, (e.touches[0].clientY - y0) * 0.5);
     if (window.scrollY > 0) { y0 = null; dist = 0; }
-    ind.style.transform = `translate(-50%, ${Math.min(dist, 80) - 50}px) rotate(${dist * 4}deg)`; ind.style.opacity = Math.min(1, dist / 60);
+    ind.style.transform = `translate(-50%, ${Math.min(dist, 80) - 50}px)`; ind.style.opacity = Math.min(1, dist / 50);
+    { const c = ind.querySelector('.pr'); if (c) c.setAttribute('stroke-dasharray', `${(Math.min(1, dist / 70) * 75.4).toFixed(1)} 76`); }
     ind.classList.toggle('ready', dist >= 70);
   }, { passive: true });
   document.addEventListener('touchend', async () => {
     if (y0 === null) return; y0 = null;
     if (dist >= 70) {
       busy = true; ind.classList.add('spin'); ind.style.opacity = 1; ind.style.transform = 'translate(-50%, 20px)';
-      try { await refreshPrices(false); } finally { busy = false; ind.classList.remove('spin', 'ready'); ind.style.opacity = 0; ind.style.transform = ''; }
+      try { await refreshPrices(false, true); } finally { ind.style.opacity = 0; setTimeout(() => { busy = false; ind.classList.remove('spin', 'ready'); ind.style.transform = ''; ind.querySelector('.pr')?.setAttribute('stroke-dasharray', '0 76'); }, 220); }
     } else { ind.style.opacity = 0; ind.style.transform = ''; ind.classList.remove('ready'); }
     dist = 0;
   });
@@ -1434,11 +1448,23 @@ function todaySheet(CV) {
     $$('.tc', el).forEach((t) => (t.onclick = () => { const it = $('.tc-items', t), open = it.classList.toggle('hidden') === false; $('.tc-ch', t).textContent = open ? '▾' : '▸'; }));
   });
 }
+// a champagne tick draws itself in the middle of the screen when money is logged
+function doneTick() {
+  let el = document.getElementById('tick'); if (!el) { el = document.createElement('div'); el.id = 'tick'; document.body.appendChild(el); }
+  el.innerHTML = '<div><svg viewBox="0 0 64 64" width="64" height="64"><circle cx="32" cy="32" r="26" fill="none" stroke="var(--g-acc2, #C9B087)" stroke-width="2.6" stroke-dasharray="164" stroke-dashoffset="164"/><path d="M21 33l7.5 7.5L44 25" fill="none" stroke="var(--g-acc1, #F3EEE4)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="36" stroke-dashoffset="36"/></svg></div>';
+  el.classList.remove('on'); void el.offsetWidth; el.classList.add('on'); clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('on'), 1100);
+}
+let PG_I = 0;   // top card shown: kept while the app is open, back to Patrimônio after reopening or unlocking
 let COUNTED = false;   // the patrimônio counts up once each time the app opens
-function countUp(el, v, fmt) {
-  if (COUNTED || !el || !(v > 0)) return; COUNTED = true;
-  try { if (matchMedia('(prefers-reduced-motion: reduce)').matches) return; } catch {}
-  const t0 = performance.now(), D = 700, step = (t) => { const k = Math.min(1, (t - t0) / D), e = 1 - Math.pow(1 - k, 3); el.textContent = fmt(v * e); if (k < 1) requestAnimationFrame(step); else el.textContent = fmt(v); };
+let SHOWN = null;   // last patrimônio shown, so a refresh glides from the old value to the new one
+function countUp(el, v, fmt, cur) {
+  if (!el || !(v > 0)) return; let reduce = false; try { reduce = matchMedia('(prefers-reduced-motion: reduce)').matches; } catch {}
+  const prev = SHOWN; SHOWN = { v, cur };
+  const from = !COUNTED ? 0 : prev && prev.cur === cur && Math.abs(prev.v - v) > 0.5 ? prev.v : null;
+  if (!COUNTED) { COUNTED = true; document.querySelector('.gwrap')?.classList.add('first'); }
+  if (prev && prev.cur !== cur && !reduce) { el.classList.remove('nswap'); void el.offsetWidth; el.classList.add('nswap'); }
+  if (from === null || reduce) return;
+  const t0 = performance.now(), D = from === 0 ? 700 : 600, step = (t) => { const k = Math.min(1, (t - t0) / D), e = 1 - Math.pow(1 - k, 3); el.textContent = fmt(from + (v - from) * e); if (k < 1) requestAnimationFrame(step); else el.textContent = fmt(v); };
   requestAnimationFrame(step);
 }
 function vPainel() {
@@ -1523,8 +1549,11 @@ function vPainel() {
   const divTry = '';
   $('#view').innerHTML = `
   ${SAVE_ERR ? `<div class="banner" style="border-color:var(--neg)" onclick="location.hash='#ajustes'">⚠ As últimas mudanças não foram salvas no aparelho (${esc(SAVE_ERR)}). Faça um backup agora — toque aqui.</div>` : ''}
+  ${(() => { const u = storeUse(); return u.p >= 0.7 ? `<div class="banner" onclick="location.hash='#ajustes'">O espaço do app no iPhone está ${Math.round(u.p * 100)}% cheio (${mbTxt(u.b)} de 5 MB). Faça um backup e peça a mudança para o armazenamento maior — toque aqui.</div>` : ''; })()}
   ${backupOld ? `<div class="banner" onclick="location.hash='#ajustes'">Faça um backup — ${s.lastBackup ? 'o último foi há mais de 30 dias' : 'você ainda não fez nenhum'}. Toque aqui.</div>` : ''}
   <div class="gwrap">${divTry}
+   <div class="gpg" id="gpg">
+    <div class="gpage">
    <div class="gl">
      <div class="glh"><span class="gll">Patrimônio <button class="geye" id="p-eye" aria-label="Esconder valores"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span><button class="gswap" id="cur-swap" aria-label="Trocar moeda"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M7 4L3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/></svg> ${heroCur === 'BRL' ? 'R$' : heroCur === 'GBP' ? '£' : 'US$'}</button></div>
      <div class="gtot money">${HM[heroCur](P.total)}</div>
@@ -1534,6 +1563,31 @@ function vPainel() {
      <div id="spark-tap" class="gspark">${spark}</div>
    </div>
 
+    </div>
+    <div class="gpage">
+   <div class="gl">
+     <div class="gmeta">
+       <svg width="104" height="104" viewBox="0 0 110 110" aria-hidden="true"><circle cx="55" cy="55" r="${R0}" fill="none" stroke="var(--g-track)" stroke-width="9"/>
+         <circle cx="55" cy="55" r="${R0}" fill="none" class="garc" stroke="url(#gmg)" stroke-width="9" stroke-linecap="round" stroke-dasharray="${(C0 * prog).toFixed(1)} ${C0.toFixed(1)}" transform="rotate(-90 55 55)"/>
+         <defs><linearGradient id="gmg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--g-acc1)"/><stop offset="1" stop-color="var(--g-acc2)"/></linearGradient></defs>
+         <text x="55" y="60" text-anchor="middle" class="gring">${(prog * 100).toFixed(1).replace('.', ',')}%</text></svg>
+       <div style="min-width:0;flex:1"><div class="gll">Rumo a ${brl(meta)}</div><div class="gfalta">faltam <span class="money">${CV(pr.falta)}</span></div>
+       <div class="gpred">${pr.ritmo ? `<div><b>${ymLabel(pr.ritmo)}</b><span>no ritmo atual</span></div>` : ''}${pr.cenario ? `<div><b>${ymLabel(pr.cenario)}</b><span>no plano<em class="money">${gbp(s.aportePlanGBP)} por mês</em></span></div>` : ''}${!pr.ritmo && !pr.cenario ? '<div><b>—</b><span>precisa de 12 meses salvos</span></div>' : ''}</div></div>
+     </div>
+     <div class="gms">${win.map((m) => `<div class="${m.hit ? 'ok' : m === nextMs ? 'nx' : ''}"><b></b>${msL(m.v)}${m === nextMs && etaMs ? `<small>${ymLabel(etaMs)}</small>` : ''}</div>`).join('')}</div>
+   </div>
+
+
+    </div>
+    <div class="gpage">
+   <div class="gl click gcpage" onclick="location.hash='#cripto'">
+     <div class="glh"><span class="gll">Cripto</span>${typeof c24 === 'number' ? `<span class="gc24 ${c24 < 0 ? 'neg' : 'pos'}">${c24 < 0 ? '▼' : '▲'} ${pct(Math.abs(c24))} <small>24h</small></span>` : ''}</div>
+     <div class="gtot money gctot">${CV(cs.totalBRL)}</div>
+     <div class="gcrows">${cs.coins.filter((x) => x.units > 1e-8).sort((a, b) => b.valUSD - a.valUSD).slice(0, 4).map((x) => { const ch = DB.prices[x.k + '_24h']; return `<div><span class="gcn">${x.k}</span><span class="money gcv">${CV(x.valUSD * num(DB.prices.usdbrl))}</span><b>${usd(DB.prices[x.k], DB.prices[x.k] < 100 ? 2 : 0)}</b>${typeof ch === 'number' ? `<span class="${ch < 0 ? 'neg' : 'pos'}">${ch < 0 ? '▼' : '▲'}${pct(Math.abs(ch) / 100)}</span>` : '<span></span>'}</div>`; }).join('')}</div>
+   </div>
+    </div>
+   </div>
+   <div class="gdots" id="gdots"><i data-i="0"></i><i data-i="1"></i><i data-i="2"></i></div>
    <div class="gl">
      <div class="gll">Onde está</div>
      ${cats.map((c) => `<div class="grow click" onclick="${GO[c.k]}"><div class="grl"><span class="gdot" style="background:${GC[c.k]}"></span><span class="gn">${c.n}</span><span class="gvs money">${CV(c.v)}</span><span class="gpb">${pct(P.total ? c.v / P.total : 0).replace(/(\d),(\d)\d%/, '$1,$2%')}</span><span class="gch">›</span></div>
@@ -1541,23 +1595,6 @@ function vPainel() {
    </div>
 
    ${divCard}
-   <div class="gl gstrip click" onclick="location.hash='#cripto'">
-     <div><div class="gll">Cripto</div><div class="gk money">${CV(cs.totalBRL)}</div></div>
-     <div class="gcoins">${cs.coins.filter((x) => x.units > 1e-8).sort((a, b) => b.valUSD - a.valUSD).slice(0, 2).map((x) => { const ch = DB.prices[x.k + '_24h']; return `<div><span class="gll">${x.k}</span> <b>${usd(DB.prices[x.k], DB.prices[x.k] < 100 ? 2 : 0)}</b>${typeof ch === 'number' ? ` <span class="${ch < 0 ? 'neg' : 'pos'}">${ch < 0 ? '▼' : '▲'}${pct(Math.abs(ch) / 100)}</span>` : ''}</div>`; }).join('')}</div>
-     <span class="gch">›</span></div>
-   <div class="gl">
-     <div class="gmeta">
-       <svg width="104" height="104" viewBox="0 0 110 110" aria-hidden="true"><circle cx="55" cy="55" r="${R0}" fill="none" stroke="var(--g-track)" stroke-width="9"/>
-         <circle cx="55" cy="55" r="${R0}" fill="none" stroke="url(#gmg)" stroke-width="9" stroke-linecap="round" stroke-dasharray="${(C0 * prog).toFixed(1)} ${C0.toFixed(1)}" transform="rotate(-90 55 55)"/>
-         <defs><linearGradient id="gmg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--g-acc1)"/><stop offset="1" stop-color="var(--g-acc2)"/></linearGradient></defs>
-         <text x="55" y="60" text-anchor="middle" class="gring">${(prog * 100).toFixed(1).replace('.', ',')}%</text></svg>
-       <div style="min-width:0"><div class="gll">Rumo a ${brl(meta)}</div><div class="gbig2">${pr.ritmo ? ymLabel(pr.ritmo) : pr.cenario ? ymLabel(pr.cenario) : '—'}</div><div class="gll">${pr.ritmo ? 'no ritmo atual' : pr.cenario ? 'no plano' : 'precisa de 12 meses salvos'} · faltam <span class="money">${CV(pr.falta)}</span></div>
-       ${pr.ritmo && pr.cenario ? `<div class="gll gplan">plano <span class="money">${gbp(s.aportePlanGBP)}</span>/mês: <b>${ymLabel(pr.cenario)}</b></div>` : ''}</div>
-     </div>
-     <div class="gms">${win.map((m) => `<div class="${m.hit ? 'ok' : m === nextMs ? 'nx' : ''}"><b></b>${msL(m.v)}${m === nextMs && etaMs ? `<small>${ymLabel(etaMs)}</small>` : ''}</div>`).join('')}</div>
-   </div>
-
-
    <div class="gl click" id="k-perf">
      <div class="glh"><span class="gll">Desempenho · sem aportes${mLoc ? ' e sem câmbio' : ''}</span><span class="gll">ⓘ</span></div>
      <div class="perf2">
@@ -1578,7 +1615,18 @@ function vPainel() {
   $$('[data-do]').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.divopt', b.dataset.do); } catch {} render(); }));
   $('#cur-swap').onclick = (e) => { e.stopPropagation(); const nx = { BRL: 'GBP', GBP: 'USD', USD: 'BRL' }[heroCur]; try { localStorage.setItem('rumo.cur', nx); } catch {} render(); };
   $('#p-eye') && ($('#p-eye').onclick = (e) => { e.stopPropagation(); $('#btn-eye').click(); });
-  countUp($('.gwrap .gtot'), P.total, HM[heroCur]);
+  countUp($('.gwrap .gtot'), P.total, HM[heroCur], heroCur);
+  { const g = $('#gpg'), dots = $$('#gdots i'); if (g) {
+    // endless: a copy of the last card sits before the first and a copy of the first after the last; landing on a copy jumps to the real card
+    const pages = [...g.children], N = pages.length, cp = (el) => { const c = el.cloneNode(true); c.querySelectorAll('[id]').forEach((x) => x.removeAttribute('id')); c.setAttribute('aria-hidden', 'true'); return c; };
+    g.insertBefore(cp(pages[N - 1]), pages[0]); g.appendChild(cp(pages[0]));
+    const W = () => g.children[0].offsetWidth + 12, real = (i) => (((i - 1) % N) + N) % N, mark = (k) => dots.forEach((d, n) => d.classList.toggle('on', n === k));
+    const jump = (i) => { g.style.scrollSnapType = 'none'; g.scrollLeft = i * W(); requestAnimationFrame(() => { g.style.scrollSnapType = ''; }); };
+    jump(PG_I + 1); mark(PG_I);
+    const settle = () => { const i = Math.round(g.scrollLeft / W()); if (i === 0) jump(N); else if (i === N + 1) jump(1); PG_I = real(i); mark(PG_I); };
+    let t = null; g.addEventListener('scroll', () => { mark(real(Math.round(g.scrollLeft / W()))); clearTimeout(t); t = setTimeout(settle, 140); }, { passive: true });
+    if ('onscrollend' in window) g.addEventListener('scrollend', () => { clearTimeout(t); settle(); });
+    dots.forEach((d) => (d.onclick = () => g.scrollTo({ left: (Number(d.dataset.i) + 1) * W(), behavior: 'smooth' }))); } }
   $('#spark-tap') && ($('#spark-tap').onclick = (e) => { e.stopPropagation(); patSheet(); });
   $('.dchip') && ($('.dchip').onclick = (e) => { e.stopPropagation(); todaySheet(CV); });
   { const sel = $('#pb3sel'), cs = $$('.pb3 .c'), show = (c) => { cs.forEach((x) => x.classList.toggle('sel', x === c)); const r = c.dataset.br; sel.innerHTML = `${ymLong(c.dataset.bm)}${c.dataset.bm === ym() ? ' · em andamento' : ''} <b class="${r === '' ? '' : Number(r) < 0 ? 'neg' : 'pos'}">${r === '' ? 'sem dados' : signed(pct, Number(r))}</b>`; };
@@ -1807,7 +1855,7 @@ function vAtualizar() {
     else DB.history.push(entry);
     DB.history.sort((a, b2) => a.month.localeCompare(b2.month));
     const nextM = ymAdd(d2.month, 1);
-    await save(); toast(`✓ ${ymLong(d2.month)} salvo`);
+    await save(); doneTick(); toast(`✓ ${ymLong(d2.month)} salvo`);
     if (await ask(`Começar ${ymLong(nextM)} agora? (os campos de dividendos e aporte ficam vazios)`)) {
       DB.draft = { month: nextM, divFII: null, divAcoes: null, divStocks: null, aporteGBP: null }; applyDivLog(nextM); applyApLog(nextM); ATU.open = undefined; await save();
     }
@@ -1850,11 +1898,11 @@ function vHistorico() {
    ${years.length ? `<div class="hy"><button data-y="all" class="hall ${ALL ? 'on' : ''}">Tudo</button>${years.map((y) => `<button data-y="${y}" class="${y === sel ? 'on' : ''}">${y}</button>`).join('')}</div>
    <div class="gl">
      <div class="hsum">
-       <div><div class="gll">Rendimento${ALL ? '' : ' ' + sel}</div><b class="${ro === null ? '' : ro < 0 ? 'neg' : 'pos'}">${ro !== null ? signed(pct, ro) : '—'}</b>${Y && M.length && Y.n < M.filter((h) => typeof h.pat === 'number').length - (ALL ? 1 : 0) ? `<small class="hmeas">${Y.n} de ${M.filter((h) => typeof h.pat === 'number').length - (ALL ? 1 : 0)} meses medidos</small>` : ''}</div>
+       <div class="click" id="h-rend"><div class="gll">Rendimento${ALL ? '' : ' ' + sel} <svg class="hinfo" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9.5"/><path d="M12 11v5.5M12 7.6v.1"/></svg></div><b class="${ro === null ? '' : ro < 0 ? 'neg' : 'pos'}">${ro !== null ? signed(pct, ro) : '—'}</b>${Y && M.length && Y.n < M.filter((h) => typeof h.pat === 'number').length - (ALL ? 1 : 0) ? `<small class="hmeas">${Y.n} de ${M.filter((h) => typeof h.pat === 'number').length - (ALL ? 1 : 0)} meses</small>` : ''}</div>
        <div><div class="gll">Aportes</div><b class="money">${F(ap)}</b></div>
        <div><div class="gll">Dividendos</div><b class="money">${F(dv)}</b></div>
      </div>
-     <div class="gll" style="margin-top:8px">Rendimento = só o resultado dos investimentos (sem aportes${ro !== null && Y && Y.rl !== null && (ALL || Y.full) ? ', sem câmbio' : ''}).${chg !== null ? `<br>O patrimônio total ${chg < 0 ? 'caiu' : 'subiu'} <span class="money">${F(Math.abs(chg))}</span> ${ALL ? 'desde ' + ymLabel(firstP.month) : 'no ano'}, contando os aportes.` : ''}</div>
+     <div class="hpop" id="h-pop" hidden>Rendimento = só o resultado dos investimentos (sem aportes${ro !== null && Y && Y.rl !== null && (ALL || Y.full) ? ', sem câmbio' : ''}).${chg !== null ? `<br>O patrimônio total ${chg < 0 ? 'caiu' : 'subiu'} <span class="money">${F(Math.abs(chg))}</span> ${ALL ? 'desde ' + ymLabel(firstP.month) : 'no ano'}, contando os aportes.` : ''}</div>
    </div>
    <div class="gl hlist">${rows}</div>` : '<div class="gl"><div class="gll">Nenhum mês salvo ainda. O app salva cada mês sozinho no dia 1º.</div></div>'}
    <button class="gbtn2" id="h-add"><svg style="vertical-align:-4px" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> Adicionar mês à mão</button>
@@ -1863,6 +1911,7 @@ function vHistorico() {
   $$('#view .hy button').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.hsel', b.dataset.y); } catch {} render(); }));
   $$('#view .hm').forEach((el) => (el.onclick = () => { if (el.dataset.y) { try { localStorage.setItem('rumo.hsel', el.dataset.y); } catch {} render(); window.scrollTo(0, 0); } else monthCard(el.dataset.m); }));
   $('#h-add').onclick = () => editMonth(null);
+  { const pop = $('#h-pop'), t = $('#h-rend'); if (pop && t) { t.onclick = (e) => { e.stopPropagation(); pop.hidden = !pop.hidden; }; pop.onclick = () => { pop.hidden = true; }; } }
   $('#h-swap') && ($('#h-swap').onclick = () => { const nx = { BRL: 'GBP', GBP: 'USD', USD: 'BRL' }[hc]; try { localStorage.setItem('rumo.cur', nx); } catch {} render(); });
 }
 // tap a month in Histórico → summary card; tap outside to close, "Editar mês" for the form
@@ -2100,6 +2149,19 @@ const ICO = {   // small line icons for the settings rows
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>', sync: '<path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3M18 3v4h-4M6 21v-4h4"/>',
   shield: '<path d="M12 3 5 6v5c0 4.5 3 8.5 7 10 4-1.5 7-5.5 7-10V6z"/>', trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
 };
+// space this app uses on the phone. Safari allows about 5 MB; counted as 2 bytes per character to stay on the safe side
+const STORE_LIMIT = 5 * 1024 * 1024;
+function storeUse() { let c = 0; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith('rumo')) c += k.length + (localStorage.getItem(k) || '').length; } } catch {} const b = c * 2; return { b, p: b / STORE_LIMIT }; }
+const mbTxt = (b) => { const m = b / 1048576, d = m < 1 ? 2 : 1; return m.toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d }) + ' MB'; };
+// price of one asset over the days the app kept its detail (about 60), from the daily records
+function assetSpark(id, now) {
+  const pts = (DB.daily || []).filter((x) => x.a && x.a[id] && x.a[id][0] > 0).map((x) => ({ d: x.d, v: x.a[id][0] }));
+  if (now > 0) pts.push({ d: today(), v: now }); if (pts.length < 3) return '';
+  const W = 300, H = 56, vs = pts.map((p) => p.v), mn = Math.min(...vs), mx = Math.max(...vs), sp = mx - mn || 1;
+  const d = 'M' + pts.map((p, i) => `${((i / (pts.length - 1)) * W).toFixed(1)} ${(H - 4 - ((p.v - mn) / sp) * (H - 8)).toFixed(1)}`).join(' L'), ch = vs[vs.length - 1] / vs[0] - 1;
+  return `<div class="aspark"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><path d="${d} L${W} ${H} L0 ${H} Z" fill="url(#asg)"/><path d="${d}" fill="none" stroke="var(--g-acc1)" stroke-width="1.8" vector-effect="non-scaling-stroke"/><defs><linearGradient id="asg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--g-acc2)" stop-opacity=".35"/><stop offset="1" stop-color="var(--g-acc2)" stop-opacity="0"/></linearGradient></defs></svg>
+    <div class="asl"><span>${dmy(pts[0].d).slice(0, 5)}</span><span class="${ch < 0 ? 'neg' : 'pos'}">${signed(pct, ch)} em ${pts.length} dias</span><span>hoje</span></div></div>`;
+}
 const srow = (id, ico, bg, title, sub, right = '', cls = '') => `<div class="srow click ${cls}" id="${id}"><span class="sic" style="background:${bg}"><svg viewBox="0 0 24 24">${ICO[ico]}</svg></span>
   <span class="srt"><b>${title}</b>${sub ? `<span>${sub}</span>` : ''}</span>${right}<span class="schev">›</span></div>`;
 const stog = (id, ico, bg, title, on, sub = '') => `<div class="srow click" id="${id}"><span class="sic" style="background:${bg}"><svg viewBox="0 0 24 24">${ICO[ico]}</svg></span>
@@ -2163,6 +2225,7 @@ function vAjustes() {
      ${srow('a-export', 'down', '#16A34A', 'Fazer backup', s.lastBackup ? 'último: ' + fmtDate(s.lastBackup) : 'arquivo criptografado', bOld ? `<span class="sbad w">${s.lastBackup ? 'há +30 dias' : 'nunca feito'}</span>` : '<span class="sbad ok">em dia</span>')}
      ${srow('a-import', 'up', '#475569', 'Importar backup', 'substitui os dados deste aparelho')}
      ${srow('a-excel', 'grid', '#15803D', 'Exportar Excel', 'cópia legível, não criptografada')}
+     ${(() => { const u = storeUse(); return srow('a-space', 'pie', '#475569', 'Espaço usado', `${mbTxt(u.b)} de 5 MB<span class="spbar"><i class="${u.p >= 0.7 ? 'hi' : ''}" style="width:${Math.max(1, Math.min(100, u.p * 100)).toFixed(1)}%"></i></span>`, `<span class="srv">${Math.round(u.p * 100)}%</span>`); })()}
    </div>
    <div class="ssec">Preços</div><div class="sgrp">
      ${srow('a-keys', 'plug', '#0284C7', 'Fontes de preço', ks.length ? ks.map((k) => ({ sheet: 'Google Sheets', brapi: 'brapi', finnhub: 'Finnhub', alpha: 'Alpha Vantage' })[k]).join(' · ') : 'nenhuma configurada', ks.length ? `<span class="sbad ${kBad ? 'w' : 'ok'}">${kBad ? kBad + ' com erro' : kOk + ' ✓'}</span>` : '')}
@@ -2205,6 +2268,7 @@ function vAjustes() {
     });
   $('#a-export').onclick = exportBackup;
   $('#a-excel').onclick = exportExcel;
+  $('#a-space').onclick = () => { const u = storeUse(); toast(`${mbTxt(u.b)} de cerca de 5 MB que o iPhone libera para o app (${Math.round(u.p * 100)}%). Cresce uns 0,4 MB por ano — o app avisa no Painel ao chegar em 70%.`, 7000); };
   $('#a-import').onclick = () => pickImport(false);
   $('#a-update').onclick = forceUpdate;
   $('#a-theme').onclick = () => openSheet(`<h3>Tema</h3>${[['auto', 'Automático (igual ao iPhone)'], ['light', 'Claro'], ['dark', 'Escuro']].map(([v, l]) => `<button class="btn block ${getTheme() === v ? 'primary' : ''}" data-th="${v}">${l}</button>`).join('')}`, (el) => $$('[data-th]', el).forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.theme', b.dataset.th); } catch {} applyTheme(); closeSheet(); render(); })));
