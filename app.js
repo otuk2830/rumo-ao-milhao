@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '6.5';
+const APP_VERSION = '6.6';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1198,18 +1198,18 @@ function vAtivos() {
   const total = rows.reduce((s, r) => s + r.value, 0), auto = !!DB.settings.auto?.[cls];
   const cost = rows.filter((r) => r.cost !== null).reduce((s, r) => s + r.cost, 0), withCost = rows.filter((r) => r.cost !== null);
   const pl = withCost.reduce((s, r) => s + r.pl, 0);
-  // Exterior is shown in £ (with the R$ value underneath); Painel keeps everything in R$
+  // one currency everywhere: the one picked with ⇄ on the Painel
   const gbp = num(DB.prices.gbpbrl), inGBP = cls === 'stocks' && gbp > 0;
-  const M = (v) => (inGBP ? '£ ' + nf2.format(v / gbp) : brl(v, 2)), M0 = (v) => (inGBP ? '£ ' + nf2.format(v / gbp) : brl(v));
+  const M = (v) => CM(v, 2), M0 = (v) => CM(v, 2);
   const needGS = rows.some((r) => r.a.market === 'GS') && !keys.sheet, needB3 = rows.some((r) => r.a.market === 'B3') && !keys.brapi, needUS = rows.some((r) => r.a.market === 'US') && !keys.finnhub, needEU = rows.some((r) => r.a.market === 'EU') && !keys.alpha;
   const manualTotal = cls === 'stocks' ? (num(DB.balances.pieStocks) + num(DB.balances.pieReits) + num(DB.balances.pieEtfs)) * num(DB.prices.gbpbrl) : num(DB.balances[cls]);
   $('#view').innerHTML = `<div class="gwrap cw">${segBar(cls)}
   
    
-    <div class="gl cw-hero"><div class="lab">${info.n}</div><div class="val">${M(total)}</div>${inGBP ? `<div class="sub" style="margin-top:-2px">≈ ${brl(total, 2)}</div>` : ''}
-      <div class="sub">${rows.length} ${rows.length === 1 ? 'ativo' : 'ativos'}${withCost.length ? ` · lucro <span class="${pl < 0 ? 'neg' : 'pos'}">${signed(pct, cost ? pl / cost : 0)}</span> <span class="money">(${signed(M0, pl)})</span>` : ''}</div></div>
+    <div class="gl cw-hero"><div class="lab">${info.n}</div><div class="val money">${M(total)}</div>
+      ${withCost.length ? `<div class="sub cw-pl">${plLine(pl, cost ? pl / cost : 0)}</div>` : ''}</div>
     ${!auto || needGS || needB3 || needUS || needEU ? `<div class="gl">
-      <label class="toggle"><input type="checkbox" id="at-auto" ${auto ? 'checked' : ''}><span><b>Usar estes ativos no patrimônio</b><br><span class="small muted">${auto ? 'Ligado: o total de ' + info.n + ' é calculado aqui (preços ao vivo).' : 'Desligado: vale o total digitado em Atualizar (<span class="money">' + (inGBP ? M(manualTotal) : brl(manualTotal)) + '</span>).'}</span></span></label>
+      <label class="toggle"><input type="checkbox" id="at-auto" ${auto ? 'checked' : ''}><span><b>Usar estes ativos no patrimônio</b><br><span class="small muted">${auto ? 'Ligado: o total de ' + info.n + ' é calculado aqui (preços ao vivo).' : 'Desligado: vale o total digitado em Atualizar (<span class="money">' + M(manualTotal) + '</span>).'}</span></span></label>
       <div class="small muted" style="margin-top:8px">Preços: ${DB.prices.assetsAt ? fmtDate(DB.prices.assetsAt) : 'ainda não buscados'} · atualizam sozinhos a cada 5 min</div>
       <button class="btn block" id="at-refresh"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg> Atualizar preços agora</button>
       ${needGS ? '<div class="banner" style="margin:10px 0 0">Para preços de FIIs, cole o link da sua planilha do Google em ⚙︎ Ajustes → Chaves de preço → Google Sheets.</div>' : ''}
@@ -1222,7 +1222,7 @@ function vAtivos() {
         const itemHtml = (r) => { const op = ATV.open === r.a.id, stale = r.stale ? ` <span class="neg">⚠</span>` : '';
           const hoje = (() => { const a = r.a; if (a.market === 'MANUAL') return null; if (!tradedToday(a)) return 0; return a.pc > 0 && a.pcAt === today() ? priceOf(a) / a.pc - 1 : null; })();
           return `<div class="arow click${op ? ' open' : ''}" data-ar="${r.a.id}"><div class="al"><div class="t">${esc(r.a.ticker)}${stale}</div><div class="s">${esc(r.a.name || '')}</div></div>
-          <div class="ar"><div class="t money">${M0(r.value)}</div><div class="s">${r.pl !== null ? `<span class="${r.pl < 0 ? 'neg' : 'pos'}">${signed(pct, r.plPct)}</span>` : 'sem preço médio'}</div></div><span class="ach">${op ? '▾' : '›'}</span></div>
+          <div class="ar"><div class="t money">${M0(r.value)}</div><div class="s">${r.pl !== null ? plLine(r.pl, r.plPct) : 'sem preço médio'}</div></div><span class="ach">${op ? '▾' : '›'}</span></div>
           ${op ? `<div class="adet">
             <div><span>Quantidade</span><b>${r.a.qty.toLocaleString('pt-BR', { maximumFractionDigits: 8 })}</b></div>
             <div><span>Preço</span><b>${fmtPx(r.cur, r.pr)}${r.a.market === 'MANUAL' ? ' · manual' : ''}</b></div>
@@ -1230,13 +1230,12 @@ function vAtivos() {
             <div><span>Lucro</span><b class="money ${r.pl === null ? '' : r.pl < 0 ? 'neg' : 'pos'}">${r.pl === null ? '—' : signed(M0, r.pl)}</b></div>
             <div><span>Hoje</span><b class="${hoje ? (hoje < 0 ? 'neg' : 'pos') : ''}">${hoje === null ? '—' : signed(pct, hoje)}</b></div>
             <div><span>Peso</span><b>${pct(total ? r.value / total : 0)}</b></div>
-            ${inGBP ? `<div><span>Em reais</span><b class="money">${brl(r.value)}</b></div>` : ''}
             ${r.stale ? `<div style="grid-column:span 2"><span class="neg">⚠ ${r.a.priceAt ? 'preço de ' + new Date(r.a.priceAt).toLocaleDateString('pt-BR') + ' — não atualizou' : 'sem preço'}</span></div>` : ''}
             <div style="grid-column:span 2"><a class="aedit" data-ed="${r.a.id}">Editar ativo ›</a></div></div>` : ''}`; };
         const itemHtmlOld = (r) => `<div class="item click" data-id="${r.a.id}">
         <div class="av-row">${avatar(r.a.ticker)}<div><div class="t">${esc(r.a.ticker)} ${r.a.kind ? `<span class="small muted">${esc(r.a.kind)}</span>` : ''}</div>
         <div class="s">${r.a.qty.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} × ${fmtPx(r.cur, r.pr)}${r.a.market === 'MANUAL' ? ' · manual' : ''}${!num(r.a.avg) ? ' · <span class="warn">sem preço médio</span>' : ''}${r.stale ? ` · <span class="neg">⚠ ${r.a.priceAt ? 'preço de ' + new Date(r.a.priceAt).toLocaleDateString('pt-BR') : 'sem preço'}</span>` : ''}</div></div></div>
-        <div class="r"><div class="t">${M(r.value)}</div>${inGBP ? `<div class="s">${brl(r.value, 2)}</div>` : ''}${r.pl !== null ? `<div class="s ${r.pl < 0 ? 'neg' : 'pos'}">${signed(M0, r.pl)} · ${signed(pct, r.plPct)}</div>` : ''}</div></div>`;
+        <div class="r"><div class="t">${M(r.value)}</div>${r.pl !== null ? `<div class="s ${r.pl < 0 ? 'neg' : 'pos'}">${signed(M0, r.pl)} · ${signed(pct, r.plPct)}</div>` : ''}</div></div>`;
         const sorted = rows.sort((x, y) => y.value - x.value);
         if (!sorted.length) return '<p class="muted">Nenhum ativo ainda. Toque em ＋ Adicionar ativo.</p>';
         if (cls !== 'stocks') return sorted.map(itemHtml).join('');
@@ -1247,7 +1246,7 @@ function vAtivos() {
           const v = g.reduce((a, r) => a + r.value, 0), wc = g.filter((r) => r.cost !== null), c = wc.reduce((a, r) => a + r.cost, 0), gp = wc.reduce((a, r) => a + r.pl, 0);
           const op = openP.includes(k);
           return `<div class="pie-h click" data-pie="${k}"><div><b><span class="chev2">${op ? '▾' : '▸'}</span> ${k === 'Stock' ? 'Stocks' : k + 's'}</b><span class="small muted"> · ${g.length} ${g.length === 1 ? 'ativo' : 'ativos'} · ${pct(total ? v / total : 0)}</span></div>
-            <div class="r"><b class="money">${M(v)}</b>${c ? `<div class="small ${gp < 0 ? 'neg' : 'pos'}">${signed(pct, gp / c)}</div>` : ''}</div></div>` + (op ? g.map(itemHtml).join('') : '');
+            <div class="r"><b class="money">${M(v)}</b>${c ? `<div class="small">${plLine(gp, gp / c)}</div>` : ''}</div></div>` + (op ? g.map(itemHtml).join('') : '');
         }).join('');
       })()}
      ${rows.some((r) => r.stale) ? '<div class="small muted" style="margin-top:8px">⚠ = o preço não atualizou; o app continua usando o último preço bom.</div>' : ''}
@@ -2125,12 +2124,26 @@ function coinCards(cs, p) {
   const ic = (x, sm) => { const m = COINMETA[x.k] || [x.k, x.k[0], '#334155']; return `<span class="cic${sm ? ' sm' : ''}" style="background:${m[2]}">${m[1]}</span>`; };
   const qty = (x) => x.units.toLocaleString('pt-BR', { maximumFractionDigits: x.dec });
   // every coin gets the same card: icon · name · quantity | price · 24h, then what you hold and its share
-  return L.map((b) => `<div class="ctile"><div class="ctop">${ic(b)}<div><div class="cn">${(COINMETA[b.k] || [b.k])[0]}</div><div class="small">${qty(b)} ${b.k}</div></div>
-      <div class="cr"><div class="small">preço</div><div class="cpx">${px(b)}</div>${b.pl ? `<span class="cchip ${b.pl.pl < 0 ? 'dn' : 'up'}">${b.pl.pl < 0 ? '▼' : '▲'} ${pct(Math.abs(b.pl.plPct))}</span>` : ''}</div></div>
-    <div class="chave"><span class="small">Você tem</span><span><b class="money">${usd(b.us)}</b> <span class="small money">· ${brl(b.valBRL)}</span></span></div>
-    <div class="cavg click" data-basis="${b.k}">${b.pl ? `<span class="small">médio <b>${usd(b.pl.avg, b.pl.avg < 100 ? 2 : 0)}</b> · pago <span class="money">${usd(b.pl.cost)}</span></span><span class="${b.pl.pl < 0 ? 'neg' : 'pos'} money">${signed(usd, b.pl.pl)}</span>` : '<span class="small">Preço médio não definido</span><span class="small cdef">definir</span>'}</div>
-    <div class="cbar"><i style="width:${Math.max(1, (b.us / tot) * 100).toFixed(1)}%;background:${b.k === 'XRP' ? '#94A3B8' : b.k === 'SOL' ? '#9945FF' : (COINMETA[b.k] || [])[2] || 'var(--blue)'}"></i></div>
-    <div class="small" style="margin-top:4px">${pct(b.us / tot)} da sua cripto</div></div>`).join('');
+  return L.map((b) => `<div class="ctile click" data-coin="${b.k}"><div class="ctop">${ic(b)}<div><div class="cn">${(COINMETA[b.k] || [b.k])[0]}</div><div class="small">${qty(b)} ${b.k}</div></div>
+      <div class="cr"><div class="small">preço</div><div class="cpx">${px(b)}</div>${b.pl ? `<span class="cchip ${b.pl.pl < 0 ? 'dn' : 'up'}">${b.pl.pl < 0 ? '▼' : '▲'} ${pct(Math.abs(b.pl.plPct))}</span>` : '<span class="small cdef">definir preço médio</span>'}</div></div>
+    <div class="chave"><span class="small">Você tem</span><b class="money">${CM(b.valBRL, 2)}</b></div></div>`).join('');
+}
+// tapping a coin: everything about it in one place
+function coinSheet(k) {
+  const cs = cryptoSummary(), b = cs.coins.find((x) => x.k === k), p = DB.prices, name = (COINMETA[k] || [k])[0], u = num(p.usdbrl);
+  if (!b) return; const ch = p[k + '_24h'], tot = cs.totalBRL || 1, row = (l, v, cls = '') => `<div class="ps-step"><span>${l}</span><b class="${cls}">${v}</b></div>`;
+  const per = k === 'BTC' && DB.crypto.people.length > 1 ? DB.crypto.people.map((w) => { const x = cs.btcPLby[w]; return x.qty ? row(`${esc(w)} <small>médio ${usd(x.avg)}</small>`, `${signed(pct, x.plPct)} · <span class="money">${signed((v) => CM(v), x.pl * u)}</span>`, x.pl < 0 ? 'neg' : 'pos') : ''; }).join('') : '';
+  openSheet(`<div class="ps"><div class="ps-top"><div class="ps-sub">${b.units.toLocaleString('pt-BR', { maximumFractionDigits: b.dec })} ${k}</div><h3>${esc(name)}</h3>
+      <div class="ps-big money">${CM(b.valBRL, 2)}</div>${b.pl ? `<div class="ps-sub">${plLine(b.pl.pl * u, b.pl.plPct)} desde a compra</div>` : ''}</div>
+    <div class="ps-card">
+      ${row('Preço agora', usd(p[k], p[k] < 100 ? 2 : 0))}
+      ${typeof ch === 'number' ? row('Últimas 24h', signed(pct, ch / 100), ch < 0 ? 'neg' : 'pos') : ''}
+      ${b.pl ? row('Preço médio', usd(b.pl.avg, b.pl.avg < 100 ? 2 : 0)) + row('Total pago', `<span class="money">${usd(b.pl.cost)}</span>`) + (b.pl.rec ? row('Recebidos (sem custo)', `${b.pl.rec.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} ${k}`) : '') : row('Preço médio', '<span class="cdef">não definido</span>')}
+      ${row('Parte da sua cripto', pct(b.valBRL / tot))}
+    </div>
+    ${per ? `<div class="ps-h">Por pessoa (compras do registro)</div><div class="ps-card">${per}</div>` : ''}
+    <button class="btn block" id="cs-avg" style="margin-top:14px">${b.pl && b.pl.start ? 'Editar preço médio' : b.pl ? 'Começar de um preço da corretora' : 'Definir preço médio'}</button>
+    <button class="btn block" onclick="closeSheet()">Fechar</button></div>`, (el) => { $('#cs-avg', el).onclick = () => editBasis(k); });
 }
 function vCripto() {
   const cs = cryptoSummary(), P = portfolio(), c = DB.crypto, p = DB.prices;
@@ -2138,18 +2151,12 @@ function vCripto() {
   $('#view').innerHTML = `<div class="gwrap cw">${segBar('cripto')}
   
   
-   <div class="gl cw-hero"><div class="lab">Total em cripto</div><div class="val">${brl(cs.totalBRL)}</div>
-     <div class="sub">${usd(cs.totalUSD)} · ${gbp(cs.totalBRL / (p.gbpbrl || 1))} · ${P.total ? pct(cs.totalBRL / P.total) : '–'} do patrimônio</div>
-     ${cs.plTot ? `<div class="cpl"><span class="small">Lucro / prejuízo desde a compra</span><span class="cpl-v ${cs.plTot.pl < 0 ? 'neg' : 'pos'}"><b class="money">${signed(usd, cs.plTot.pl)}</b> <span class="money">· ${signed(brl, cs.plTot.pl * num(p.usdbrl))}</span> · ${signed(pct, cs.plTot.plPct)}</span>
-       ${cs.plTot.n < cs.coins.filter((x) => Math.abs(x.units) >= 1e-8).length ? '<span class="small">só moedas com preço médio — toque em "definir" nas outras</span>' : ''}</div>` : ''}</div>
+   <div class="gl cw-hero"><div class="lab">Cripto</div><div class="val money">${CM(cs.totalBRL, 2)}</div>
+     ${cs.plTot ? `<div class="sub cw-pl">${plLine(cs.plTot.pl * num(p.usdbrl), cs.plTot.plPct)}</div>` : ''}</div>
    <div class="gl"><h2>Por moeda</h2>${coinCards(cs, p)}</div>
    <div class="gl"><h2>Bitcoin por pessoa</h2>
-     ${c.people.map((w) => { const u = cs.coins[0].net[w]; return `<div class="row"><span class="l">${esc(w)} <span class="small">${u.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></span><span class="r">${brl(u * p.BTC * p.usdbrl)}</span></div>`; }).join('')}
+     ${c.people.map((w) => { const u = cs.coins[0].net[w]; return `<div class="row"><span class="l">${esc(w)} <span class="small">${u.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></span><span class="r money">${CM(u * p.BTC * p.usdbrl, 2)}</span></div>`; }).join('')}
      ${cs.coins[0].fee ? `<div class="row"><span class="l small">Taxas de transferência</span><span class="r small">−${cs.coins[0].fee.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></div>` : ''}</div>
-   ${cs.btcPL.qty ? `<div class="gl"><h2>Bitcoin — lucro / prejuízo</h2>
-     <div class="small" style="margin-bottom:6px">Só compras do registro (BTC de antes do registro não tem preço pago).</div>
-     ${[['Total', cs.btcPL], ...c.people.map((w) => [w, cs.btcPLby[w]])].filter(([, x]) => x.qty).map(([n, x]) => `<div class="row"><span class="l"><b>${esc(n)}</b><div class="small">pago ${usd(x.cost)} · médio ${usd(x.avg)}</div></span>
-       <span class="r ${x.pl < 0 ? 'neg' : 'pos'}">${signed(usd, x.pl)}<div class="small">${signed(pct, x.plPct)}</div></span></div>`).join('')}</div>` : ''}
   <div class="gl"><h2>Registro de operações</h2>
     <button class="btn primary block" id="c-add" style="margin:0 0 8px">+ Nova operação</button>
     ${log.map((x) => { const imp = x.op === 'Buy' && x.qty && x.price ? x.value / (x.qty * x.price) - 1 : null; const bad = imp !== null && (imp < -0.005 || imp > 0.06);
@@ -2157,10 +2164,13 @@ function vCripto() {
       <div class="r"><div class="t">${usd(x.value, 2)}</div><div class="s">${num(x.qty).toLocaleString('pt-BR', { maximumFractionDigits: 8 })} @ ${usd(x.price)}</div></div></div>`; }).join('') || '<p class="muted">Nenhuma operação.</p>'}
   </div></div>`;
   wireSeg();
-  $$('#view [data-basis]').forEach((el) => (el.onclick = () => editBasis(el.dataset.basis)));
+  $$('#view [data-coin]').forEach((el) => (el.onclick = () => coinSheet(el.dataset.coin)));
   $('#c-add').onclick = () => editOp(null);
   $$('#view .item').forEach((el) => (el.onclick = () => editOp(el.dataset.id)));
 }
+function viewCur() { try { const c = localStorage.getItem('rumo.cur'); return c === 'GBP' || c === 'USD' ? c : 'BRL'; } catch { return 'BRL'; } }
+function CM(vBRL, dec = 2) { const c = viewCur(); return c === 'GBP' ? gbp(vBRL / (DB.prices.gbpbrl || 1), dec) : c === 'USD' ? usd(vBRL / (DB.prices.usdbrl || 1), dec) : brl(vBRL, dec); }
+const plLine = (pl, pctV) => `<span class="${pl < 0 ? 'neg' : 'pos'}">${signed(pct, pctV)}</span> <span class="money ${pl < 0 ? 'neg' : 'pos'}">· ${signed((v) => CM(v), pl)}</span>`;
 function editBasis(k) {
   const c = DB.crypto, st = (c.basis || {})[k], cs = cryptoSummary(), co = cs.coins.find((x) => x.k === k), name = (COINMETA[k] || [k])[0];
   openSheet(`<h3>Preço médio · ${esc(name)}</h3>

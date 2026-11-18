@@ -988,3 +988,7 @@ body.glassy .top-title, body.glassy .top.small .top-title{will-change:auto}
 .cavg b{font-weight:600; color:var(--g-ink, var(--ink))} .cavg > span:last-child{font-weight:600; white-space:nowrap}
 .cdef{color:var(--g-acc2, var(--blue)) !important; font-weight:600}
 html:not(.dark) .cdef{color:var(--g-acct, #8A6D3B) !important}
+/* Carteira / Cripto: total, then profit % · value, in the Painel's currency */
+.cw-pl{font-size:14px; margin-top:4px} .cw-pl .money{font-weight:400}
+.ctile.click{cursor:pointer}
+.ctile .chave{margin-top:12px} .ctile .chave b{font-size:16px; font-weight:600}
