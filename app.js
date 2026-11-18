@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '7.2';
+const APP_VERSION = '7.3';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1980,10 +1980,10 @@ function vHistorico() {
       <div class="hm-r"><b class="money">${typeof h.pat === 'number' ? F(cv(h.pat, h)) : '–'}</b><small class="${r === null ? '' : r < 0 ? 'neg' : 'pos'}">${r !== null ? signed(pct, r) : '—'}</small></div><span class="gch">›</span></div>`; }).join('');
   $('#view').innerHTML = `<div class="gwrap hi">
    <div class="gl">
-     <div class="glh"><span class="gll">${lastP?.live ? 'Hoje · ' + ymLong(lastP.month).toLowerCase() + ' até agora' : 'Último mês salvo' + (lastP ? ' · ' + ymLong(lastP.month).toLowerCase() : '')}</span><button class="gswap" id="h-swap" aria-label="Trocar moeda"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M7 4L3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/></svg> ${sym}</button></div>
+     <div class="glh"><span class="gll">${lastP?.live ? 'Patrimônio hoje' : 'Patrimônio no fim de ' + (lastP ? ymLong(lastP.month).toLowerCase() : '')}</span><button class="gswap" id="h-swap" aria-label="Trocar moeda"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M7 4L3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/></svg> ${sym}</button></div>
      <div class="gtot money" style="font-size:30px">${lastP ? F(cv(lastP.pat, lastP)) : '–'}</div>
      ${(() => { const y1 = lastP && pts.find((h) => h.month === ymAdd(lastP.month, -12)); if (!y1) return ''; const d = cv(lastP.pat, lastP) - cv(y1.pat, y1);
-       return `<div class="gll" style="margin-top:4px"><span class="${d < 0 ? 'neg' : 'pos'}">${signed(F, d)}</span> em 12 meses (vs ${ymLong(y1.month).toLowerCase()}), contando os aportes</div>`; })()}
+       return `<div class="gll" style="margin-top:4px"><span class="${d < 0 ? 'neg' : 'pos'}">${signed(F, d)}</span> desde ${ymLong(y1.month).toLowerCase()}, contando os aportes</div>`; })()}
    </div>
    ${years.length ? `<div class="hy"><button data-y="all" class="hall ${ALL ? 'on' : ''}">Tudo</button>${years.map((y) => `<button data-y="${y}" class="${y === sel ? 'on' : ''}">${y}</button>`).join('')}</div>
    <div class="gl">
