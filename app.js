@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '6.9';
+const APP_VERSION = '7.0';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -2171,7 +2171,8 @@ function vCripto() {
 }
 function viewCur() { try { const c = localStorage.getItem('rumo.cur'); return c === 'GBP' || c === 'USD' ? c : 'BRL'; } catch { return 'BRL'; } }
 function CM(vBRL, dec = 2) { const c = viewCur(); return c === 'GBP' ? gbp(vBRL / (DB.prices.gbpbrl || 1), dec) : c === 'USD' ? usd(vBRL / (DB.prices.usdbrl || 1), dec) : brl(vBRL, dec); }
-const plLine = (pl, pctV) => `<span class="${pl < 0 ? 'neg' : 'pos'}">${signed(pct, pctV)}</span> <span class="money ${pl < 0 ? 'neg' : 'pos'}">· ${signed((v) => CM(v), pl)}</span>`;
+// profit/loss: the % in a tinted pill, the value beside it in quiet text, so the two never read as one number
+const plLine = (pl, pctV) => `<span class="plx"><span class="plp ${pl < 0 ? 'dn' : 'up'}">${pl < 0 ? '▼' : '▲'} ${pct(Math.abs(pctV))}</span><span class="plv money">${signed((v) => CM(v), pl)}</span></span>`;
 function editBasis(k) {
   const c = DB.crypto, st = (c.basis || {})[k], cs = cryptoSummary(), co = cs.coins.find((x) => x.k === k), name = (COINMETA[k] || [k])[0];
   // coins held at the end of a day = today's total minus what was logged after that day

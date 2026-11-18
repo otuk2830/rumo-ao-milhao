@@ -993,3 +993,14 @@ html:not(.dark) .cdef{color:var(--g-acct, #8A6D3B) !important}
 .ctile.click{cursor:pointer}
 .ctile .chave{margin-top:12px} .ctile .chave b{font-size:16px; font-weight:600}
 .ps-step .cs-ed{margin-left:8px; font-size:12.5px; font-weight:600; padding:3px 10px; border-radius:999px; background:rgba(184,154,108,.16); color:var(--g-acct, #C9A978); cursor:pointer}
+/* profit/loss pair: pill + quiet value */
+.plx{display:inline-flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:inherit}
+.plp{display:inline-block; border-radius:var(--r-sm,10px); padding:3px 9px; font-size:13px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1.35}
+.plp.up{background:color-mix(in srgb, var(--green) 16%, transparent); color:var(--green)}
+.plp.dn{background:color-mix(in srgb, var(--red) 16%, transparent); color:var(--red)}
+.plv{font-size:14px; font-weight:500; opacity:.62; font-variant-numeric:tabular-nums}
+.cw-pl{margin-top:8px}
+.arow .ar .s .plx, .pie-h .r .plx{justify-content:flex-end; gap:6px; margin-top:3px}
+.arow .ar .s .plp, .pie-h .r .plp{font-size:11.5px; padding:1px 7px}
+.arow .ar .s .plv, .pie-h .r .plv{font-size:12px}
+.ps-sub .plx{justify-content:center; margin-top:4px}
