@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '7.3';
+const APP_VERSION = '7.4';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1649,6 +1649,11 @@ function vPainel() {
      <div class="chips2">${dLoc ? `<span class="dchip ${dChg < 0 ? 'neg' : 'pos'}">${dChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(dChg))}</span> <small>hoje</small> ${signed(pctS, dLoc.r)}</span>` : ''}${prevM ? `<span class="mchip ${mChg < 0 ? 'neg' : 'pos'}" id="mchip">${mChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(mChg))}</span> <small>no mês</small></span>` : ''}</div>
      ${DO === '2' || DO === '3' ? divLine : ''}
      <div class="gll gsub">${['BRL', 'GBP', 'USD'].filter((c) => c !== heroCur).map((c) => `<span class="money">${HM[c](P.total)}</span>`).join('&nbsp;&nbsp;')}</div>
+     ${(() => { // lifetime profit/loss of what you hold: every asset and coin with an average price, against what it cost
+       let cost = 0, pl = 0; for (const k of ['acoes', 'fiis', 'stocks']) for (const r of assetRows(k)) if (r.cost !== null) { cost += r.cost; pl += r.pl; }
+       const u = num(DB.prices.usdbrl); if (cs.plTot) { cost += cs.plTot.cost * u; pl += cs.plTot.pl * u; }
+       if (!cost) return '';
+       return `<div class="glife"><span class="gll">Lucro total</span><span class="plx"><span class="plp ${pl < 0 ? 'dn' : 'up'}">${pl < 0 ? '▼' : '▲'} ${pct(Math.abs(pl / cost))}</span><span class="plv money">${signed(CV, pl)}</span></span></div>`; })()}
      <div id="spark-tap" class="gspark">${spark}</div>
    </div>
 
