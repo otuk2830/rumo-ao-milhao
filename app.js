@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '6.7';
+const APP_VERSION = '6.8';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -2139,12 +2139,12 @@ function coinSheet(k) {
     <div class="ps-card">
       ${row('Preço agora', usd(p[k], p[k] < 100 ? 2 : 0))}
       ${typeof ch === 'number' ? row('Últimas 24h', signed(pct, ch / 100), ch < 0 ? 'neg' : 'pos') : ''}
-      ${b.pl ? row('Preço médio', usd(b.pl.avg, b.pl.avg < 100 ? 2 : 0)) + row('Total pago', `<span class="money">${usd(b.pl.cost)}</span>`) + (b.pl.rec ? row('Recebidos (sem custo)', `${b.pl.rec.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} ${k}`) : '') : row('Preço médio', '<span class="cdef">não definido</span>')}
+      ${b.pl ? row('Preço médio <a class="cs-ed" data-ed-avg>Editar</a>', usd(b.pl.avg, b.pl.avg < 100 ? 2 : 0)) + row('Total pago', `<span class="money">${usd(b.pl.cost)}</span>`) + (b.pl.rec ? row('Recebidos (sem custo)', `${b.pl.rec.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} ${k}`) : '') : row('Preço médio <a class="cs-ed" data-ed-avg>Definir</a>', '<span class="cdef">não definido</span>')}
       ${row('Parte da sua cripto', pct(b.valBRL / tot))}
     </div>
     ${per ? `<div class="ps-h">Por pessoa (compras do registro)</div><div class="ps-card">${per}</div>` : ''}
-    <button class="btn block" id="cs-avg" style="margin-top:14px">${b.pl && b.pl.start ? 'Editar preço médio' : b.pl ? 'Começar de um preço da corretora' : 'Definir preço médio'}</button>
-    <button class="btn block" onclick="closeSheet()">Fechar</button></div>`, (el) => { $('#cs-avg', el).onclick = () => editBasis(k); });
+    <button class="btn block" id="cs-avg" style="margin-top:14px">${b.pl ? 'Editar preço médio' : 'Definir preço médio'}</button>
+    <button class="btn block" onclick="closeSheet()">Fechar</button></div>`, (el) => { $$('#cs-avg, [data-ed-avg]', el).forEach((x) => (x.onclick = () => editBasis(k))); });
 }
 function vCripto() {
   const cs = cryptoSummary(), P = portfolio(), c = DB.crypto, p = DB.prices;
