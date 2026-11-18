@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '6.4';
+const APP_VERSION = '6.5';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -186,7 +186,20 @@ function cryptoSummary() {
     const now = qty * num(p.BTC);
     return { qty, cost, avg: qty ? cost / qty : 0, now, pl: now - cost, plPct: cost ? (now - cost) / cost : 0 };
   };
-  return { coins, totalUSD, totalBRL: totalUSD * num(p.usdbrl), btcPL: pl(null), btcPLby: Object.fromEntries(people.map((w) => [w, pl(w)])) };
+  // profit since purchase, per coin: an optional starting point you type (quantity + average price on a date), then the log from that date on.
+  // Buy adds coins and cost · Sold removes coins at the average (the average stays) · Received adds coins with no cost (rewards count as profit)
+  const basis = c.basis || {};
+  const cost = (k) => { const st = basis[k]; let q = st ? num(st.qty) : 0, cst = st ? num(st.qty) * num(st.avg) : 0, r = 0;
+    for (const x of [...c.log].filter((x) => x.coin === k && (!st || (x.date || '') >= st.d)).sort((a, b) => (a.date || '').localeCompare(b.date || ''))) {
+      if (x.op === 'Buy') { q += num(x.qty); cst += num(x.value); }
+      else if (x.op === 'Sold') { const k2 = Math.min(q, num(x.qty)); if (q > 0) { cst -= cst * k2 / q; q -= k2; } }
+      else if (x.op === 'Received') r += num(x.qty); }
+    if (q <= 1e-12) return null; const now = (q + r) * num(p[k]);
+    return { qty: q, rec: r, cost: cst, avg: cst / q, now, pl: now - cst, plPct: cst ? now / cst - 1 : 0, start: !!st }; };
+  coins.forEach((co) => { co.pl = cost(co.k); });
+  const W = coins.filter((x) => x.pl), plTot = W.length ? { cost: W.reduce((t, x) => t + x.pl.cost, 0), now: W.reduce((t, x) => t + x.pl.now, 0) } : null;
+  if (plTot) { plTot.pl = plTot.now - plTot.cost; plTot.plPct = plTot.cost ? plTot.now / plTot.cost - 1 : 0; plTot.n = W.length; }
+  return { coins, totalUSD, totalBRL: totalUSD * num(p.usdbrl), plTot, btcPL: pl(null), btcPLby: Object.fromEntries(people.map((w) => [w, pl(w)])) };
 }
 function portfolio() {
   const b = DB.balances, p = DB.prices, cs = cryptoSummary();
@@ -2113,8 +2126,9 @@ function coinCards(cs, p) {
   const qty = (x) => x.units.toLocaleString('pt-BR', { maximumFractionDigits: x.dec });
   // every coin gets the same card: icon · name · quantity | price · 24h, then what you hold and its share
   return L.map((b) => `<div class="ctile"><div class="ctop">${ic(b)}<div><div class="cn">${(COINMETA[b.k] || [b.k])[0]}</div><div class="small">${qty(b)} ${b.k}</div></div>
-      <div class="cr"><div class="small">preço</div><div class="cpx">${px(b)}</div>${ch(b, true)}</div></div>
+      <div class="cr"><div class="small">preço</div><div class="cpx">${px(b)}</div>${b.pl ? `<span class="cchip ${b.pl.pl < 0 ? 'dn' : 'up'}">${b.pl.pl < 0 ? '▼' : '▲'} ${pct(Math.abs(b.pl.plPct))}</span>` : ''}</div></div>
     <div class="chave"><span class="small">Você tem</span><span><b class="money">${usd(b.us)}</b> <span class="small money">· ${brl(b.valBRL)}</span></span></div>
+    <div class="cavg click" data-basis="${b.k}">${b.pl ? `<span class="small">médio <b>${usd(b.pl.avg, b.pl.avg < 100 ? 2 : 0)}</b> · pago <span class="money">${usd(b.pl.cost)}</span></span><span class="${b.pl.pl < 0 ? 'neg' : 'pos'} money">${signed(usd, b.pl.pl)}</span>` : '<span class="small">Preço médio não definido</span><span class="small cdef">definir</span>'}</div>
     <div class="cbar"><i style="width:${Math.max(1, (b.us / tot) * 100).toFixed(1)}%;background:${b.k === 'XRP' ? '#94A3B8' : b.k === 'SOL' ? '#9945FF' : (COINMETA[b.k] || [])[2] || 'var(--blue)'}"></i></div>
     <div class="small" style="margin-top:4px">${pct(b.us / tot)} da sua cripto</div></div>`).join('');
 }
@@ -2125,7 +2139,9 @@ function vCripto() {
   
   
    <div class="gl cw-hero"><div class="lab">Total em cripto</div><div class="val">${brl(cs.totalBRL)}</div>
-     <div class="sub">${usd(cs.totalUSD)} · ${gbp(cs.totalBRL / (p.gbpbrl || 1))} · ${P.total ? pct(cs.totalBRL / P.total) : '–'} do patrimônio</div></div>
+     <div class="sub">${usd(cs.totalUSD)} · ${gbp(cs.totalBRL / (p.gbpbrl || 1))} · ${P.total ? pct(cs.totalBRL / P.total) : '–'} do patrimônio</div>
+     ${cs.plTot ? `<div class="cpl"><span class="small">Lucro / prejuízo desde a compra</span><span class="cpl-v ${cs.plTot.pl < 0 ? 'neg' : 'pos'}"><b class="money">${signed(usd, cs.plTot.pl)}</b> <span class="money">· ${signed(brl, cs.plTot.pl * num(p.usdbrl))}</span> · ${signed(pct, cs.plTot.plPct)}</span>
+       ${cs.plTot.n < cs.coins.filter((x) => Math.abs(x.units) >= 1e-8).length ? '<span class="small">só moedas com preço médio — toque em "definir" nas outras</span>' : ''}</div>` : ''}</div>
    <div class="gl"><h2>Por moeda</h2>${coinCards(cs, p)}</div>
    <div class="gl"><h2>Bitcoin por pessoa</h2>
      ${c.people.map((w) => { const u = cs.coins[0].net[w]; return `<div class="row"><span class="l">${esc(w)} <span class="small">${u.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></span><span class="r">${brl(u * p.BTC * p.usdbrl)}</span></div>`; }).join('')}
@@ -2141,8 +2157,26 @@ function vCripto() {
       <div class="r"><div class="t">${usd(x.value, 2)}</div><div class="s">${num(x.qty).toLocaleString('pt-BR', { maximumFractionDigits: 8 })} @ ${usd(x.price)}</div></div></div>`; }).join('') || '<p class="muted">Nenhuma operação.</p>'}
   </div></div>`;
   wireSeg();
+  $$('#view [data-basis]').forEach((el) => (el.onclick = () => editBasis(el.dataset.basis)));
   $('#c-add').onclick = () => editOp(null);
   $$('#view .item').forEach((el) => (el.onclick = () => editOp(el.dataset.id)));
+}
+function editBasis(k) {
+  const c = DB.crypto, st = (c.basis || {})[k], cs = cryptoSummary(), co = cs.coins.find((x) => x.k === k), name = (COINMETA[k] || [k])[0];
+  openSheet(`<h3>Preço médio · ${esc(name)}</h3>
+    <p class="small muted" style="margin:-4px 0 10px">Digite o preço médio que sua corretora mostra (ex.: Coinbase → ${k} → Average cost) e quanto você tinha nessa data. Compras, vendas e recebidos lançados depois daqui entram na conta sozinhos.${k === 'BTC' && !st ? '<br><br>Bitcoin já é calculado pelas compras do registro — só preencha se quiser começar de um preço da corretora.' : ''}</p>
+    <div class="field"><label>Preço médio (US$)</label><input id="b-avg" class="pt" inputmode="decimal" value="${st ? fmtN(st.avg, 2) : ''}"></div>
+    <div class="field"><label>Quantidade nessa data<small>${k}</small></label><input id="b-q" class="pt" inputmode="decimal" value="${fmtN(st ? st.qty : co ? co.units : 0, 8)}"></div>
+    <div class="field"><label>Data</label><input type="date" id="b-d" value="${st ? st.d : today()}"></div>
+    <button class="btn primary block" id="b-save">Salvar</button>
+    ${st ? '<button class="btn danger block" id="b-del">Remover preço médio</button>' : ''}
+    <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
+    $$('input.pt', el).forEach(liveFormat);
+    $('#b-save', el).onclick = async () => { const avg = parsePT($('#b-avg', el).value), q = parsePT($('#b-q', el).value);
+      if (!(avg > 0) || !(q > 0)) return toast('Digite o preço médio e a quantidade');
+      (c.basis ||= {})[k] = { avg, qty: q, d: $('#b-d', el).value || today() }; await save(); closeSheet(); render(); doneTick(); };
+    $('#b-del', el) && ($('#b-del', el).onclick = async () => { delete c.basis[k]; await save(); closeSheet(); render(); });
+  });
 }
 function editOp(id) {
   const c = DB.crypto, x = id ? c.log.find((o) => o.id === id) : { id: uid(), name: c.people[0], op: 'Buy', date: new Date().toISOString().slice(0, 10), coin: 'BTC', qty: null, value: null, price: DB.prices.BTC || null };

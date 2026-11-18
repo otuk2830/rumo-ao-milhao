@@ -981,3 +981,10 @@ html:not(.dark), html:not(.dark) body{background-color:#EFECE6}
 body.glassy .top{-webkit-backdrop-filter:none !important; backdrop-filter:none !important}
 body.glassy .top::before{-webkit-backdrop-filter:blur(18px) saturate(1.2); backdrop-filter:blur(18px) saturate(1.2)}
 body.glassy .top-title, body.glassy .top.small .top-title{will-change:auto}
+/* crypto: profit since purchase */
+.cpl{display:flex; flex-direction:column; gap:2px; margin-top:12px; padding-top:10px; border-top:1px solid var(--g-bd, var(--line))}
+.cpl-v{font-size:15px} .cpl-v b{font-size:19px; font-weight:500}
+.cavg{display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:8px; padding:8px 10px; border-radius:var(--r-md, 12px); background:color-mix(in srgb, var(--g-ink, #fff) 4%, transparent); font-size:13px}
+.cavg b{font-weight:600; color:var(--g-ink, var(--ink))} .cavg > span:last-child{font-weight:600; white-space:nowrap}
+.cdef{color:var(--g-acc2, var(--blue)) !important; font-weight:600}
+html:not(.dark) .cdef{color:var(--g-acct, #8A6D3B) !important}
