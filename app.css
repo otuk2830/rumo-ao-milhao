@@ -1004,3 +1004,7 @@ html:not(.dark) .cdef{color:var(--g-acct, #8A6D3B) !important}
 .arow .ar .s .plp, .pie-h .r .plp{font-size:11.5px; padding:1px 7px}
 .arow .ar .s .plv, .pie-h .r .plv{font-size:12px}
 .ps-sub .plx{justify-content:center; margin-top:4px}
+/* rows: fixed-width columns so every pill lines up under the one above */
+.arow .ar .s .plp, .pie-h .r .plp{min-width:5.6em; text-align:center; box-sizing:border-box}
+.arow .ar .s .plv, .pie-h .r .plv{min-width:7.4em; text-align:right}
+.arow .ar .s .plx, .pie-h .r .plx{flex-wrap:nowrap}
