@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '6.0';
+const APP_VERSION = '6.2';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1328,6 +1328,8 @@ function render() {
   requestAnimationFrame(() => { const maxY = Math.max(0, document.documentElement.scrollHeight - innerHeight); if (scrollY > maxY) scrollTo(0, maxY); });
   document.body.classList.add('glassy');   // the whole app uses the glass style
   ({ painel: vPainel, atualizar: vAtualizar, historico: vHistorico, dividendos: vDividendos, cripto: vCripto, ativos: vAtivos, ajustes: vAjustes })[r]();
+  { const w = $('#view .gwrap'); if (w) { applyOrder(w, { painel: 'painel', atualizar: 'atualizar', dividendos: 'dividendos' }[r]);
+    if (PAGE_SECS[r] && !w.querySelector('.lo-link')) { const a = document.createElement('button'); a.className = 'lo-link'; a.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg> Organizar esta página'; a.onclick = () => openLayout(r); w.appendChild(a); } } }
   if (r !== LAST_R) { const v = $('#view'); v.classList.remove('vfade'); void v.offsetWidth; v.classList.add('vfade'); LAST_R = r; }
 }
 let LAST_R = null;
@@ -1454,6 +1456,36 @@ function doneTick() {
   el.innerHTML = '<div><svg viewBox="0 0 64 64" width="64" height="64"><circle cx="32" cy="32" r="26" fill="none" stroke="var(--g-acc2, #C9B087)" stroke-width="2.6" stroke-dasharray="164" stroke-dashoffset="164"/><path d="M21 33l7.5 7.5L44 25" fill="none" stroke="var(--g-acc1, #F3EEE4)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="36" stroke-dashoffset="36"/></svg></div>';
   el.classList.remove('on'); void el.offsetWidth; el.classList.add('on'); clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('on'), 1100);
 }
+// ---- your own order for the cards (Ajustes → Organizar páginas). Saved with your data, so it comes back with a backup
+const LAYOUT = {
+  painel_top: { t: 'Painel · cartões que deslizam', it: [['pat', 'Patrimônio'], ['rumo', 'Rumo a R$ 1 milhão'], ['cripto', 'Cripto']] },
+  painel: { t: 'Painel · abaixo dos cartões', it: [['onde', 'Onde está'], ['div', 'Dividendos'], ['perf', 'Desempenho']] },
+  atualizar: { t: 'Registrar', it: [['pat', 'Patrimônio do mês'], ['act', 'Botões Aporte e Dividendo'], ['mes', 'Lançamentos do mês'], ['saldos', 'Saldos que você digita'], ['auto', 'Automático']] },
+  dividendos: { t: 'Dividendos', it: [['ano', 'Este ano'], ['add', 'Dividendo recebido'], ['vida', 'Na vida'], ['quem', 'Quem mais paga'], ['ultimos', 'Últimos pagamentos'], ['tabela', 'Tabela por ano']] },
+};
+const PAGE_SECS = { painel: ['painel_top', 'painel'], atualizar: ['atualizar'], dividendos: ['dividendos'] };
+function layoutOf(key) { const def = LAYOUT[key].it.map((x) => x[0]), saved = (DB.settings.layout || {})[key] || []; return [...saved.filter((k) => def.includes(k)), ...def.filter((k) => !saved.includes(k))]; }
+function applyOrder(box, key) {
+  if (!box || !key || !LAYOUT[key]) return; const ord = layoutOf(key), kids = [...box.querySelectorAll(':scope > [data-k]')]; if (kids.length < 2) return;
+  const slots = kids.map((k) => { const c = document.createComment(''); k.replaceWith(c); return c; });
+  const sorted = [...kids].sort((a, b) => ord.indexOf(a.dataset.k) - ord.indexOf(b.dataset.k)); sorted.forEach((k, i) => slots[i].replaceWith(k));
+}
+function openLayout(only) {
+  const secs = only ? PAGE_SECS[only] || [] : Object.keys(LAYOUT);
+  const draw = () => `<h3>Organizar ${only ? 'esta página' : 'páginas'}</h3><p class="small muted" style="margin:-4px 0 12px">Use as setas para mudar a ordem. Muda na hora.</p>
+    ${secs.map((key) => { const ord = layoutOf(key), names = Object.fromEntries(LAYOUT[key].it);
+      return `<div class="lo-sec"><div class="lo-h"><span>${LAYOUT[key].t}</span>${(DB.settings.layout || {})[key] ? `<a class="lo-reset" data-r="${key}">Padrão</a>` : ''}</div><div class="lo-list">
+        ${ord.map((k, i) => `<div class="lo-row"><span class="lo-n">${i + 1}</span><span class="lo-t">${names[k]}</span>
+          <button class="lo-b" data-key="${key}" data-k="${k}" data-d="-1" ${i === 0 ? 'disabled' : ''} aria-label="Subir"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg></button>
+          <button class="lo-b" data-key="${key}" data-k="${k}" data-d="1" ${i === ord.length - 1 ? 'disabled' : ''} aria-label="Descer"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button></div>`).join('')}</div></div>`; }).join('')}
+    <button class="btn block" onclick="closeSheet()" style="margin-top:14px">Pronto</button>`;
+  const wire = (el) => {
+    $$('.lo-b', el).forEach((b) => (b.onclick = async () => { const key = b.dataset.key, ord = layoutOf(key), i = ord.indexOf(b.dataset.k), j = i + Number(b.dataset.d); if (j < 0 || j >= ord.length) return;
+      [ord[i], ord[j]] = [ord[j], ord[i]]; (DB.settings.layout ||= {})[key] = ord; await save(); $('#sheet').innerHTML = $('#sheet .sh-top')?.outerHTML + draw(); wire($('#sheet')); render(); }));
+    $$('.lo-reset', el).forEach((a) => (a.onclick = async () => { delete (DB.settings.layout || {})[a.dataset.r]; await save(); $('#sheet').innerHTML = $('#sheet .sh-top')?.outerHTML + draw(); wire($('#sheet')); render(); }));
+  };
+  openSheet(draw(), wire);
+}
 let PG_I = 0;   // top card shown: kept while the app is open, back to Patrimônio after reopening or unlocking
 let COUNTED = false;   // the patrimônio counts up once each time the app opens
 let SHOWN = null;   // last patrimônio shown, so a refresh glides from the old value to the new one
@@ -1553,7 +1585,7 @@ function vPainel() {
   ${backupOld ? `<div class="banner" onclick="location.hash='#ajustes'">Faça um backup — ${s.lastBackup ? 'o último foi há mais de 30 dias' : 'você ainda não fez nenhum'}. Toque aqui.</div>` : ''}
   <div class="gwrap">${divTry}
    <div class="gpg" id="gpg">
-    <div class="gpage">
+    <div data-k="pat" class="gpage">
    <div class="gl">
      <div class="glh"><span class="gll">Patrimônio <button class="geye" id="p-eye" aria-label="Esconder valores"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span><button class="gswap" id="cur-swap" aria-label="Trocar moeda"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M7 4L3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/></svg> ${heroCur === 'BRL' ? 'R$' : heroCur === 'GBP' ? '£' : 'US$'}</button></div>
      <div class="gtot money">${HM[heroCur](P.total)}</div>
@@ -1564,7 +1596,7 @@ function vPainel() {
    </div>
 
     </div>
-    <div class="gpage">
+    <div data-k="rumo" class="gpage">
    <div class="gl">
      <div class="gmeta">
        <svg width="104" height="104" viewBox="0 0 110 110" aria-hidden="true"><circle cx="55" cy="55" r="${R0}" fill="none" stroke="var(--g-track)" stroke-width="9"/>
@@ -1579,7 +1611,7 @@ function vPainel() {
 
 
     </div>
-    <div class="gpage">
+    <div data-k="cripto" class="gpage">
    <div class="gl click gcpage" onclick="location.hash='#cripto'">
      <div class="glh"><span class="gll">Cripto</span>${typeof c24 === 'number' ? `<span class="gc24 ${c24 < 0 ? 'neg' : 'pos'}">${c24 < 0 ? '▼' : '▲'} ${pct(Math.abs(c24))} <small>24h</small></span>` : ''}</div>
      <div class="gtot money gctot">${CV(cs.totalBRL)}</div>
@@ -1588,14 +1620,14 @@ function vPainel() {
     </div>
    </div>
    <div class="gdots" id="gdots"><i data-i="0"></i><i data-i="1"></i><i data-i="2"></i></div>
-   <div class="gl">
+   <div data-k="onde" class="gl">
      <div class="gll">Onde está</div>
      ${cats.map((c) => `<div class="grow click" onclick="${GO[c.k]}"><div class="grl"><span class="gdot" style="background:${GC[c.k]}"></span><span class="gn">${c.n}</span><span class="gvs money">${CV(c.v)}</span><span class="gpb">${pct(P.total ? c.v / P.total : 0).replace(/(\d),(\d)\d%/, '$1,$2%')}</span><span class="gch">›</span></div>
        ${c.cur !== null ? `<div class="gbl"><div class="gtrk"><i style="width:${Math.min(100, (c.cur / 0.5) * 100).toFixed(1)}%;background:${GC[c.k]}"></i><span style="left:${Math.min(100, (c.tgt / 0.5) * 100).toFixed(1)}%"></span></div><span class="gtl1 ${c.cur < c.tgt ? 'gbelow' : ''}">${c.cur < c.tgt ? `faltam <span class="money">${CV(c.tgt * (P.total - num(DB.balances.caixa)) - c.v)}</span>` : 'acima da meta'}</span></div>` : '<div class="gbl"><span class="gtl1">fora das metas</span></div>'}</div>`).join('')}
    </div>
 
-   ${divCard}
-   <div class="gl click" id="k-perf">
+   ${divCard.replace('<div class="gl', '<div data-k="div" class="gl')}
+   <div data-k="perf" class="gl click" id="k-perf">
      <div class="glh"><span class="gll">Desempenho · sem aportes${mLoc ? ' e sem câmbio' : ''}</span><span class="gll">ⓘ</span></div>
      <div class="perf2">
        <div><div class="gll">${MONTHS[new Date().getMonth()]}</div>
@@ -1615,9 +1647,10 @@ function vPainel() {
   $$('[data-do]').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.divopt', b.dataset.do); } catch {} render(); }));
   $('#cur-swap').onclick = (e) => { e.stopPropagation(); const nx = { BRL: 'GBP', GBP: 'USD', USD: 'BRL' }[heroCur]; try { localStorage.setItem('rumo.cur', nx); } catch {} render(); };
   $('#p-eye') && ($('#p-eye').onclick = (e) => { e.stopPropagation(); $('#btn-eye').click(); });
-  countUp($('.gwrap .gtot'), P.total, HM[heroCur], heroCur);
+  countUp($('#gpg [data-k="pat"] .gtot'), P.total, HM[heroCur], heroCur);
   { const g = $('#gpg'), dots = $$('#gdots i'); if (g) {
     // endless: a copy of the last card sits before the first and a copy of the first after the last; landing on a copy jumps to the real card
+    applyOrder(g, 'painel_top');
     const pages = [...g.children], N = pages.length, cp = (el) => { const c = el.cloneNode(true); c.querySelectorAll('[id]').forEach((x) => x.removeAttribute('id')); c.setAttribute('aria-hidden', 'true'); return c; };
     g.insertBefore(cp(pages[N - 1]), pages[0]); g.appendChild(cp(pages[0]));
     const W = () => g.children[0].offsetWidth + 12, real = (i) => (((i - 1) % N) + N) % N, mark = (k) => dots.forEach((d, n) => d.classList.toggle('on', n === k));
@@ -1772,28 +1805,28 @@ function vAtualizar() {
   const endD = (() => { const n = ymAdd(d.month, 1); return '1º de ' + MONTHS[Number(n.slice(5)) - 1].toLowerCase(); })();
   $('#view').innerHTML = `
   <div class="gwrap au">
-   <div class="gl">
+   <div data-k="pat" class="gl">
      <div class="glh"><span class="gll">Patrimônio de ${mN.toLowerCase()}</span><button class="gswap" id="f-month">${ymLabel(d.month)} <span class="gdown"></span></button></div>
      <div class="gtot money" id="f-total" style="font-size:34px">${brl(P.total)}</div>
      <div class="gll" id="f-cats" style="display:none"></div>
      <div class="au-st">${exists ? `<span class="au-ok">✓</span> salvo no Histórico${exists.savedAt ? ' em ' + new Date(exists.savedAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : ''}${exists.auto ? ' (sozinho)' : ''}` : isNow ? `o app salva sozinho em ${endD}` : 'ainda não salvo'}</div>
    </div>
 
-   <div class="au-act"><button class="gl" id="f-ap"><i><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></i><b>Aporte</b><small>ou retirada</small></button><button class="gl" id="f-div"><i><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></i><b>Dividendo</b><small>recebido</small></button></div>
+   <div data-k="act" class="au-act"><button class="gl" id="f-ap"><i><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></i><b>Aporte</b><small>ou retirada</small></button><button class="gl" id="f-div"><i><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></i><b>Dividendo</b><small>recebido</small></button></div>
 
-   <div class="gl">
+   <div data-k="mes" class="gl">
      <div class="gll" style="margin-bottom:4px">Em ${mN.toLowerCase()}</div>
      <div class="au-row ${apL.length ? 'click' : ''}" id="f-ap-all"><span>Aportes</span><b>${apL.length ? `${apSum < 0 ? '−' : ''}${gbp(Math.abs(apSum))}` : d.aporteGBP === 0 ? 'nenhum' : '—'}</b><span class="gll">${apL.length ? `${apL.length}×` : d.aporteGBP === 0 ? '' : '<a href="#" id="f-ap0">não houve</a>'}</span>${apL.length ? '<span class="gch">›</span>' : ''}</div>
      <div class="au-row click" onclick="location.hash='#dividendos'"><span>Dividendos</span><b>${dvN || dvR ? brl(dvR) : '—'}</b><span class="gll">${dvN ? dvN + '×' : ''}</span><span class="gch">›</span></div>
    </div>
 
-   <div class="gl">
+   <div data-k="saldos" class="gl">
      <div class="glh"><span class="gll">Saldos que você digita</span></div>
      ${bal('Trading 212 · caixa', 't212cash', 'GBP')}${bal('Renda fixa Brasil', 'rfBrasil', 'BRL')}${bal('Caixa', 'caixa', 'BRL')}
      ${!au.acoes ? bal('Ações', 'acoes', 'BRL') : ''}${!au.fiis ? bal('FIIs', 'fiis', 'BRL') : ''}${!au.stocks ? bal('Pie Stocks', 'pieStocks', 'GBP') + bal('Pie REITs', 'pieReits', 'GBP') + bal("Pie ETF's", 'pieEtfs', 'GBP') : ''}
    </div>
 
-   <div class="gl">
+   <div data-k="auto" class="gl">
      <div class="glh"><span class="gll">Automático</span><span class="gll">${s5 ? 'atualizado ' + (fmtDate(p.updatedAt).split(' ')[1] || '') : '<span class="au-due">preços antigos</span>'}</span></div>
      ${au.acoes ? autoRow('Ações', 'acoes') : ''}${au.fiis ? autoRow('FIIs', 'fiis') : ''}${au.stocks ? autoRow('Exterior', 'stocks') : ''}
      <div class="au-row"><span>Libra <small class="gll">£1</small></span><b>R$ ${nf2.format(p.gbpbrl || 0)}</b><span class="gsp"></span></div>
@@ -1990,7 +2023,7 @@ function vDividendos() {
   let tblOpen = false; try { tblOpen = localStorage.getItem('rumo.dtbl') === '1'; } catch {}
   const nextV = (Math.floor(life / step) + 1) * step, mWin = [...mile.slice(-3).map((x) => ({ v: x.v, d: ymLabel(x.m), ok: true })), { v: nextV, d: 'faltam ' + nf0.format(Math.ceil(nextV - life)), ok: false }];
   $('#view').innerHTML = `<div class="gwrap dv">
-   <div class="gl">
+   <div data-k="ano" class="gl">
      <div class="glh"><span class="gll">${thisY} até ${upTo ? MONTHS[upTo - 1].toLowerCase() : '–'}</span>${vs !== null ? `<span class="dchip ${vs < 0 ? 'neg' : 'pos'}">${vs < 0 ? '▼' : '▲'} ${pct(Math.abs(vs))} vs ${lastY}</span>` : ''}</div>
      <div class="gtot money dv-big">${brl(tySum)}</div>
      <div class="gll">média <span class="money">${brl(upTo ? tySum / upTo : 0)}</span>/mês${ty[best] ? ` · melhor: ${MONTHS[best].toLowerCase()}` : ''}</div>
@@ -1998,27 +2031,27 @@ function vDividendos() {
      <div class="dvleg"><span><i class="ty"></i>${thisY}</span><span><i class="ly"></i>${lastY}</span><span id="dv-sel"></span></div>
    </div>
 
-   <button class="gl dv-add" id="dv-add"><i><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></i><div><b>Dividendo recebido</b><small>${ld ? `último: ${dmy(ld.date)} · ${divLabel(ld)}${ld.ticker ? ' · ' + esc(ld.ticker) : ''}` : 'lance cada pagamento quando cair'}</small></div></button>
+   <button data-k="add" class="gl dv-add" id="dv-add"><i><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></i><div><b>Dividendo recebido</b><small>${ld ? `último: ${dmy(ld.date)} · ${divLabel(ld)}${ld.ticker ? ' · ' + esc(ld.ticker) : ''}` : 'lance cada pagamento quando cair'}</small></div></button>
 
-   <div class="gl">
+   <div data-k="vida" class="gl">
      <div class="glh"><span class="gll">Na vida</span><span class="gll">12 meses: <span class="money">${brl(last12)}</span></span></div>
      <div class="gk money" style="font-size:24px">${brl(life)}</div>
      <div class="gtrk" style="margin:10px 0 0"><i style="width:${(((life % step) / step) * 100).toFixed(1)}%;background:linear-gradient(90deg,var(--g-acc2),var(--g-acc1))"></i></div>
      <div class="gms" style="margin-top:12px">${mWin.map((m) => `<div class="${m.ok ? 'ok' : 'nx'}"><b></b>${nf0.format(m.v / 1000)} mil<small>${m.d}</small></div>`).join('')}</div>
    </div>
 
-   <div class="gl">
+   <div data-k="quem" class="gl">
      <div class="glh"><span class="gll">Quem mais paga</span></div>
      <div class="hy dv-rk">${[['mes', 'Este mês'], ['12m', '12 meses'], ['all', 'Sempre']].map(([v, l]) => `<button class="${rk === v ? 'on' : ''}" data-rk="${v}">${l}</button>`).join('')}</div>
      ${rank.length ? rank.slice(0, 5).map(rankRow).join('') + (rank.length > 5 ? `<button class="gbtn2" id="rk-all">Ver todos (${rank.length})</button>` : '') : '<div class="gll" style="padding:8px 0">Nenhum dividendo neste período.</div>'}
    </div>
 
-   <div class="gl dvl">
+   <div data-k="ultimos" class="gl dvl">
      <div class="glh"><span class="gll">Últimos pagamentos</span></div>
      ${divLogList(5)}${(DB.divLog || []).length > 5 ? `<button class="gbtn2" id="dv-all">Ver todos (${DB.divLog.length})</button>` : ''}
    </div>
 
-   <div class="gl">
+   <div data-k="tabela" class="gl">
      <div class="au-row click" id="tbl-tog" style="border:0;padding:2px 0"><span>Tabela por ano <small class="gll">${yrs[0]}–${yrs[yrs.length - 1]}</small></span><span class="gch">${tblOpen ? '⌄' : '›'}</span></div>
      ${tblOpen ? `<div class="tbl-wrap dvt" style="margin-top:10px"><table>
      <tr><th></th>${yrs.map((y) => `<th>${y}</th>`).join('')}</tr>
@@ -2225,6 +2258,7 @@ function vAjustes() {
      ${srow('a-export', 'down', '#16A34A', 'Fazer backup', s.lastBackup ? 'último: ' + fmtDate(s.lastBackup) : 'arquivo criptografado', bOld ? `<span class="sbad w">${s.lastBackup ? 'há +30 dias' : 'nunca feito'}</span>` : '<span class="sbad ok">em dia</span>')}
      ${srow('a-import', 'up', '#475569', 'Importar backup', 'substitui os dados deste aparelho')}
      ${srow('a-excel', 'grid', '#15803D', 'Exportar Excel', 'cópia legível, não criptografada')}
+     ${srow('a-layout', 'grid', '#475569', 'Organizar páginas', 'mudar a ordem dos cartões')}
      ${(() => { const u = storeUse(); return srow('a-space', 'pie', '#475569', 'Espaço usado', `${mbTxt(u.b)} de 5 MB<span class="spbar"><i class="${u.p >= 0.7 ? 'hi' : ''}" style="width:${Math.max(1, Math.min(100, u.p * 100)).toFixed(1)}%"></i></span>`, `<span class="srv">${Math.round(u.p * 100)}%</span>`); })()}
    </div>
    <div class="ssec">Preços</div><div class="sgrp">
@@ -2268,6 +2302,7 @@ function vAjustes() {
     });
   $('#a-export').onclick = exportBackup;
   $('#a-excel').onclick = exportExcel;
+  $('#a-layout') && ($('#a-layout').onclick = () => openLayout());
   $('#a-space').onclick = () => { const u = storeUse(); toast(`${mbTxt(u.b)} de cerca de 5 MB que o iPhone libera para o app (${Math.round(u.p * 100)}%). Cresce uns 0,4 MB por ano — o app avisa no Painel ao chegar em 70%.`, 7000); };
   $('#a-import').onclick = () => pickImport(false);
   $('#a-update').onclick = forceUpdate;

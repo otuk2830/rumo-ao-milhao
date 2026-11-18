@@ -964,3 +964,16 @@ html:not(.dark) #tick path{stroke:var(--g-acct, #8A6D3B)}
 /* edge-to-edge: the bounce area above and below the page is the same graphite (or warm light) as the app */
 html.dark, html.dark body{background-color:#0A0A0B}
 html:not(.dark), html:not(.dark) body{background-color:#EFECE6}
+/* Organizar páginas */
+.lo-sec{margin-top:12px}
+.lo-h{display:flex; justify-content:space-between; align-items:center; font-size:13px; color:var(--g-mut, var(--muted)); margin:0 4px 6px}
+.lo-reset{color:var(--g-acc2, var(--blue)); font-size:12.5px; cursor:pointer}
+.lo-list{background:var(--g-card2, var(--soft)); border:1px solid var(--g-bd, var(--line)); border-radius:var(--r-md, 14px); padding:2px 10px}
+.lo-row{display:flex; align-items:center; gap:10px; padding:9px 0; border-top:1px solid var(--g-bd, var(--line))}
+.lo-row:first-child{border-top:0}
+.lo-n{width:20px; height:20px; border-radius:50%; display:grid; place-items:center; font-size:11px; font-weight:600; color:var(--g-acc1, var(--ink)); background:color-mix(in srgb, var(--g-acc2, #C9B087) 22%, transparent)}
+.lo-t{flex:1; font-size:14.5px}
+.lo-b{width:34px; height:30px; border-radius:10px; border:1px solid var(--g-bd, var(--line)); background:var(--g-card, transparent); color:var(--g-ink, var(--ink)); display:grid; place-items:center}
+.lo-b:disabled{opacity:.25}
+.lo-b:active{transform:scale(.92)}
+.lo-link{display:flex; align-items:center; justify-content:center; gap:6px; width:100%; margin-top:6px; padding:10px; background:none; border:0; color:var(--g-mut, var(--muted)); font:inherit; font-size:12.5px; opacity:.8}
