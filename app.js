@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '6.2';
+const APP_VERSION = '6.4';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -559,6 +559,7 @@ function editDiv(id) {
     <div class="tk-field"><label>Ticker <small>opcional — comece a digitar</small></label>
       <input id="dv-k" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" value="${esc(x.ticker || '')}" placeholder="ex.: HGLG11">
       <div class="tk-dd hidden" id="dv-sug"></div></div>
+    ${placeSelect('dv-pl', id ? x.to || '' : (DB.settings.lastTo || {}).div || '', 'Onde caiu')}
     <button class="btn primary block" id="dv-save">Salvar</button>
     ${id ? '<button class="btn danger block" id="dv-del">Apagar</button>' : ''}
     <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
@@ -585,6 +586,7 @@ function editDiv(id) {
       const o = { ...x, type: $('#dv-t', el).value, cur: $('#dv-c', el).value, amount: parsePT($('#dv-a', el).value), date: $('#dv-d', el).value || today(),
         ticker: $('#dv-k', el).value.trim().toUpperCase(), at: new Date().toISOString(), g: DB.prices.gbpbrl, u: DB.prices.usdbrl, e: DB.prices.eurbrl };
       if (!o.amount) return toast('Digite o valor');
+      const pl = $('#dv-pl', el).value; o.to = pl || undefined; o.toAmt = pl ? toPlace(o.amount, o.cur, pl, o) : undefined;
       const m = o.date.slice(0, 7), f = DTYPES[o.type].f;
       const firstOfMonth = !(DB.divLog || []).some((e) => e.id !== o.id && e.date.slice(0, 7) === m && DTYPES[e.type].f === f);
       const typed = DB.draft.month === m ? DB.draft[f] : DB.history.find((h) => h.month === m)?.[f];
@@ -593,13 +595,14 @@ function editDiv(id) {
         if (keep) DB.divLog.push({ id: uid(), type: f === 'divStocks' ? 'stocks' : o.type, cur: f === 'divStocks' ? 'GBP' : 'BRL', amount: typed, date: m + '-01', ticker: '', note: 'digitado antes', at: new Date(0).toISOString(), g: DB.prices.gbpbrl });
       }
       const old = DB.divLog.find((e) => e.id === o.id)?.date.slice(0, 7);
-      const i = DB.divLog.findIndex((e) => e.id === o.id); if (i > -1) DB.divLog[i] = o; else DB.divLog.push(o);
+      const i = DB.divLog.findIndex((e) => e.id === o.id); if (i > -1) placeApply(DB.divLog[i], -1); placeApply(o, 1); (DB.settings.lastTo ||= {}).div = o.to || '';
+      if (i > -1) DB.divLog[i] = o; else DB.divLog.push(o);
       applyDivLog(m); if (old && old !== m) applyDivLog(old);
-      await save(); closeSheet(); render(); fillMissingFx(); doneTick(); toast(`✓ ${divLabel(o)}${o.ticker ? ' · ' + o.ticker : ''} em ${ymLong(m)}`);
+      await save(); closeSheet(); render(); fillMissingFx(); doneTick(); toast(`✓ ${divLabel(o)}${o.ticker ? ' · ' + o.ticker : ''} em ${ymLong(m)}${placeTxt(o)}`);
     };
     if (id) $('#dv-del', el).onclick = async () => {
       if (!(await ask('Apagar este dividendo?', { yes: 'Sim, apagar', danger: true }))) return;
-      const m = x.date.slice(0, 7), f = DTYPES[x.type].f; DB.divLog = DB.divLog.filter((e) => e.id !== id);
+      const m = x.date.slice(0, 7), f = DTYPES[x.type].f; placeApply(x, -1); DB.divLog = DB.divLog.filter((e) => e.id !== id);
       const still = DB.divLog.some((e) => e.date.slice(0, 7) === m && DTYPES[e.type].f === f);
       if (!still) { if (DB.draft.month === m) DB.draft[f] = null; const h = DB.history.find((q) => q.month === m); if (h) h[f] = null; } else applyDivLog(m);
       await save(); closeSheet(); render();
@@ -634,7 +637,7 @@ function editAp(id) {
     <div class="small muted" style="margin-bottom:8px" id="ap-hint"></div>
     <div class="field"><label id="ap-v-l">Valor (£)</label><input id="ap-v" class="pt" inputmode="decimal" value="${x.gbp === null || x.gbp === undefined ? '' : fmtN(Math.abs(typeof x.brl === 'number' ? x.brl : x.gbp), 2)}"></div>
     <div class="field"><label>Data</label><input type="date" id="ap-d" value="${x.date}"></div>
-    <div class="field"><label id="ap-to-l">Para onde foi</label><select id="ap-to">${Object.entries(BLK).map(([k, v]) => `<option value="${k}" ${(x.dest || 'gbp') === k ? 'selected' : ''}>${v.n} (${v.cur})</option>`).join('')}</select></div>
+    <div class="field"><label><span id="ap-to-l">Para onde foi</span><small id="ap-to-h"></small></label><select id="ap-to">${(() => { const sel = id ? apOptOf(x) : (DB.settings.lastTo || {}).ap2 || 't212cash'; return Object.entries(AP_OPTS).map(([k, v]) => `<option value="${k}" ${sel === k ? 'selected' : ''}>${v.n} (${v.cur})</option>`).join(''); })()}</select></div>
     <div class="field"><label>Nota<small>opcional</small></label><input id="ap-n" value="${esc(x.note || '')}" style="text-align:left" placeholder="ex.: salário"></div>
     <button class="btn primary block" id="ap-save">Salvar</button>
     ${id ? '<button class="btn danger block" id="ap-del">Apagar</button>' : ''}
@@ -642,15 +645,17 @@ function editAp(id) {
     $$('input.pt', el).forEach(liveFormat); if (!id) setTimeout(() => $('#ap-v', el).focus(), 250);
     const mode = () => { $$('.ap-seg button', el).forEach((b) => b.classList.toggle('on', (b.dataset.k === 'out') === out));
       $('#ap-hint', el).textContent = out ? 'Dinheiro que você TIROU dos investimentos. Depois atualize o saldo de onde saiu.' : 'Dinheiro NOVO que entrou nos investimentos.';
-      $('#ap-to-l', el).textContent = out ? 'De onde saiu' : 'Para onde foi'; if (!id) $('#ap-h', el).textContent = out ? 'Fiz uma retirada' : 'Fiz um aporte'; };
+      $('#ap-to-l', el).textContent = out ? 'De onde saiu' : 'Para onde foi'; if (!id) $('#ap-h', el).textContent = out ? 'Fiz uma retirada' : 'Fiz um aporte';
+      const hint = $('#ap-to-h', el); if (hint) hint.textContent = AP_OPTS[$('#ap-to', el).value].to ? (out ? 'sai do saldo sozinho' : 'soma no saldo sozinho') : (out ? '' : 'atualize a quantidade'); };
     $$('.ap-seg button', el).forEach((b) => (b.onclick = () => { out = b.dataset.k === 'out'; mode(); })); mode();
-    const curL = () => { $('#ap-v-l', el).textContent = $('#ap-to', el).value === 'brl' ? 'Valor (R$)' : 'Valor (£)'; };
+    const curL = () => { $('#ap-v-l', el).textContent = AP_OPTS[$('#ap-to', el).value].dest === 'brl' ? 'Valor (R$)' : 'Valor (£)'; mode(); };
     $('#ap-to', el).addEventListener('change', curL); curL();
     $('#ap-save', el).onclick = async () => {
       const raw = $('#ap-v', el).value.trim(), neg = out || raw.startsWith('-'), v = parsePT(raw.replace(/^-/, ''));
       if (!v) return toast('Digite o valor');
-      const inBRL = $('#ap-to', el).value === 'brl', g0 = DB.prices.gbpbrl || 1, sv = neg ? -v : v;
-      const o = { ...x, gbp: inBRL ? Math.round((sv / g0) * 100) / 100 : sv, brl: inBRL ? sv : undefined, gFixed: false, date: $('#ap-d', el).value || today(), dest: $('#ap-to', el).value, note: $('#ap-n', el).value.trim(), at: new Date().toISOString(), g: DB.prices.gbpbrl };
+      const opt = AP_OPTS[$('#ap-to', el).value], inBRL = opt.dest === 'brl', g0 = DB.prices.gbpbrl || 1, sv = neg ? -v : v;
+      const o = { ...x, gbp: inBRL ? Math.round((sv / g0) * 100) / 100 : sv, brl: inBRL ? sv : undefined, gFixed: false, date: $('#ap-d', el).value || today(), dest: opt.dest, note: $('#ap-n', el).value.trim(), at: new Date().toISOString(), g: DB.prices.gbpbrl };
+      const pl = opt.to; o.to = pl || undefined; o.toAmt = pl ? toPlace(inBRL ? sv : o.gbp, inBRL ? 'BRL' : 'GBP', pl, { g: o.g }) : undefined;
       const m = o.date.slice(0, 7), first = !(DB.apLog || []).some((e) => e.id !== o.id && e.date.slice(0, 7) === m);
       const typed = DB.draft.month === m ? DB.draft.aporteGBP : DB.history.find((h) => h.month === m)?.aporteGBP;
       if (first && typed) {
@@ -658,10 +663,11 @@ function editAp(id) {
         if (keep) DB.apLog.push({ id: uid(), gbp: typed, date: m + '-01', note: 'digitado antes', at: new Date(0).toISOString(), g: DB.history.find((h) => h.month === m)?.fx || DB.prices.gbpbrl });
       }
       const old = DB.apLog.find((e) => e.id === o.id)?.date.slice(0, 7);
-      const i = DB.apLog.findIndex((e) => e.id === o.id); if (i > -1) DB.apLog[i] = o; else DB.apLog.push(o);
+      const i = DB.apLog.findIndex((e) => e.id === o.id); if (i > -1) placeApply(DB.apLog[i], -1); placeApply(o, 1); (DB.settings.lastTo ||= {}).ap2 = $('#ap-to', el).value;
+      if (i > -1) DB.apLog[i] = o; else DB.apLog.push(o);
       applyApLog(m); if (old && old !== m) { if (apSum(old) === null) { if (DB.draft.month === old) DB.draft.aporteGBP = null; const h = DB.history.find((q) => q.month === old); if (h) h.aporteGBP = null; } else applyApLog(old); }
       await save(); closeSheet(); render(); fillMissingFx();
-      doneTick(); toast(`✓ ${o.gbp < 0 ? 'Retirada' : 'Aporte'} de ${apTxt(o)} em ${new Date(o.date + 'T12:00').toLocaleDateString('pt-BR')} — atualize hoje os saldos/quantidades que mudaram`, 5000);
+      doneTick(); toast(o.to ? `✓ ${o.gbp < 0 ? 'Retirada' : 'Aporte'} de ${apTxt(o)}${placeTxt(o)}` : `✓ ${o.gbp < 0 ? 'Retirada' : 'Aporte'} de ${apTxt(o)} em ${new Date(o.date + 'T12:00').toLocaleDateString('pt-BR')} — atualize hoje os saldos/quantidades que mudaram`, 5000);
     };
     if (id) $('#ap-del', el).onclick = async () => { if (await delAp(id)) { closeSheet(); render(); } };
   });
@@ -669,7 +675,7 @@ function editAp(id) {
 async function delAp(id) {
   const x = DB.apLog.find((e) => e.id === id); if (!x) return false;
   if (!(await ask(`Apagar ${x.gbp < 0 ? 'esta retirada' : 'este aporte'} de ${apTxt(x)} (${new Date(x.date + 'T12:00').toLocaleDateString('pt-BR')})?`, { yes: 'Sim, apagar', danger: true }))) return false;
-  const m = x.date.slice(0, 7); DB.apLog = DB.apLog.filter((e) => e.id !== id);
+  const m = x.date.slice(0, 7); placeApply(x, -1); DB.apLog = DB.apLog.filter((e) => e.id !== id);
   if (apSum(m) === null) { if (DB.draft.month === m) DB.draft.aporteGBP = 0; const h = DB.history.find((q) => q.month === m); if (h) h.aporteGBP = 0; } else applyApLog(m);   // no entries left = £0 that month
   await save(); return true;
 }
@@ -681,7 +687,7 @@ function openApList() {
 }
 function apList() {
   const L = [...(DB.apLog || [])].sort((a, b) => b.date.localeCompare(a.date));
-  return L.length ? L.map((e) => `<div class="item click" data-ap="${e.id}"><div><div class="t">${new Date(e.date + 'T12:00').toLocaleDateString('pt-BR')}</div><div class="s">${e.note ? esc(e.note) : e.gbp < 0 ? 'retirada' : 'aporte'} · ${BLK[e.dest || 'gbp'].n}</div></div><div class="r" style="display:flex;align-items:center;gap:10px"><div>${typeof e.brl === 'number' ? `<div class="t ${e.gbp < 0 ? 'neg' : ''}">${brl(e.brl)}</div><div class="s">${gbp(e.gbp, 2)}</div>` : `<div class="t ${e.gbp < 0 ? 'neg' : ''}">${gbp(e.gbp, 2)}</div><div class="s">${brl(apBRL(e))}</div>`}</div><button class="apx" data-apx="${e.id}" aria-label="Apagar">×</button></div></div>`).join('') : '<p class="muted small">Nenhum aporte lançado ainda.</p>';
+  return L.length ? L.map((e) => `<div class="item click" data-ap="${e.id}"><div><div class="t">${new Date(e.date + 'T12:00').toLocaleDateString('pt-BR')}</div><div class="s">${e.note ? esc(e.note) : e.gbp < 0 ? 'retirada' : 'aporte'} · ${AP_OPTS[apOptOf(e)].n}</div></div><div class="r" style="display:flex;align-items:center;gap:10px"><div>${typeof e.brl === 'number' ? `<div class="t ${e.gbp < 0 ? 'neg' : ''}">${brl(e.brl)}</div><div class="s">${gbp(e.gbp, 2)}</div>` : `<div class="t ${e.gbp < 0 ? 'neg' : ''}">${gbp(e.gbp, 2)}</div><div class="s">${brl(apBRL(e))}</div>`}</div><button class="apx" data-apx="${e.id}" aria-label="Apagar">×</button></div></div>`).join('') : '<p class="muted small">Nenhum aporte lançado ainda.</p>';
 }
 // daily chained return for a month: needs a snapshot from the last days of the month before
 function dailyMonth(month) {
@@ -744,6 +750,28 @@ const CAT_N = { acoes: 'Ações', fiis: 'FIIs', rf: 'Renda fixa', stocks: 'Exter
 // three blocks, each in its own currency: Brazil (R$), Trading 212 (£), Cripto (US$)
 const natNow = (P) => { const b = DB.balances, pr = DB.prices, r2 = (v) => Math.round(v * 100) / 100;
   return { brl: r2(P.v.acoes + P.v.fiis + num(b.rfBrasil) + num(b.caixa)), gbp: r2(P.v.stocks / (pr.gbpbrl || 1) + num(b.t212cash)), usd: r2(P.v.crypto / (pr.usdbrl || 1)) }; };
+// where a logged aporte / dividend lands: its amount is added to that balance automatically (and taken back if edited or deleted)
+const PLACES = { caixa: { n: 'Caixa', cur: 'BRL' }, rfBrasil: { n: 'Renda fixa Brasil', cur: 'BRL' }, t212cash: { n: 'Trading 212 · caixa', cur: 'GBP' } };
+const placeSelect = (id, sel, label) => `<div class="field"><label>${label}<small>soma no saldo sozinho</small></label><select id="${id}"><option value="">Não somar (já atualizei / comprei ativos)</option>${Object.entries(PLACES).map(([k, v]) => `<option value="${k}" ${sel === k ? 'selected' : ''}>${v.n} (${v.cur === 'GBP' ? '£' : 'R$'})</option>`).join('')}</select></div>`;
+function toPlace(amount, cur, place, r) {   // amount in its own currency → the balance's currency, at the rates r = {g, u, e}
+  const g = num(r.g || DB.prices.gbpbrl) || 1, brlV = cur === 'BRL' ? amount : cur === 'GBP' ? amount * g : cur === 'USD' ? amount * num(r.u || DB.prices.usdbrl) : amount * num(r.e || DB.prices.eurbrl);
+  return Math.round((PLACES[place].cur === 'GBP' ? (cur === 'GBP' ? amount : brlV / g) : brlV) * 100) / 100;
+}
+function placeApply(e, sign) {   // sign 1 = add, −1 = undo
+  if (!e || !e.to || !PLACES[e.to] || !e.toAmt) return; const b = DB.balances;
+  b[e.to] = Math.round((num(b[e.to]) + sign * e.toAmt) * 100) / 100; (DB.settings.balAt ||= {})[e.to] = new Date().toISOString();
+}
+const placeTxt = (e) => (e.to && PLACES[e.to] ? ` · ${e.toAmt < 0 ? 'tirado de' : 'somado em'} ${PLACES[e.to].n}` : '');
+// one list for "Para onde foi": each choice sets the currency block and, when it is a cash balance, adds to it automatically
+const AP_OPTS = {
+  t212cash: { n: 'Trading 212 · caixa', cur: '£', dest: 'gbp', to: 't212cash' },
+  t212buy: { n: 'Trading 212 · comprei ações', cur: '£', dest: 'gbp', to: '' },
+  caixa: { n: 'Caixa', cur: 'R$', dest: 'brl', to: 'caixa' },
+  rfBrasil: { n: 'Renda fixa Brasil', cur: 'R$', dest: 'brl', to: 'rfBrasil' },
+  brbuy: { n: 'Brasil · comprei ações/FIIs', cur: 'R$', dest: 'brl', to: '' },
+  cripto: { n: 'Cripto', cur: '£', dest: 'usd', to: '' },
+};
+const apOptOf = (e) => (e.to && AP_OPTS[e.to] ? e.to : (e.dest || 'gbp') === 'brl' ? 'brbuy' : e.dest === 'usd' ? 'cripto' : 't212buy');
 const BLK = { brl: { n: 'Brasil', cur: 'R$' }, gbp: { n: 'Trading 212', cur: '£' }, usd: { n: 'Cripto', cur: 'US$' } };
 const rateOf = (k, g, u) => (k === 'brl' ? 1 : k === 'gbp' ? g : u);
 // new money of a period, split by where it went, in each block's own currency
