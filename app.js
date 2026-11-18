@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '6.6';
+const APP_VERSION = '6.7';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -190,7 +190,8 @@ function cryptoSummary() {
   // Buy adds coins and cost · Sold removes coins at the average (the average stays) · Received adds coins with no cost (rewards count as profit)
   const basis = c.basis || {};
   const cost = (k) => { const st = basis[k]; let q = st ? num(st.qty) : 0, cst = st ? num(st.qty) * num(st.avg) : 0, r = 0;
-    for (const x of [...c.log].filter((x) => x.coin === k && (!st || (x.date || '') >= st.d)).sort((a, b) => (a.date || '').localeCompare(b.date || ''))) {
+    const after = (x) => { const d = x.date || ''; return d > st.d || (d === st.d && Array.isArray(st.ids) && !st.ids.includes(x.id)); };
+    for (const x of [...c.log].filter((x) => x.coin === k && (!st || after(x))).sort((a, b) => (a.date || '').localeCompare(b.date || ''))) {
       if (x.op === 'Buy') { q += num(x.qty); cst += num(x.value); }
       else if (x.op === 'Sold') { const k2 = Math.min(q, num(x.qty)); if (q > 0) { cst -= cst * k2 / q; q -= k2; } }
       else if (x.op === 'Received') r += num(x.qty); }
@@ -2173,18 +2174,23 @@ function CM(vBRL, dec = 2) { const c = viewCur(); return c === 'GBP' ? gbp(vBRL 
 const plLine = (pl, pctV) => `<span class="${pl < 0 ? 'neg' : 'pos'}">${signed(pct, pctV)}</span> <span class="money ${pl < 0 ? 'neg' : 'pos'}">· ${signed((v) => CM(v), pl)}</span>`;
 function editBasis(k) {
   const c = DB.crypto, st = (c.basis || {})[k], cs = cryptoSummary(), co = cs.coins.find((x) => x.k === k), name = (COINMETA[k] || [k])[0];
+  // coins held at the end of a day = today's total minus what was logged after that day
+  const qtyAt = (d) => (co ? co.units : 0) - c.log.filter((x) => x.coin === k && (x.date || '') > d).reduce((t, x) => t + (x.op === 'Sold' ? -1 : 1) * num(x.qty), 0);
+  const fromLog = k === 'BTC' && !st && co?.pl;
   openSheet(`<h3>Preço médio · ${esc(name)}</h3>
-    <p class="small muted" style="margin:-4px 0 10px">Digite o preço médio que sua corretora mostra (ex.: Coinbase → ${k} → Average cost) e quanto você tinha nessa data. Compras, vendas e recebidos lançados depois daqui entram na conta sozinhos.${k === 'BTC' && !st ? '<br><br>Bitcoin já é calculado pelas compras do registro — só preencha se quiser começar de um preço da corretora.' : ''}</p>
+    <p class="small muted" style="margin:-4px 0 10px">${fromLog ? `Hoje o preço médio do Bitcoin vem das suas compras no registro: <b>${usd(co.pl.avg)}</b>. Só preencha aqui se quiser trocar pelo preço da corretora.<br><br>` : ''}Copie o <b>preço médio</b> da corretora (Coinbase → ${k} → Average cost) e <b>quantas moedas você tinha</b> nesse dia. O que você lançar depois (compras, vendas, recebidos) entra na conta sozinho.</p>
     <div class="field"><label>Preço médio (US$)</label><input id="b-avg" class="pt" inputmode="decimal" value="${st ? fmtN(st.avg, 2) : ''}"></div>
-    <div class="field"><label>Quantidade nessa data<small>${k}</small></label><input id="b-q" class="pt" inputmode="decimal" value="${fmtN(st ? st.qty : co ? co.units : 0, 8)}"></div>
     <div class="field"><label>Data</label><input type="date" id="b-d" value="${st ? st.d : today()}"></div>
+    <div class="field"><label>Moedas nesse dia<small>${k} · no fim do dia</small></label><input id="b-q" class="pt" inputmode="decimal" value="${fmtN(st ? st.qty : qtyAt(today()), 8)}"></div>
     <button class="btn primary block" id="b-save">Salvar</button>
     ${st ? '<button class="btn danger block" id="b-del">Remover preço médio</button>' : ''}
     <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
     $$('input.pt', el).forEach(liveFormat);
-    $('#b-save', el).onclick = async () => { const avg = parsePT($('#b-avg', el).value), q = parsePT($('#b-q', el).value);
+    let typed = !!st; $('#b-q', el).addEventListener('input', () => (typed = true));
+    $('#b-d', el).onchange = () => { if (!typed) $('#b-q', el).value = fmtN(qtyAt($('#b-d', el).value || today()), 8); };
+    $('#b-save', el).onclick = async () => { const avg = parsePT($('#b-avg', el).value), q = parsePT($('#b-q', el).value), d = $('#b-d', el).value || today();
       if (!(avg > 0) || !(q > 0)) return toast('Digite o preço médio e a quantidade');
-      (c.basis ||= {})[k] = { avg, qty: q, d: $('#b-d', el).value || today() }; await save(); closeSheet(); render(); doneTick(); };
+      (c.basis ||= {})[k] = { avg, qty: q, d, ids: c.log.filter((x) => x.coin === k && x.date === d).map((x) => x.id) }; await save(); closeSheet(); render(); doneTick(); };
     $('#b-del', el) && ($('#b-del', el).onclick = async () => { delete c.basis[k]; await save(); closeSheet(); render(); });
   });
 }
