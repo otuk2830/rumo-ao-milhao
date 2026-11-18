@@ -1008,3 +1008,6 @@ html:not(.dark) .cdef{color:var(--g-acct, #8A6D3B) !important}
 .arow .ar .s .plp, .pie-h .r .plp{min-width:5.6em; text-align:center; box-sizing:border-box}
 .arow .ar .s .plv, .pie-h .r .plv{min-width:7.4em; text-align:right}
 .arow .ar .s .plx, .pie-h .r .plx{flex-wrap:nowrap}
+.hm-l .hlive{color:var(--g-acct, #C9A978); font-weight:600}
+.arow .ar .s .plv, .pie-h .r .plv{min-width:8.4em}
+.arow .ar .s .plp, .pie-h .r .plp{min-width:6.6em}

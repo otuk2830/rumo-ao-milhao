@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '7.1';
+const APP_VERSION = '7.2';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -173,11 +173,12 @@ function cryptoSummary() {
     return { ...co, per, net, fee, units, valUSD, valBRL: valUSD * num(p.usdbrl) };
   });
   const totalUSD = coins.reduce((s, x) => s + x.valUSD, 0);
-  // BTC profit: only Buy rows of the log
+  // BTC profit per person: Buy rows of the log, plus coins received at no cost
   // average-cost method: a sale removes coins at the average price paid, so a full sale leaves 0
   const pos = (who) => { let qty = 0, cost = 0;
     for (const x of c.log) { if (x.coin !== 'BTC' || x.name !== who) continue;
       if (x.op === 'Buy') { qty += num(x.qty); cost += num(x.value); }
+      else if (x.op === 'Received') qty += num(x.qty);   // rewards: coins with no cost
       else if (x.op === 'Sold' && qty > 0) { const q = Math.min(qty, num(x.qty)); cost -= cost * q / qty; qty -= q; } }
     return { qty: qty > 1e-12 ? qty : 0, cost: qty > 1e-12 ? cost : 0 }; };
   const pl = (who) => {
@@ -225,8 +226,18 @@ const divTotal = (h) => {
   const part = (f, typed) => (f in byF ? byF[f] : typed);
   return part('divFII', num(h.divFII)) + part('divAcoes', num(h.divAcoes)) + part('divStocks', h.fx ? num(h.divStocks) * h.fx : 0);
 };
+// history with the current month replaced by today's live figures (the 1st of next month saves the real close)
+function histLive() {
+  const m = ym(), H = DB.history, prev = H.filter((h) => typeof h.pat === 'number' && h.month < m).slice(-1)[0];
+  if (!prev) return H;
+  const P = portfolio(); if (!(P.total > 0)) return H;
+  const saved = H.find((h) => h.month === m) || {}, src = DB.draft.month === m ? DB.draft : saved, a = apSum(m);
+  const row = { ...saved, month: m, pat: P.total, aporteGBP: a !== null ? a : src.aporteGBP ?? null, fx: DB.prices.gbpbrl || saved.fx || null, usd: DB.prices.usdbrl || saved.usd || null, live: true };
+  for (const f of DIV_FIELDS) if ((row[f] === null || row[f] === undefined) && src[f] !== null && src[f] !== undefined) row[f] = src[f];
+  return [...H.filter((h) => h.month !== m), row];
+}
 function historyStats() {
-  const H = DB.history, withPat = H.filter((h) => typeof h.pat === 'number');
+  const H = histLive(), withPat = H.filter((h) => typeof h.pat === 'number');
   const last = withPat[withPat.length - 1] || null;
   let cresc12 = null;
   if (last) {
@@ -632,9 +643,9 @@ const wireDivList = () => $$('#view [data-div]').forEach((el) => (el.onclick = (
 
 // ---- aportes with their date: the month's aporte is the sum; daily returns use the exact day the money arrived
 const apBRL = (e) => (typeof e.brl === 'number' ? e.brl : e.gbp * (e.g || DB.prices.gbpbrl || 0));   // typed in R$ → exact R$
-// a month's aportes in R$: entries typed in R$ count exactly, the rest at the given rate
-const apMonthBRL = (m, fx, gbpTot) => { const L = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === m), R = L.filter((e) => typeof e.brl === 'number');
-  return R.reduce((t, e) => t + e.brl, 0) + (num(gbpTot) - R.reduce((t, e) => t + e.gbp, 0)) * num(fx); };
+// a month's aportes in R$: each logged entry at the rate of its own day (typed in R$ = exact); only a monthly total typed by hand, with no entries behind it, uses the month's rate
+const apMonthBRL = (m, fx, gbpTot) => { const L = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === m);
+  return L.reduce((t, e) => t + apBRL(e), 0) + (num(gbpTot) - L.reduce((t, e) => t + num(e.gbp), 0)) * num(fx); };
 const apTxt = (e) => (typeof e.brl === 'number' ? brl(Math.abs(e.brl)) : gbp(Math.abs(e.gbp), 2));
 function apSum(month) { const L = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === month); return L.length ? Math.round(L.reduce((a, e) => a + e.gbp, 0) * 100) / 100 : null; }
 function applyApLog(month) {
@@ -1427,10 +1438,15 @@ const gridOpts = () => ({ color: cssVar('--line') });
 
 /* time-weighted return: each month = (end − start − aporte) / (start + ½·aporte), months compounded */
 function returnsData() {
-  const H = DB.history, months = [];
+  const H = histLive(), months = [];
   for (let i = 1; i < H.length; i++) {
     const a = H[i - 1], b = H[i];
     if (typeof a.pat !== 'number' || typeof b.pat !== 'number' || ymDiff(a.month, b.month) !== 1) continue;
+    if (b.live) {   // this month so far: same figure as the Painel
+      if (b.aporteGBP === null || b.aporteGBP === undefined) continue;
+      const C = apMonthBRL(b.month, b.fx, b.aporteGBP), dm = dailyMonth(b.month), ll = liveLocal(portfolio());
+      months.push({ month: b.month, gain: b.pat - a.pat - C, r: dm ? dm.r : (b.pat - a.pat - C) / a.pat, aporte: C, rl: ll ? ll.r : null, live: true }); continue;
+    }
     const lm = localMonth(b.month), rl = lm ? lm.r : null;
     const dm = b.month < ym() ? dailyMonth(b.month) : null; if (dm) { months.push({ ...dm, rl }); continue; }   // daily data covers it → exact
     if (b.aporteGBP === null || b.aporteGBP === undefined) continue; // aporte unknown → month can't be measured
@@ -1939,7 +1955,7 @@ function vAtualizar() {
 
 /* ----- Histórico ----- */
 function vHistorico() {
-  const H = DB.history, R = returnsData(), rByM = Object.fromEntries(R.months.map((m) => [m.month, m])), rByY = Object.fromEntries(R.years.map((y) => [y.year, y]));
+  const H = histLive(), R = returnsData(), rByM = Object.fromEntries(R.months.map((m) => [m.month, m])), rByY = Object.fromEntries(R.years.map((y) => [y.year, y]));
   const years = [...new Set(H.map((h) => h.month.slice(0, 4)))].sort().reverse();
   let sel = years[0]; try { const v = localStorage.getItem('rumo.hsel'); if (years.includes(v) || v === 'all') sel = v; } catch {}
   const ALL = sel === 'all';
@@ -1959,12 +1975,12 @@ function vHistorico() {
       <div class="hm-b">${r !== null ? `<i class="${r < 0 ? 'neg' : 'pos'}" style="width:${Math.max(4, (Math.abs(r) / m2) * 100).toFixed(0)}%"></i>` : ''}</div>
       <div class="hm-r"><b class="money">${lm ? F(cv(lm.pat, lm)) : '–'}</b><small class="${r === null ? '' : r < 0 ? 'neg' : 'pos'}">${r !== null ? signed(pct, r) : '—'}</small></div><span class="gch">›</span></div>`).join(''); };
   const rows = ALL ? yRows() : [...M].reverse().map((h) => { const rm = rByM[h.month], r = rm ? rm.rl ?? rm.r : null, w = r === null ? 0 : Math.max(4, (Math.abs(r) / mx) * 100);
-    return `<div class="hm click" data-m="${h.month}"><div class="hm-l"><b>${MONTHS[Number(h.month.slice(5)) - 1]}</b><small>${h.aporteGBP ? (h.aporteGBP < 0 ? 'retirada ' : 'aporte ') + F(Math.abs(apC(h))) : h.aporteGBP === 0 ? 'sem aporte' : 'aporte não informado'}</small></div>
+    return `<div class="hm click" data-m="${h.month}"><div class="hm-l"><b>${MONTHS[Number(h.month.slice(5)) - 1]}</b><small>${h.live ? '<span class="hlive">até hoje</span> · ' : ''}${h.aporteGBP ? (h.aporteGBP < 0 ? 'retirada ' : 'aporte ') + F(Math.abs(apC(h))) : h.aporteGBP === 0 ? 'sem aporte' : 'aporte não informado'}</small></div>
       <div class="hm-b">${r !== null ? `<i class="${r < 0 ? 'neg' : 'pos'}" style="width:${w.toFixed(0)}%"></i>` : ''}</div>
       <div class="hm-r"><b class="money">${typeof h.pat === 'number' ? F(cv(h.pat, h)) : '–'}</b><small class="${r === null ? '' : r < 0 ? 'neg' : 'pos'}">${r !== null ? signed(pct, r) : '—'}</small></div><span class="gch">›</span></div>`; }).join('');
   $('#view').innerHTML = `<div class="gwrap hi">
    <div class="gl">
-     <div class="glh"><span class="gll">Último mês salvo${lastP ? ' · ' + ymLong(lastP.month).toLowerCase() : ''}</span><button class="gswap" id="h-swap" aria-label="Trocar moeda"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M7 4L3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/></svg> ${sym}</button></div>
+     <div class="glh"><span class="gll">${lastP?.live ? 'Hoje · ' + ymLong(lastP.month).toLowerCase() + ' até agora' : 'Último mês salvo' + (lastP ? ' · ' + ymLong(lastP.month).toLowerCase() : '')}</span><button class="gswap" id="h-swap" aria-label="Trocar moeda"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M7 4L3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/></svg> ${sym}</button></div>
      <div class="gtot money" style="font-size:30px">${lastP ? F(cv(lastP.pat, lastP)) : '–'}</div>
      ${(() => { const y1 = lastP && pts.find((h) => h.month === ymAdd(lastP.month, -12)); if (!y1) return ''; const d = cv(lastP.pat, lastP) - cv(y1.pat, y1);
        return `<div class="gll" style="margin-top:4px"><span class="${d < 0 ? 'neg' : 'pos'}">${signed(F, d)}</span> em 12 meses (vs ${ymLong(y1.month).toLowerCase()}), contando os aportes</div>`; })()}
@@ -1990,7 +2006,7 @@ function vHistorico() {
 }
 // tap a month in Histórico → summary card; tap outside to close, "Editar mês" for the form
 function monthCard(m) {
-  const i = DB.history.findIndex((h) => h.month === m), h = DB.history[i], prev = DB.history[i - 1];
+  const HL = histLive(), i = HL.findIndex((h) => h.month === m), h = HL[i], prev = HL[i - 1]; if (!h) return;
   const varP = prev && typeof prev.pat === 'number' && typeof h.pat === 'number' && ymDiff(prev.month, h.month) === 1 ? h.pat - prev.pat : null;
   const ap = h.aporteGBP !== null && h.aporteGBP !== undefined && h.fx ? apMonthBRL(h.month, h.fx, h.aporteGBP) : null, rend = varP !== null && ap !== null ? varP - ap : null;
   const rm = returnsData().months.find((x) => x.month === m), nLog = (DB.divLog || []).filter((e) => e.date.slice(0, 7) === m).length;
@@ -2436,7 +2452,7 @@ function loadScript(src) { return new Promise((ok, bad) => { const s = document.
 async function exportExcel() {
   if (!(await ask('O arquivo Excel NÃO é criptografado — qualquer pessoa com o arquivo consegue ler. Continuar?'))) return;
   try { if (!window.XLSX) await loadScript('xlsx.mini.min.js'); } catch { return toast('Não consegui carregar o gerador de Excel — tente com internet'); }
-  const X = window.XLSX, wb = X.utils.book_new(), H = DB.history, R = returnsData(), P = portfolio(), cs = P.cs;
+  const X = window.XLSX, wb = X.utils.book_new(), H = histLive(), R = returnsData(), P = portfolio(), cs = P.cs;
   const md = (m) => { const [y, mo] = m.split('-').map(Number); return new Date(Date.UTC(y, mo - 1, 1)); };
   const rByM = Object.fromEntries(R.months.map((m) => [m.month, m]));
   const add = (name, rows, widths, fmts = {}) => {
