@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '8.2';
+const APP_VERSION = '8.3';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1975,7 +1975,8 @@ function vAtualizar() {
      <div class="au-st">${exists ? `<span class="au-ok">✓</span> salvo no Histórico${exists.savedAt ? ' em ' + new Date(exists.savedAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : ''}${exists.auto ? ' (sozinho)' : ''}` : isNow ? `o app salva sozinho em ${endD}` : 'ainda não salvo'}</div>
    </div>
 
-   <div data-k="act" class="au-act"><button class="gl" id="f-ap"><i><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></i><b>Aporte</b><small>ou retirada</small></button><button class="gl" id="f-div"><i><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></i><b>Dividendo</b><small>recebido</small></button></div>
+   <div data-k="act"><button class="gl ev-main" id="f-ev"><i><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></i><span><b>Novo registro</b><small>dinheiro novo, compra, venda, dividendo, juros, gasto…</small></span></button>
+   <div class="ev-alt">Formulários completos: <a href="#" id="f-ap">Aporte / retirada</a> · <a href="#" id="f-div">Dividendo</a></div></div>
 
    <div data-k="mes" class="gl">
      <div class="gll" style="margin-bottom:4px">Em ${mN.toLowerCase()}</div>
@@ -2008,8 +2009,9 @@ function vAtualizar() {
   $('#f-cls-ok') && ($('#f-cls-ok').onclick = async () => { await stamp(nonAuto); ATU.open = 0; render(); });
   $('#f-ap0') && ($('#f-ap0').onclick = async () => { d.aporteGBP = 0; await save(); ATU.open = 0; render(); });
   $('#f-div0') && ($('#f-div0').onclick = async () => { d.divOk = true; await save(); ATU.open = 0; render(); });
-  $('#f-div') && ($('#f-div').onclick = () => editDiv(null));
-  $('#f-ap') && ($('#f-ap').onclick = () => editAp(null));
+  $('#f-div') && ($('#f-div').onclick = (e) => { e.preventDefault(); editDiv(null); });
+  $('#f-ap') && ($('#f-ap').onclick = (e) => { e.preventDefault(); editAp(null); });
+  $('#f-ev') && ($('#f-ev').onclick = () => whatHappened());
   $('#f-ap-all') && ($('#f-ap-all').onclick = (e) => { e.preventDefault(); openApList(); });
   $('#f-ap0') && ($('#f-ap0').onclick = async (e) => { e.preventDefault(); e.stopPropagation(); d.aporteGBP = 0; await save(); render(); });
   $('#f-month').onclick = () => pickMonth(d.month, async (m) => {
@@ -2366,7 +2368,18 @@ function editOp(id) {
       const i = c.log.findIndex((q) => q.id === o.id); if (i > -1) c.log[i] = o; else c.log.push(o);
       c.log.sort((a, b) => (a.date || '').localeCompare(b.date || '')); await save(); closeSheet(); render();
     };
-    if (id) $('#o-del', el).onclick = async () => { if (!(await ask('Apagar esta operação?', { yes: 'Sim, apagar', danger: true }))) return; c.log = c.log.filter((q) => q.id !== id); await save(); closeSheet(); render(); };
+    if (id) $('#o-del', el).onclick = async () => {
+      // a purchase made through Mover / Aporte / "O que aconteceu?" also moved money: delete the whole thing, so the account gets its money back
+      const mv = (DB.mvLog || []).find((e) => e.opId === id), ap = (DB.apLog || []).find((e) => e.opId === id), ev = (DB.evLog || []).find((e) => e.opId === id);
+      if (mv || ap || ev) {
+        const what = mv ? `a movimentação ${mvTxt(mv)}` : ap ? `o aporte de ${apTxt(ap)}` : `"${ev.text}"`;
+        if (!(await ask(`Esta compra foi registrada junto com ${what}.\n\nApagar tudo? O dinheiro volta para a conta de onde saiu.`, { yes: 'Sim, apagar tudo', danger: true }))) return;
+        if (mv) { mvApply(mv, -1); DB.mvLog = DB.mvLog.filter((e) => e.id !== mv.id); }
+        if (ap) dropAp(ap.id);
+        if (ev) undoEvent(ev.id);
+        c.log = c.log.filter((q) => q.id !== id); await save(); closeSheet(); render(); toast('Apagado — saldos de volta ao que eram'); return;
+      }
+      if (!(await ask('Apagar esta operação?', { yes: 'Sim, apagar', danger: true }))) return; c.log = c.log.filter((q) => q.id !== id); await save(); closeSheet(); render(); };
   });
 }
 
@@ -2630,6 +2643,200 @@ if (localStorage.getItem(K_META) && localStorage.getItem(K_DATA)) {
   else showLock('unlock');
 }
 else { localStorage.removeItem(K_META); showLock('setup'); }
+
+/* ---------------- "O que aconteceu?" — log real-life events; the app works out aporte / retirada / move behind the scenes ---------------- */
+const ACC = { t212cash: { n: 'T212 caixa', cur: 'GBP' }, caixa: { n: 'Caixa', cur: 'BRL' }, rfBrasil: { n: 'Renda fixa Brasil', cur: 'BRL' } };
+const accOpts = (sel, extra = []) => [...extra, ...Object.entries(ACC).map(([k, v]) => [k, v.n])].map(([k, n]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${n}</option>`).join('');
+const money = (cur, v) => (cur === 'GBP' ? gbp(v, 2) : cur === 'USD' ? usd(v, 2) : brl(v, 2));
+const symC = (cur) => (cur === 'GBP' ? '£' : cur === 'USD' ? 'US$' : 'R$');
+const conv = (v, from, to) => (from === to ? v : (v * FXOF(from)) / (FXOF(to) || 1));   // at today's rates
+const KINDS = [['acoes', 'Ação (B3)'], ['fiis', 'FII'], ['stocks', 'Exterior (T212)'], ['cripto', 'Cripto']];
+const payCur = (k) => (k === 'stocks' ? 'GBP' : k === 'cripto' ? 'USD' : 'BRL');   // the currency you pay in for each kind
+
+// new money in / out (an aporte or a retirada), same record the Aporte form makes
+function addAp({ amt, cur, to, date, note, out }) {
+  const g0 = num(DB.prices.gbpbrl) || 1, sv = out ? -amt : amt, inBRL = cur === 'BRL';
+  const o = { id: uid(), gbp: inBRL ? Math.round((sv / g0) * 100) / 100 : Math.round(sv * 100) / 100, brl: inBRL ? sv : undefined, gFixed: false, date, dest: inBRL ? 'brl' : 'gbp', note: note || '', at: new Date().toISOString(), g: DB.prices.gbpbrl };
+  if (to) { o.to = to; o.toAmt = toPlace(sv, cur, to, { g: o.g }); }
+  const m = date.slice(0, 7), first = !(DB.apLog || []).some((e) => e.date.slice(0, 7) === m), typed = DB.draft.month === m ? DB.draft.aporteGBP : DB.history.find((h) => h.month === m)?.aporteGBP;
+  if (first && typed) DB.apLog.push({ id: uid(), gbp: typed, date: m + '-01', note: 'digitado antes', at: new Date(0).toISOString(), g: DB.history.find((h) => h.month === m)?.fx || DB.prices.gbpbrl });
+  placeApply(o, 1); DB.apLog.push(o); applyApLog(m); return o.id;
+}
+function dropAp(id) {   // silent delete, used by "Desfazer"
+  const x = DB.apLog.find((e) => e.id === id); if (!x) return; const m = x.date.slice(0, 7);
+  placeApply(x, -1); DB.apLog = DB.apLog.filter((e) => e.id !== id);
+  if (apSum(m) === null) { if (DB.draft.month === m) DB.draft.aporteGBP = 0; const h = DB.history.find((q) => q.month === m); if (h) h.aporteGBP = 0; } else applyApLog(m);
+}
+const balAdd = (p, d) => { DB.balances[p] = Math.round((num(DB.balances[p]) + d) * 100) / 100; (DB.settings.balAt ||= {})[p] = new Date().toISOString(); };
+
+function undoEvent(id) {
+  const e = (DB.evLog || []).find((x) => x.id === id); if (!e) return;
+  if (e.apId) dropAp(e.apId);
+  if (e.opId) DB.crypto.log = DB.crypto.log.filter((o) => o.id !== e.opId);
+  for (const b of e.bal || []) balAdd(b.p, -b.d);
+  if (e.asset) { const a = DB.assets.find((x) => x.id === e.asset.id);
+    if (a) { if (e.asset.created) DB.assets = DB.assets.filter((x) => x.id !== a.id); else { a.qty = Math.round((num(a.qty) - e.asset.dq) * 1e8) / 1e8; a.avg = e.asset.prevAvg; } } }
+  DB.evLog = DB.evLog.filter((x) => x.id !== id);
+}
+async function finishEvent(ev, msg) { (DB.evLog ||= []).push({ id: uid(), at: new Date().toISOString(), ...ev }); await save(); closeSheet(); render(); doneTick(); toast('✓ ' + msg, 5000); }
+
+// a small live line under each form: exactly what will happen when you tap Salvar
+const sumBox = (id) => `<div class="ev-sum" id="${id}"></div>`;
+const sumSet = (el, lines) => { $('#ev-sum', el).innerHTML = lines.filter(Boolean).map((l) => `<div>${l}</div>`).join(''); };
+
+const EV_UNDO_MS = 7 * 864e5;   // "Desfazer" only for the last 7 days: older entries may have been built on since
+const evRecent = (e) => Date.now() - new Date(e.at).getTime() < EV_UNDO_MS;
+const evRow = (e) => `<div class="ps-step ev-row"><span>${esc(e.text)}<br><small class="muted">${dmy(e.date)}</small></span>${evRecent(e) ? `<button class="btn ev-undo" data-undo="${e.id}">Desfazer</button>` : ''}</div>`;
+async function evUndoClick(id, back) { const e = DB.evLog.find((x) => x.id === id);
+  if (!(await ask(`Desfazer "${e.text}"? Saldos, ativos e aportes voltam ao que eram antes.`, { yes: 'Sim, desfazer', danger: true }))) return; undoEvent(e.id); await save(); render(); back(); toast('Desfeito'); }
+function evAll() {
+  const L = [...(DB.evLog || [])].sort((a, b) => b.at.localeCompare(a.at));
+  openSheet(`<h3>Todos os registros</h3><p class="small muted" style="margin:-4px 0 10px">Os dos últimos 7 dias podem ser desfeitos aqui. Para mudar um mais antigo, edite o ativo, o aporte ou a operação de cripto.</p>
+    <div class="ps-card">${L.length ? L.map(evRow).join('') : '<div class="small muted" style="padding:10px">Nada registrado ainda.</div>'}</div>
+    <button class="btn block" onclick="whatHappened()" style="margin-top:12px">Voltar</button>`, (el) => $$('[data-undo]', el).forEach((b) => (b.onclick = () => evUndoClick(b.dataset.undo, evAll))));
+}
+function whatHappened() {
+  const all = DB.evLog || [], L = [...all].filter(evRecent).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 3);
+  const it = (k, t, s) => `<button class="ev-btn" data-ev="${k}"><b>${t}</b><small>${s}</small></button>`;
+  openSheet(`<h3>O que aconteceu?</h3>
+    <div class="ev-list">
+      ${it('new', 'Recebi dinheiro novo', 'salário, economias — entrou dinheiro de fora')}
+      ${it('buy', 'Comprei um investimento', 'ação, FII, Trading 212 ou cripto')}
+      ${it('sell', 'Vendi um investimento', 'e para onde foi o dinheiro')}
+      ${it('div', 'Recebi dividendo', 'de uma ação, FII ou da Trading 212')}
+      ${it('int', 'Rendeu juros', 'renda fixa ou caixa cresceu sozinho')}
+      ${it('spend', 'Gastei / tirei dinheiro', 'conta paga, compra — saiu do patrimônio')}
+      ${it('move', 'Passei dinheiro entre contas', 'ex.: Caixa → Renda fixa, T212 → Coinbase')}
+    </div>
+    ${L.length ? `<div class="ps-h">Últimos registros</div><div class="ps-card">${L.map(evRow).join('')}</div>` : ''}
+    ${all.length ? `<div class="ev-alt" style="margin:10px 0 0"><a href="#" id="ev-all">Ver todos os registros (${all.length})</a></div>` : ''}
+    <button class="btn block" onclick="closeSheet()" style="margin-top:12px">Fechar</button>`, (el) => {
+    const go = { new: evNew, buy: evBuy, sell: evSell, div: () => editDiv(null), int: evInterest, spend: evSpend, move: () => editMove(null) };
+    $$('[data-ev]', el).forEach((b) => (b.onclick = () => go[b.dataset.ev]()));
+    $$('[data-undo]', el).forEach((b) => (b.onclick = () => evUndoClick(b.dataset.undo, whatHappened)));
+    $('#ev-all', el) && ($('#ev-all', el).onclick = (e) => { e.preventDefault(); evAll(); });
+  });
+}
+
+function evNew() {
+  openSheet(`<h3>Recebi dinheiro novo</h3><p class="small muted" style="margin:-4px 0 10px">Dinheiro que veio de fora (salário, economias). Conta como aporte — não é lucro.</p>
+    <div class="field"><label>Caiu em</label><select id="ev-to">${accOpts((DB.settings.lastTo || {}).ev || 't212cash')}</select></div>
+    <div class="field"><label id="ev-v-l">Valor</label><input id="ev-v" class="pt" inputmode="decimal"></div>
+    <div class="field"><label>Data</label><input type="date" id="ev-d" value="${today()}"></div>
+    <div class="field"><label>Nota<small>opcional</small></label><input id="ev-n" style="text-align:left" placeholder="ex.: salário"></div>
+    ${sumBox('ev-sum')}<button class="btn primary block" id="ev-save">Salvar</button><button class="btn block" onclick="whatHappened()">Voltar</button>`, (el) => {
+    $$('input.pt', el).forEach(liveFormat);
+    const sync = () => { const t = $('#ev-to', el).value, c = ACC[t].cur, v = parsePT($('#ev-v', el).value); $('#ev-v-l', el).textContent = `Valor (${symC(c)})`;
+      sumSet(el, v ? [`${ACC[t].n} <b class="pos">+${money(c, v)}</b>`, `Aporte de ${money(c, v)} este mês`] : ['Digite o valor']); };
+    $('#ev-to', el).onchange = sync; $('#ev-v', el).addEventListener('input', sync); sync();
+    $('#ev-save', el).onclick = async () => { const t = $('#ev-to', el).value, c = ACC[t].cur, v = parsePT($('#ev-v', el).value), d = $('#ev-d', el).value || today(); if (!v) return toast('Digite o valor');
+      (DB.settings.lastTo ||= {}).ev = t; const apId = addAp({ amt: v, cur: c, to: t, date: d, note: $('#ev-n', el).value.trim() });
+      finishEvent({ kind: 'new', date: d, apId, text: `Dinheiro novo ${money(c, v)} → ${ACC[t].n}` }, `Aporte de ${money(c, v)} em ${ACC[t].n}`); };
+  });
+}
+
+function evSpend() {
+  openSheet(`<h3>Gastei / tirei dinheiro</h3><p class="small muted" style="margin:-4px 0 10px">Dinheiro que saiu do patrimônio para ser gasto. Conta como retirada — não é prejuízo.<br>Só mudou de conta? Use <a href="#" id="ev-mv">Passei dinheiro entre contas</a>.</p>
+    <div class="field"><label>Saiu de</label><select id="ev-to">${accOpts('caixa')}</select></div>
+    <div class="field"><label id="ev-v-l">Valor</label><input id="ev-v" class="pt" inputmode="decimal"></div>
+    <div class="field"><label>Data</label><input type="date" id="ev-d" value="${today()}"></div>
+    <div class="field"><label>Nota<small>opcional</small></label><input id="ev-n" style="text-align:left" placeholder="ex.: conta de luz"></div>
+    ${sumBox('ev-sum')}<button class="btn primary block" id="ev-save">Salvar</button><button class="btn block" onclick="whatHappened()">Voltar</button>`, (el) => {
+    $$('input.pt', el).forEach(liveFormat); $('#ev-mv', el).onclick = (e) => { e.preventDefault(); editMove(null); };
+    const sync = () => { const t = $('#ev-to', el).value, c = ACC[t].cur, v = parsePT($('#ev-v', el).value); $('#ev-v-l', el).textContent = `Valor (${symC(c)})`;
+      sumSet(el, v ? [`${ACC[t].n} <b class="neg">−${money(c, v)}</b>`, `Retirada de ${money(c, v)} este mês`] : ['Digite o valor']); };
+    $('#ev-to', el).onchange = sync; $('#ev-v', el).addEventListener('input', sync); sync();
+    $('#ev-save', el).onclick = async () => { const t = $('#ev-to', el).value, c = ACC[t].cur, v = parsePT($('#ev-v', el).value), d = $('#ev-d', el).value || today(); if (!v) return toast('Digite o valor');
+      const apId = addAp({ amt: v, cur: c, to: t, date: d, note: $('#ev-n', el).value.trim(), out: true });
+      finishEvent({ kind: 'spend', date: d, apId, text: `Gasto ${money(c, v)} de ${ACC[t].n}` }, `Retirada de ${money(c, v)} de ${ACC[t].n}`); };
+  });
+}
+
+function evInterest() {
+  openSheet(`<h3>Rendeu juros</h3><p class="small muted" style="margin:-4px 0 10px">A conta cresceu sozinha (juros, rendimento). Digite o saldo novo que o banco mostra — a diferença conta como lucro.</p>
+    <div class="field"><label>Conta</label><select id="ev-to">${accOpts('rfBrasil')}</select></div>
+    <div class="field"><label id="ev-v-l">Saldo novo</label><input id="ev-v" class="pt" inputmode="decimal"></div>
+    ${sumBox('ev-sum')}<button class="btn primary block" id="ev-save">Salvar</button><button class="btn block" onclick="whatHappened()">Voltar</button>`, (el) => {
+    $$('input.pt', el).forEach(liveFormat);
+    const fill = () => { const t = $('#ev-to', el).value; $('#ev-v', el).value = fmtN(num(DB.balances[t]), 2); sync(); };
+    const sync = () => { const t = $('#ev-to', el).value, c = ACC[t].cur, v = parsePT($('#ev-v', el).value), old = num(DB.balances[t]), d = v - old; $('#ev-v-l', el).textContent = `Saldo novo (${symC(c)})`;
+      sumSet(el, [`${ACC[t].n}: ${money(c, old)} → <b>${money(c, v || 0)}</b>`, d ? `<b class="${d < 0 ? 'neg' : 'pos'}">${d < 0 ? '−' : '+'}${money(c, Math.abs(d))}</b> conta como ${d < 0 ? 'prejuízo' : 'lucro'}` : 'Sem mudança']); };
+    $('#ev-to', el).onchange = fill; $('#ev-v', el).addEventListener('input', sync); fill();
+    $('#ev-save', el).onclick = async () => { const t = $('#ev-to', el).value, c = ACC[t].cur, v = parsePT($('#ev-v', el).value), d = Math.round((v - num(DB.balances[t])) * 100) / 100; if (!d) return closeSheet();
+      balAdd(t, d); finishEvent({ kind: 'int', date: today(), bal: [{ p: t, d }], text: `Juros ${d < 0 ? '−' : '+'}${money(c, Math.abs(d))} em ${ACC[t].n}` }, `${ACC[t].n} atualizado`); };
+  });
+}
+
+// buy or sell: one form, the app updates the asset (quantity + average), the account, and logs an aporte only for new money
+function evTrade(sell) {
+  const kinds = KINDS.map(([k, n]) => `<option value="${k}">${n}</option>`).join('');
+  const people = DB.crypto.people || [];
+  openSheet(`<h3>${sell ? 'Vendi um investimento' : 'Comprei um investimento'}</h3>
+    <div class="field"><label>O quê</label><select id="tr-k">${kinds}</select></div>
+    <div class="field"><label>Ativo</label><select id="tr-a"></select></div>
+    <div class="field hidden" id="tr-new-f"><label>Ticker novo</label><input id="tr-new" autocapitalize="characters" style="text-align:left" placeholder="ex.: VUAG"></div>
+    ${people.length > 1 ? `<div class="field hidden" id="tr-who-f"><label>Quem</label><select id="tr-who">${people.map((w) => `<option>${esc(w)}</option>`).join('')}</select></div>` : ''}
+    <div class="field"><label>${sell ? 'Quantidade vendida' : 'Quantidade comprada'}</label><input id="tr-q" class="pt" inputmode="decimal"></div>
+    <div class="field"><label id="tr-v-l">Valor</label><input id="tr-v" class="pt" inputmode="decimal"></div>
+    <div class="field"><label>${sell ? 'O dinheiro foi para' : 'Pago com'}</label><select id="tr-p">${sell ? accOpts('t212cash', [['spent', 'Gastei — saiu do patrimônio']]) : accOpts('t212cash', [['new', 'Dinheiro novo (de fora)']])}</select></div>
+    <div class="field hidden" id="tr-x-f"><label id="tr-x-l">Saiu da conta</label><input id="tr-x" class="pt" inputmode="decimal"></div>
+    <div class="field"><label>Data</label><input type="date" id="tr-d" value="${today()}"></div>
+    ${sumBox('ev-sum')}<button class="btn primary block" id="tr-save">Salvar</button><button class="btn block" onclick="whatHappened()">Voltar</button>`, (el) => {
+    $$('input.pt', el).forEach(liveFormat);
+    let typedX = false; $('#tr-x', el).addEventListener('input', () => (typedX = true));
+    const coins = () => cryptoSummary().coins.map((c) => c.k);
+    const fillA = () => { const k = $('#tr-k', el).value;
+      const opts = k === 'cripto' ? (sell ? coins() : COINS.map((c) => c.k)).map((c) => [c, c]) : DB.assets.filter((a) => a.cls === k).sort((a, b) => a.ticker.localeCompare(b.ticker)).map((a) => [a.id, a.ticker]);
+      $('#tr-a', el).innerHTML = opts.map(([v, n]) => `<option value="${v}">${esc(n)}</option>`).join('') + (!sell && k !== 'cripto' ? '<option value="__new">+ Ativo novo…</option>' : '');
+      $('#tr-who-f', el)?.classList.toggle('hidden', k !== 'cripto'); sync(); };
+    const S = () => { const k = $('#tr-k', el).value, aid = $('#tr-a', el).value, isNew = aid === '__new', a = k !== 'cripto' && !isNew ? DB.assets.find((x) => x.id === aid) : null;
+      const q = parsePT($('#tr-q', el).value), v = parsePT($('#tr-v', el).value), p = $('#tr-p', el).value, vc = payCur(k), pc = ACC[p]?.cur || vc;
+      return { k, aid, isNew, a, q, v, p, vc, pc, x: ACC[p] && pc !== vc ? parsePT($('#tr-x', el).value) || conv(v, vc, pc) : v, name: isNew ? ($('#tr-new', el).value || '').trim().toUpperCase() : k === 'cripto' ? aid : a?.ticker };
+    };
+    const sync = () => { const s = S();
+      $('#tr-new-f', el).classList.toggle('hidden', !s.isNew);
+      $('#tr-v-l', el).textContent = `${sell ? 'Valor recebido' : 'Valor pago'} (${symC(s.vc)})${s.k === 'stocks' ? ' — como a T212 mostra' : ''}`;
+      const cross = !!ACC[s.p] && s.pc !== s.vc; $('#tr-x-f', el).classList.toggle('hidden', !cross);
+      if (cross) { $('#tr-x-l', el).textContent = `${sell ? 'Chegou na conta' : 'Saiu da conta'} (${symC(s.pc)})`; if (!typedX && s.v) $('#tr-x', el).value = fmtN(conv(s.v, s.vc, s.pc), 2); }
+      if (!s.q || !s.v || !s.name) return sumSet(el, ['Preencha ativo, quantidade e valor']);
+      const lines = [`${esc(s.name)} <b class="${sell ? 'neg' : 'pos'}">${sell ? '−' : '+'}${s.q.toLocaleString('pt-BR', { maximumFractionDigits: 8 })}</b>`];
+      if (ACC[s.p]) lines.push(`${ACC[s.p].n} <b class="${sell ? 'pos' : 'neg'}">${sell ? '+' : '−'}${money(s.pc, s.x)}</b>`);
+      lines.push(s.p === 'new' ? `Aporte de ${money(s.vc === 'USD' ? 'GBP' : s.vc, s.vc === 'USD' ? conv(s.v, 'USD', 'GBP') : s.v)} este mês` : s.p === 'spent' ? `Retirada de ${money(s.vc === 'USD' ? 'GBP' : s.vc, s.vc === 'USD' ? conv(s.v, 'USD', 'GBP') : s.v)} este mês` : 'Não é aporte nem retirada — seu resultado não muda');
+      if (!sell && s.a && num(s.a.qty) > 0 && s.a.avg) { const na = newAvg(s.a, s.q, s.v); if (na) lines.push(`Preço médio ${fmtAvg(s.a, s.a.avg)} → <b>${fmtAvg(s.a, na)}</b>`); }
+      sumSet(el, lines);
+    };
+    $('#tr-k', el).onchange = fillA; ['#tr-a', '#tr-p'].forEach((k) => ($(k, el).onchange = sync)); ['#tr-q', '#tr-v', '#tr-x', '#tr-new'].forEach((k) => $(k, el).addEventListener('input', sync)); fillA();
+    $('#tr-save', el).onclick = async () => { const s = S(), d = $('#tr-d', el).value || today();
+      if (!s.name) return toast('Escolha o ativo'); if (!s.q || !s.v) return toast('Digite quantidade e valor');
+      const ev = { kind: sell ? 'sell' : 'buy', date: d, bal: [] };
+      if (s.k === 'cripto') {
+        if (sell) { const have = cryptoSummary().coins.find((c) => c.k === s.aid)?.units || 0; if (s.q > have + 1e-9) return toast(`Você tem ${have.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} ${s.aid}`); }
+        const id = uid(); DB.crypto.log.push({ id, date: d, name: $('#tr-who', el)?.value || DB.crypto.people[0], op: sell ? 'Sold' : 'Buy', coin: s.aid, qty: s.q, value: s.v, price: s.v / s.q }); DB.crypto.log.sort((a, b) => (a.date || '').localeCompare(b.date || '')); ev.opId = id;
+      } else if (s.isNew) {
+        const cls = s.k, na = { id: uid(), cls, ticker: s.name, kind: cls === 'stocks' ? 'Stock' : '', market: ACLS.find((c) => c.k === cls).market, currency: cls === 'stocks' ? 'USD' : 'BRL', avgCur: cls === 'stocks' ? 'GBP' : 'ASSET', qty: s.q, avg: s.v / s.q, manualPrice: null, priceAt: new Date().toISOString() };
+        na.price = conv(s.v / s.q, cls === 'stocks' ? 'GBP' : 'BRL', na.currency);   // worth what you paid until its first real price arrives
+        DB.assets.push(na); ev.asset = { id: na.id, dq: s.q, prevAvg: null, created: true };
+      } else {
+        const a = s.a; if (sell && s.q > num(a.qty) + 1e-9) return toast(`Você tem ${num(a.qty).toLocaleString('pt-BR', { maximumFractionDigits: 8 })} ${a.ticker}`);
+        ev.asset = { id: a.id, dq: sell ? -s.q : s.q, prevAvg: a.avg ?? null, created: false };
+        if (!sell) a.avg = num(a.qty) > 0 ? (a.avg ? newAvg(a, s.q, s.v) : null) : avgFromPaid(a, s.q, s.v);
+        a.qty = Math.round((num(a.qty) + ev.asset.dq) * 1e8) / 1e8;
+      }
+      if (ACC[s.p]) { const dlt = sell ? s.x : -s.x; balAdd(s.p, dlt); ev.bal.push({ p: s.p, d: dlt }); }
+      else { const cur = s.vc === 'USD' ? 'GBP' : s.vc, amt = s.vc === 'USD' ? conv(s.v, 'USD', 'GBP') : s.v; ev.apId = addAp({ amt, cur, to: '', date: d, note: `${sell ? 'venda' : 'compra'} ${s.name}`, out: sell }); }
+      ev.text = `${sell ? 'Vendi' : 'Comprei'} ${s.q.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} ${s.name} · ${money(s.vc, s.v)}${ACC[s.p] ? (sell ? ' → ' : ' ← ') + ACC[s.p].n : s.p === 'new' ? ' · dinheiro novo' : ' · gasto'}`;
+      await finishEvent(ev, ev.text);
+      if (ev.asset?.created) setTimeout(() => { toast('Confira de onde vem o preço do ativo novo', 4000); editAsset(ev.asset.id); }, 600);
+    };
+  });
+}
+const evBuy = () => evTrade(false), evSell = () => evTrade(true);
+// the average price after a purchase, in the currency the average is kept in (B3: R$ · Trading 212: £ unless set to the asset's own currency)
+const avgCurOf = (a) => (a.cls === 'stocks' && a.avgCur !== 'ASSET' ? 'GBP' : curOf(a));
+const paidIn = (a, v) => conv(v, a.cls === 'stocks' ? 'GBP' : 'BRL', avgCurOf(a));
+const newAvg = (a, q, v) => (num(a.qty) * num(a.avg) + paidIn(a, v)) / (num(a.qty) + q);
+const avgFromPaid = (a, q, v) => paidIn(a, v) / q;
+const fmtAvg = (a, v) => (avgCurOf(a) === 'GBP' ? '£ ' + nf2.format(v) : fmtPx(avgCurOf(a), v));
 
 /* ---------------- study mode (Ajustes → Explicar cálculos): tap any underlined % to see how it is calculated ---------------- */
 const studyOn = () => !!DB && (DB.settings.study ?? PREVIEW);
