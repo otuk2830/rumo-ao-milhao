@@ -1047,10 +1047,9 @@ html:not(.dark) .ev-btn{border-color:rgba(0,0,0,.08); background:rgba(0,0,0,.03)
 .dyl i{display:inline-block; width:10px; height:10px; border-radius:3px; background:var(--g-acc2); margin-right:5px; vertical-align:-1px}
 .dyl s{display:inline-block; width:10px; height:10px; border-radius:3px; background:color-mix(in srgb, var(--g-mut) 32%, transparent); margin-right:5px; vertical-align:-1px}
 html.priv .dym .money, html.priv .dys .money{filter:blur(6px)}
-/* 9.3 — Conquistas */
-.mks{margin-top:14px} .mkh{font-weight:600; font-size:15px; margin-bottom:6px} .mkh small{font-weight:400; color:var(--g-mut); font-size:12px; margin-left:6px}
-.mk{display:grid; grid-template-columns:14px 78px 1fr auto; gap:10px; align-items:center; padding:9px 0; border-top:1px solid var(--g-track); font-size:14px}
-.mk b{width:11px; height:11px; border-radius:50%; border:1.5px solid var(--g-mut)} .mk.ok b{background:var(--g-acc2); border-color:transparent}
-.mk .mkv{font-weight:600; font-variant-numeric:tabular-nums} .mk .mkd{color:var(--g-ink, inherit)} .mk:not(.ok) .mkd, .mk .mkg{color:var(--g-mut); font-size:12.5px; text-align:right}
-.mkr{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:12px} .mkr > div{display:flex; flex-direction:column; gap:2px} .mkr b{font-size:15px}
-.gms.click{cursor:pointer}
+/* 9.5 — milestone rows scroll sideways: all of them, oldest on the left */
+.gms.scr{justify-content:flex-start; overflow-x:auto; scroll-snap-type:x mandatory; scrollbar-width:none; -webkit-overflow-scrolling:touch; overscroll-behavior-x:contain;
+  -webkit-mask-image:linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%); mask-image:linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%)}
+.gms.scr::-webkit-scrollbar{display:none}
+.gms.scr > div{flex:0 0 20%; scroll-snap-align:start} .gms.scr.s4 > div{flex-basis:25%}
+.gms.scr small{display:block; margin-top:2px}

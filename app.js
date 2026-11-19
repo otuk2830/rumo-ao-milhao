@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '9.4';
+const APP_VERSION = '9.5';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -260,35 +260,11 @@ function historyStats() {
   const divLife = H.reduce((s, h) => s + divTotal(h), 0);
   return { last, cresc12, year, divYear, monthsWithDiv, divLife };
 }
-// Records: the first month-end your patrimônio reached each step of the goal, and each R$ 10 mil of dividends received.
-// When daily snapshots cover that month, the exact day is used. Steps already passed in your first saved month say "até".
+// Each R$ 10 mil of dividends received in total: the month it was passed (this month included)
 function marcos() {
-  const H = histLive(), meta = num(DB.settings.meta), step = meta / 10, first = H[0]?.month;
-  const dayIn = (m, v) => { for (const x of DB.daily || []) if (x.d.slice(0, 7) === m && num(x.v) >= v) return x.d; return null; };
-  const pat = []; if (step > 0) for (let i = 1; i <= 10; i++) { const v = step * i, h = H.find((x) => typeof x.pat === 'number' && x.pat >= v); pat.push({ v, m: h?.month || null, d: h ? dayIn(h.month, v) : null, before: !!h && h.month === first, live: !!h?.live }); }
-  const div = []; let acc = 0, k = 1; const dstep = 10000;
-  for (const h of H) { acc += divTotal(h); while (acc >= k * dstep) { div.push({ v: k * dstep, m: h.month, before: h.month === first, live: !!h.live }); k++; } }
-  const gap = (L) => L.forEach((x, i) => { const p = L[i - 1]; x.n = x.m && p?.m && !x.before ? ymDiff(p.m, x.m) : null; });
-  gap(pat); gap(div);
-  // records
-  const mDiv = H.map((h) => ({ m: h.month, v: divTotal(h) })).filter((x) => x.v > 0), bestM = mDiv.reduce((b, x) => (!b || x.v > b.v ? x : b), null);
-  const yD = {}; for (const x of mDiv) yD[x.m.slice(0, 4)] = (yD[x.m.slice(0, 4)] || 0) + x.v; const bestY = Object.entries(yD).sort((a, b) => b[1] - a[1])[0] || null;
-  const last12 = H.filter((h) => h.month > ymAdd(ym(), -12)).reduce((t, h) => t + divTotal(h), 0);
-  return { pat, div, divLife: acc, nextDiv: (k) * dstep, divPerMonth: last12 / 12, bestM, bestY, step };
-}
-function showMarcos(first) {
-  const M = marcos(), P = portfolio(), st = historyStats();
-  const when = (x) => (x.d ? new Date(x.d + 'T12:00').toLocaleDateString('pt-BR') : MONTHS[Number(x.m.slice(5)) - 1].toLowerCase() + ' ' + x.m.slice(0, 4));
-  const gapTxt = (n) => (n === null || n === undefined ? '' : n === 0 ? 'no mesmo mês' : n < 12 ? `+${n} ${n === 1 ? 'mês' : 'meses'}` : `+${Math.floor(n / 12)}a${n % 12 ? ` ${n % 12}m` : ''}`);
-  const eta = (falta, perMonth) => (perMonth > 0 ? ymLabel(ymAdd(ym(), Math.ceil(falta / perMonth))) : null);
-  const row = (x, label) => `<div class="mk ${x.m ? 'ok' : ''}"><b></b><span class="mkv">${label}</span><span class="mkd">${x.m ? (x.before ? `até ${when(x)}` : when(x)) + (x.live ? ' · este mês' : '') : x.eta ? `previsão ${x.eta}` : '—'}</span><span class="mkg">${x.m ? gapTxt(x.n) : x.falta ? `faltam ${nf0.format(Math.ceil(x.falta))}` : ''}</span></div>`;
-  const nxP = M.pat.find((x) => !x.m); if (nxP) { nxP.falta = Math.max(0, nxP.v - P.total); nxP.eta = st.cresc12 > 0 ? eta(nxP.falta, st.cresc12) : null; }
-  const dv = [...M.div, { v: M.nextDiv, m: null, falta: M.nextDiv - M.divLife, eta: eta(M.nextDiv - M.divLife, M.divPerMonth) }];
-  const lab = (v) => (v >= 1e6 ? `R$ ${nf0.format(v / 1e6)} mi` : `R$ ${nf0.format(v / 1000)} mil`);
-  const secP = `<div class="mks"><div class="mkh">Patrimônio <small>a cada ${lab(M.step)}</small></div>${M.pat.filter((x) => x.m || x === nxP).map((x) => row(x, lab(x.v))).join('')}${M.pat.every((x) => x.m) ? '<p class="gll">Meta alcançada 🎉</p>' : ''}</div>`;
-  const secD = `<div class="mks"><div class="mkh">Dividendos recebidos <small>a cada R$ 10 mil</small></div>${dv.map((x) => row(x, lab(x.v))).join('')}
-    <div class="mkr">${M.bestM ? `<div><span class="gll">Maior mês</span><b class="money">${brl(M.bestM.v)}</b><span class="gll">${ymLabel(M.bestM.m)}</span></div>` : ''}${M.bestY ? `<div><span class="gll">Maior ano</span><b class="money">${brl(M.bestY[1])}</b><span class="gll">${M.bestY[0]}</span></div>` : ''}<div><span class="gll">Na vida</span><b class="money">${brl(M.divLife)}</b><span class="gll">média ${brl(M.divPerMonth)}/mês (12m)</span></div></div></div>`;
-  openSheet(`<h3>Conquistas</h3>${first === 'div' ? secD + secP : secP + secD}<p class="small muted" style="margin-top:10px">Datas pelo fechamento de cada mês (ou o dia exato, quando há registro diário). Previsões pelo ritmo dos últimos 12 meses.</p><button class="btn block" onclick="closeSheet()" style="margin-top:12px">Fechar</button>`);
+  const H = histLive(), div = []; let acc = 0, k = 1; const step = 10000;
+  for (const h of H) { acc += divTotal(h); while (acc >= k * step) { div.push({ v: k * step, m: h.month }); k++; } }
+  return { div };
 }
 function milestones() {
   const meta = num(DB.settings.meta), step = meta / 10, H = histLive().filter((h) => typeof h.pat === 'number');
@@ -1752,7 +1728,7 @@ function vPainel() {
   const GC = { fiis: 'var(--g-c1)', crypto: 'var(--g-c2)', rf: 'var(--g-c3)', acoes: 'var(--g-c4)', stocks: 'var(--g-c5)', caixa: 'var(--g-c6)' };
   const GO = { acoes: "ATV.seg='acoes';location.hash='#ativos'", fiis: "ATV.seg='fiis';location.hash='#ativos'", stocks: "ATV.seg='stocks';location.hash='#ativos'", crypto: "location.hash='#cripto'", rf: "location.hash='#atualizar'", caixa: "location.hash='#atualizar'" };
   const cats = [...P.alloc.map((a) => ({ k: a.k, n: a.k === 'crypto' ? 'Cripto' : a.n, v: a.v, cur: a.cur, tgt: a.tgt })), { k: 'caixa', n: 'Caixa', v: num(DB.balances.caixa), cur: null, tgt: null }].sort((x, y) => y.v - x.v);
-  const nx = P.alloc.find((a) => a.n === P.next.n), hitN = ms.filter((m) => m.hit).length, win = ms.slice(Math.max(0, Math.min(hitN - 2, ms.length - 5)), Math.max(0, Math.min(hitN - 2, ms.length - 5)) + 5);
+  const nx = P.alloc.find((a) => a.n === P.next.n);
   const msL = (v) => (v >= 1e6 ? nf0.format(v / 1e6) + ' mi' : nf0.format(v / 1000) + ' mil');
   const R0 = 44, C0 = 2 * Math.PI * R0;
   const DO = '1';
@@ -1800,7 +1776,7 @@ function vPainel() {
        <div style="min-width:0;flex:1"><div class="gll">Rumo a ${brl(meta)}</div><div class="gfalta">faltam <span class="money">${CV(pr.falta)}</span></div>
        <div class="gpred">${pr.ritmo ? `<div><b>${ymLabel(pr.ritmo)}</b><span>no ritmo atual</span></div>` : ''}${pr.cenario ? `<div><b>${ymLabel(pr.cenario)}</b><span>no plano<em class="money">${gbp(s.aportePlanGBP)} por mês</em></span></div>` : ''}${!pr.ritmo && !pr.cenario ? '<div><b>—</b><span>precisa de 12 meses salvos</span></div>' : ''}</div></div>
      </div>
-     <div class="gms click" onclick="showMarcos('pat')" title="Ver todas as conquistas">${win.map((m) => `<div class="${m.hit ? 'ok' : m === nextMs ? 'nx' : ''}"><b></b>${msL(m.v)}${m === nextMs && etaMs ? `<small>${ymLabel(etaMs)}</small>` : ''}</div>`).join('')}</div>
+     <div class="gms scr" id="mrow">${ms.map((m) => `<div class="${m.hit ? 'ok' : m === nextMs ? 'nx' : ''}"><b></b>${msL(m.v)}<small>${m.hit ? ymLabel(m.hit) : m === nextMs && etaMs ? ymLabel(etaMs) : '&nbsp;'}</small></div>`).join('')}</div>
    </div>
 
 
@@ -1835,7 +1811,7 @@ function vPainel() {
    </div>
 
   </div>`;
-  { const r = $('#mrow'), k = ms.indexOf(nextMs); if (r && k > 0) r.scrollLeft = Math.max(0, (k - 2) * 70); }   // show the last 2 reached + the next one
+  requestAnimationFrame(() => { const r = $('#mrow'), nx = r?.querySelector('.nx'); if (nx) r.scrollLeft = Math.max(0, nx.getBoundingClientRect().left - r.getBoundingClientRect().left + r.scrollLeft - nx.offsetWidth * 2); });   // after the cards are put in your order (moving a card resets its scroll)   // last 2 reached + the next one; swipe left for older ones
   $$('[data-do]').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.divopt', b.dataset.do); } catch {} render(); }));
   $('#cur-swap').onclick = (e) => { e.stopPropagation(); const nx = { BRL: 'GBP', GBP: 'USD', USD: 'BRL' }[heroCur]; try { localStorage.setItem('rumo.cur', nx); } catch {} render(); };
   $('#p-eye') && ($('#p-eye').onclick = (e) => { e.stopPropagation(); $('#btn-eye').click(); });
@@ -2198,7 +2174,7 @@ function vDividendos() {
   const rankRow = ([t, v], n) => `<div class="rk"><em>${n + 1}</em><b>${esc(t)}</b><div class="rkb"><i style="width:${(v / rMax) * 100}%"></i></div><span class="money">${brl(v, 2)}</span></div>`;
   const ld = lastDiv();
   let tblOpen = false; try { tblOpen = localStorage.getItem('rumo.dtbl') === '1'; } catch {}
-  const nextV = (Math.floor(life / step) + 1) * step, mWin = [...mile.slice(-3).map((x) => ({ v: x.v, d: ymLabel(x.m), ok: true })), { v: nextV, d: 'faltam ' + nf0.format(Math.ceil(nextV - life)), ok: false }];
+  const nextV = (Math.floor(life / step) + 1) * step, mWin = [...mile.map((x) => ({ v: x.v, d: ymLabel(x.m), ok: true })), { v: nextV, d: 'faltam ' + nf0.format(Math.ceil(nextV - life)), ok: false }];
   $('#view').innerHTML = `<div class="gwrap dv">
    <div data-k="ano" class="gl">
      <div class="glh"><span class="gll">${thisY} até ${upTo ? MONTHS[upTo - 1].toLowerCase() : '–'}</span>${vs !== null ? `<span class="dchip ${vs < 0 ? 'neg' : 'pos'}">${vs < 0 ? '▼' : '▲'} ${pct(Math.abs(vs))} vs ${lastY}</span>` : ''}</div>
@@ -2214,7 +2190,7 @@ function vDividendos() {
      <div class="glh"><span class="gll">Na vida</span><span class="gll">12 meses: <span class="money">${brl(last12)}</span></span></div>
      <div class="gk money" style="font-size:24px">${brl(life)}</div>
      <div class="gtrk" style="margin:10px 0 0"><i style="width:${(((life % step) / step) * 100).toFixed(1)}%;background:linear-gradient(90deg,var(--g-acc2),var(--g-acc1))"></i></div>
-     <div class="gms click" onclick="showMarcos('div')" style="margin-top:12px" title="Ver todas as conquistas">${mWin.map((m) => `<div class="${m.ok ? 'ok' : 'nx'}"><b></b>${nf0.format(m.v / 1000)} mil<small>${m.d}</small></div>`).join('')}</div>
+     <div class="gms scr s4" id="dmrow" style="margin-top:12px">${mWin.map((m) => `<div class="${m.ok ? 'ok' : 'nx'}"><b></b>${nf0.format(m.v / 1000)} mil<small>${m.d}</small></div>`).join('')}</div>
    </div>
 
    <div data-k="quem" class="gl">
@@ -2246,7 +2222,7 @@ function vDividendos() {
   { const sel = $('#dv-sel'), show = (i) => { $$('.dvb2 .c').forEach((c) => c.classList.toggle('sel', Number(c.dataset.dm) === i)); sel.innerHTML = `${MONTHS[i]}: <b class="money">${brl(ty[i])}</b>${ly[i] ? ` <span class="money">· ${brl(ly[i])}</span>` : ''}`; };
     $$('.dvb2 .c').forEach((c) => (c.onclick = () => show(Number(c.dataset.dm)))); show(Math.max(0, upTo - 1)); }
   $$('#view [data-dy]').forEach((b) => (b.onclick = () => { DYEAR = b.dataset.dy; const y0 = scrollY; render(); scrollTo(0, y0); }));
-  const dm = $('#dmrow'); if (dm) dm.scrollLeft = dm.scrollWidth;
+  requestAnimationFrame(() => { const dm = $('#dmrow'); if (dm) dm.scrollLeft = dm.scrollWidth; });   // newest at the right; swipe for older ones
   $('#dv-add').onclick = () => editDiv(null); wireDivList();
   $$('#view [data-rk]').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.rk', b.dataset.rk); } catch {} render(); }));
   $('#tbl-tog').onclick = () => { try { localStorage.setItem('rumo.dtbl', tblOpen ? '0' : '1'); } catch {} render(); };
