@@ -1013,3 +1013,8 @@ html:not(.dark) .cdef{color:var(--g-acct, #8A6D3B) !important}
 .arow .ar .s .plp, .pie-h .r .plp{min-width:6.6em}
 .glife{display:flex; align-items:center; gap:10px; margin-top:8px} .glife .plp{font-size:12px; padding:2px 8px} .glife .plv{font-size:13px}
 .ctile .chave b{font-size:14px; font-weight:600}
+/* Patrimônio card, calmer: % bold, amount small and quiet; Lucro total as one line under the chart */
+.chips2 .dchip small, .chips2 .mchip small{font-weight:500; opacity:.72; margin-left:2px}
+.glife2{display:flex; align-items:baseline; gap:6px; margin-top:10px; font-size:13px; color:var(--g-mute, rgba(255,255,255,.55))}
+.glife2 b{font-weight:600; font-variant-numeric:tabular-nums} .glife2 .money{opacity:.85}
+html.priv .glife2 .money{filter:blur(6px)}
