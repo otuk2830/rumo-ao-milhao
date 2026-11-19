@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '9.8';
+const APP_VERSION = '9.9';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -268,23 +268,37 @@ function marcos() {
 }
 // Fixed R$ 100 mil steps that keep going past the goal: every one you reached keeps its date forever.
 // The goal itself is one of the dots (added if it isn't a round 100 mil) and is marked; changing it only moves that mark.
-// Milestone dots inside the swipeable cards: we move them ourselves, so a sideways swipe on the dots never flips the card.
-// Vertical swipes are left alone (the page still scrolls); on release it glides on a little and settles on a dot.
+// Milestone dots inside the swipeable cards: we move the row ourselves (GPU transform, one update per frame),
+// so a sideways swipe on the dots never flips the card. Vertical swipes are left alone. On release it glides with
+// your flick and settles on a dot; past the ends it stretches a little and springs back.
+function dotsTo(r, x, ms = 0) {   // x = how far the row is moved left, in px
+  const t = r.firstElementChild, max = Math.max(0, t.scrollWidth - r.clientWidth);
+  x = Math.max(0, Math.min(max, x)); cancelAnimationFrame(r._raf);
+  if (!ms) { r._x = x; t.style.transform = `translate3d(${-x}px,0,0)`; return; }
+  const a = r._x || 0, t0 = performance.now(), ease = (k) => 1 - Math.pow(1 - k, 3);
+  const step = (now) => { const k = Math.min(1, (now - t0) / ms); r._x = a + (x - a) * ease(k); t.style.transform = `translate3d(${-r._x}px,0,0)`; if (k < 1) r._raf = requestAnimationFrame(step); };
+  r._raf = requestAnimationFrame(step);
+}
 function dragDots(root = document) {
   $$('.gms.scr', root).forEach((r) => {
-    if (r.dataset.drag) return; r.dataset.drag = '1';
-    let x0 = 0, y0 = 0, s0 = 0, dir = null, lx = 0, lt = 0, v = 0;
-    r.addEventListener('touchstart', (e) => { const t = e.touches[0]; x0 = lx = t.clientX; y0 = t.clientY; s0 = r.scrollLeft; dir = null; v = 0; lt = performance.now(); }, { passive: true });
+    if (r.dataset.drag) return; r.dataset.drag = '1'; r._x = r._x || 0;
+    const t = r.firstElementChild; let x0 = 0, y0 = 0, s0 = 0, dir = null, want = 0, pend = 0, hist = [];
+    const max = () => Math.max(0, t.scrollWidth - r.clientWidth);
+    const paint = () => { pend = 0; t.style.transform = `translate3d(${-want}px,0,0)`; };
+    r.addEventListener('touchstart', (e) => { const p = e.touches[0]; cancelAnimationFrame(r._raf); x0 = p.clientX; y0 = p.clientY; s0 = r._x || 0; dir = null; hist = [[performance.now(), p.clientX]]; }, { passive: true });
     r.addEventListener('touchmove', (e) => {
-      const t = e.touches[0], dx = t.clientX - x0, dy = t.clientY - y0;
+      const p = e.touches[0], dx = p.clientX - x0, dy = p.clientY - y0;
       if (!dir) { if (!dx && !dy) return; dir = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y'; }   // decide on the very first move: iPhone only lets us take over the swipe then
       if (dir !== 'x') return;
-      e.preventDefault(); e.stopPropagation(); r.style.scrollSnapType = 'none'; r.scrollLeft = s0 - dx;
-      const now = performance.now(); v = (t.clientX - lx) / Math.max(1, now - lt); lx = t.clientX; lt = now;
+      e.preventDefault(); e.stopPropagation();
+      let x = s0 - dx; const m = max(); if (x < 0) x /= 3; else if (x > m) x = m + (x - m) / 3;   // stretch past the ends
+      r._x = want = x; hist.push([performance.now(), p.clientX]); if (hist.length > 6) hist.shift();
+      if (!pend) pend = requestAnimationFrame(paint);
     }, { passive: false });
-    const end = () => { if (dir !== 'x') return; dir = null; const w = r.firstElementChild?.offsetWidth || 1;
-      const goal = Math.max(0, Math.min(r.scrollWidth - r.clientWidth, Math.round((r.scrollLeft - v * 180) / w) * w));
-      r.scrollTo({ left: goal, behavior: 'smooth' }); setTimeout(() => { r.style.scrollSnapType = ''; }, 400); };
+    const end = () => { if (dir !== 'x') return; dir = null;
+      const now = performance.now(), h = hist.filter((q) => now - q[0] < 100), v = h.length > 1 ? (h[h.length - 1][1] - h[0][1]) / Math.max(1, h[h.length - 1][0] - h[0][0]) : 0;   // px per ms
+      const w = t.firstElementChild?.offsetWidth || 1, goal = Math.round(((r._x || 0) - v * 260) / w) * w;
+      dotsTo(r, goal, Math.min(650, 300 + Math.abs(v) * 120)); };
     r.addEventListener('touchend', end, { passive: true }); r.addEventListener('touchcancel', end, { passive: true });
   });
 }
@@ -1797,7 +1811,7 @@ function vPainel() {
        <div style="min-width:0;flex:1"><div class="gll">Rumo a ${brl(meta)}</div><div class="gfalta">faltam <span class="money">${CV(pr.falta)}</span></div>
        <div class="gpred">${pr.ritmo ? `<div><b>${ymLabel(pr.ritmo)}</b><span>no ritmo atual</span></div>` : ''}${pr.cenario ? `<div><b>${ymLabel(pr.cenario)}</b><span>no plano<em class="money">${gbp(s.aportePlanGBP)} por mês</em></span></div>` : ''}${!pr.ritmo && !pr.cenario ? '<div><b>—</b><span>precisa de 12 meses salvos</span></div>' : ''}</div></div>
      </div>
-     <div class="gms scr" id="mrow">${ms.map((m) => `<div class="${m.hit ? 'ok' : m === nextMs ? 'nx' : ''}${m.goal ? ' goal' : ''}"><b></b>${msL(m.v)}<small>${m.hit ? ymLabel(m.hit) : m === nextMs && etaMs ? ymLabel(etaMs) : m.goal ? 'meta' : '&nbsp;'}</small></div>`).join('')}</div>
+     <div class="gms scr" id="mrow"><div class="gmt">${ms.map((m) => `<div class="${m.hit ? 'ok' : m === nextMs ? 'nx' : ''}${m.goal ? ' goal' : ''}"><b></b>${msL(m.v)}<small>${m.hit ? ymLabel(m.hit) : m === nextMs && etaMs ? ymLabel(etaMs) : m.goal ? 'meta' : '&nbsp;'}</small></div>`).join('')}</div></div>
    </div>
 
 
@@ -1832,7 +1846,7 @@ function vPainel() {
    </div>
 
   </div>`;
-  dragDots(); requestAnimationFrame(() => { const r = $('#mrow'), nx = r?.querySelector('.nx'); if (nx) r.scrollLeft = Math.max(0, nx.getBoundingClientRect().left - r.getBoundingClientRect().left + r.scrollLeft - nx.offsetWidth * 2); });   // after the cards are put in your order (moving a card resets its scroll)   // last 2 reached + the next one; swipe left for older ones
+  dragDots(); requestAnimationFrame(() => { const r = $('#mrow'), nx = r?.querySelector('.nx'); if (nx) dotsTo(r, nx.offsetLeft - nx.parentElement.firstElementChild.offsetLeft - nx.offsetWidth * 2); });   // after the cards are put in your order (moving a card resets its scroll)   // last 2 reached + the next one; swipe left for older ones
   $$('[data-do]').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.divopt', b.dataset.do); } catch {} render(); }));
   $('#cur-swap').onclick = (e) => { e.stopPropagation(); const nx = { BRL: 'GBP', GBP: 'USD', USD: 'BRL' }[heroCur]; try { localStorage.setItem('rumo.cur', nx); } catch {} render(); };
   $('#p-eye') && ($('#p-eye').onclick = (e) => { e.stopPropagation(); $('#btn-eye').click(); });
@@ -2211,7 +2225,7 @@ function vDividendos() {
      <div class="glh"><span class="gll">Na vida</span><span class="gll">12 meses: <span class="money">${brl(last12)}</span></span></div>
      <div class="gk money" style="font-size:24px">${brl(life)}</div>
      <div class="gtrk" style="margin:10px 0 0"><i style="width:${(((life % step) / step) * 100).toFixed(1)}%;background:linear-gradient(90deg,var(--g-acc2),var(--g-acc1))"></i></div>
-     <div class="gms scr s4" id="dmrow" style="margin-top:12px">${mWin.map((m) => `<div class="${m.ok ? 'ok' : 'nx'}"><b></b>${nf0.format(m.v / 1000)} mil<small>${m.d}</small></div>`).join('')}</div>
+     <div class="gms scr s4" id="dmrow" style="margin-top:12px"><div class="gmt">${mWin.map((m) => `<div class="${m.ok ? 'ok' : 'nx'}"><b></b>${nf0.format(m.v / 1000)} mil<small>${m.d}</small></div>`).join('')}</div></div>
    </div>
 
    <div data-k="quem" class="gl">
@@ -2243,7 +2257,7 @@ function vDividendos() {
   { const sel = $('#dv-sel'), show = (i) => { $$('.dvb2 .c').forEach((c) => c.classList.toggle('sel', Number(c.dataset.dm) === i)); sel.innerHTML = `${MONTHS[i]}: <b class="money">${brl(ty[i])}</b>${ly[i] ? ` <span class="money">· ${brl(ly[i])}</span>` : ''}`; };
     $$('.dvb2 .c').forEach((c) => (c.onclick = () => show(Number(c.dataset.dm)))); show(Math.max(0, upTo - 1)); }
   $$('#view [data-dy]').forEach((b) => (b.onclick = () => { DYEAR = b.dataset.dy; const y0 = scrollY; render(); scrollTo(0, y0); }));
-  dragDots(); requestAnimationFrame(() => { const dm = $('#dmrow'); if (dm) dm.scrollLeft = dm.scrollWidth; });   // newest at the right; swipe for older ones
+  dragDots(); requestAnimationFrame(() => { const dm = $('#dmrow'); if (dm) dotsTo(dm, 1e9); });   // newest at the right; swipe for older ones
   $('#dv-add').onclick = () => editDiv(null); wireDivList();
   $$('#view [data-rk]').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.rk', b.dataset.rk); } catch {} render(); }));
   $('#tbl-tog').onclick = () => { try { localStorage.setItem('rumo.dtbl', tblOpen ? '0' : '1'); } catch {} render(); };
