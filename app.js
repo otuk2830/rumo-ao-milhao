@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '9.1';
+const APP_VERSION = '9.2';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -39,6 +39,7 @@ const pct = (v) => (v * 100).toLocaleString('pt-BR', { minimumFractionDigits: 2,
 const pctS = (v) => (v * 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%';   // daily moves: always 2 decimals (−0,04%, +1,23%)
 const signed = (s, v) => (v > 0 ? '+' : v < 0 ? '−' : '') + s(Math.abs(v));
 const num = (x) => (typeof x === 'number' && isFinite(x) ? x : 0);
+const tickOk = (s) => String(s ?? '').trim().toUpperCase().replace(/[^A-Z0-9.\-_:^]/g, '');   // ticker symbols: letters, digits and . - _ : ^ only
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 function parseNum(s) {
   if (s === null || s === undefined) return null;
@@ -152,9 +153,11 @@ function normalize(d) {
   return d;
 }
 let SAVE_ERR = null;
+let SAVE_N = 0, SAVED_N = 0;   // a newer save always wins, even if an older one finishes encrypting later
 async function save() {
   if (!DB || !KEY) return;
-  const data = JSON.stringify(await encryptObj(DB, KEY));
+  const n = ++SAVE_N, data = JSON.stringify(await encryptObj(DB, KEY));
+  if (n < SAVED_N) return; SAVED_N = n;
   try { localStorage.setItem(K_DATA, data); if (SAVE_ERR) { SAVE_ERR = null; render(); } }
   catch (e) { console.error('save', e); const first = !SAVE_ERR; SAVE_ERR = String(e?.name || e); toast('⚠ Não consegui salvar neste aparelho. Faça um backup agora (Ajustes → Backup).', 8000); if (first) render(); }
 }
@@ -344,7 +347,7 @@ async function refreshPricesNow(silent) {
     p.usdbrl = sf.u && near(sf.u, ecbU) ? sf.u : ecbU && ecbG ? ecbU * (sf.g / ecbG) : p.usdbrl;
     if (sf.e && near(sf.e, p.eurbrl)) p.eurbrl = sf.e; p.fxSrc = 'planilha'; p.fxAt = sf.at; fx = true;
   } else if (fx) p.fxSrc = 'BCE';
-  if (ok || fx || ar) {
+  if (ok || fx || ar?.ok) {   // something really came back (an all-failed share refresh doesn't count)
     p.updatedAt = new Date().toISOString(); await save(); render(); dailySnap();
     const miss = [ok < COINS.length ? 'cripto' : '', fx ? '' : 'câmbio', ...(ar?.fail || [])].filter(Boolean);
     if (miss.length) retrySoon(); else RETRY.n = 0;
@@ -601,7 +604,7 @@ function editDiv(id) {
       if (!q || document.activeElement !== box) { dd.classList.add('hidden'); return; }
       const L = [...all.filter((t) => t.startsWith(q)), ...all.filter((t) => !t.startsWith(q) && t.includes(q))];
       if (L.length === 1 && L[0] === q) { dd.classList.add('hidden'); return; }
-      dd.innerHTML = L.length ? L.slice(0, 5).map((t) => `<button type="button" data-tk="${t}"><b>${t.slice(0, t.indexOf(q))}<u>${q}</u>${t.slice(t.indexOf(q) + q.length)}</b><span>${DTYPES[$('#dv-t', el).value].n}</span></button>`).join('')
+      dd.innerHTML = L.length ? L.slice(0, 5).map((t) => `<button type="button" data-tk="${esc(t)}"><b>${esc(t.slice(0, t.indexOf(q)))}<u>${esc(q)}</u>${esc(t.slice(t.indexOf(q) + q.length))}</b><span>${DTYPES[$('#dv-t', el).value].n}</span></button>`).join('')
         : '<div class="tk-none">Nenhum ativo seu com esse nome — pode salvar assim mesmo</div>';
       dd.classList.remove('hidden');
       $$('[data-tk]', dd).forEach((b) => {   // keep the keyboard open while tapping, choose on the finished tap (so nothing underneath gets it)
@@ -614,8 +617,8 @@ function editDiv(id) {
     if (!id) setTimeout(() => $('#dv-a', el).focus(), 250);
     $('#dv-save', el).onclick = async () => {
       const o = { ...x, type: $('#dv-t', el).value, cur: $('#dv-c', el).value, amount: parsePT($('#dv-a', el).value), date: $('#dv-d', el).value || today(),
-        ticker: $('#dv-k', el).value.trim().toUpperCase(), at: new Date().toISOString(), g: DB.prices.gbpbrl, u: DB.prices.usdbrl, e: DB.prices.eurbrl };
-      if (!o.amount) return toast('Digite o valor');
+        ticker: tickOk($('#dv-k', el).value), at: new Date().toISOString(), g: DB.prices.gbpbrl, u: DB.prices.usdbrl, e: DB.prices.eurbrl };
+      if (!(o.amount > 0)) return toast('Digite o valor');
       const pl = $('#dv-pl', el).value; o.to = pl || undefined; o.toAmt = pl ? toPlace(o.amount, o.cur, pl, o) : undefined;
       const m = o.date.slice(0, 7), f = DTYPES[o.type].f;
       const firstOfMonth = !(DB.divLog || []).some((e) => e.id !== o.id && e.date.slice(0, 7) === m && DTYPES[e.type].f === f);
@@ -700,7 +703,7 @@ function editAp(id) {
         if (!left) { const k = $('#ap-to', el).value; return editMove(null, null, { from: MV_FROM[k] ? k : 't212cash', amt: v, date: $('#ap-d', el).value || today(), note: $('#ap-n', el).value.trim() }); }
       }
       const opt = AP_OPTS[$('#ap-to', el).value], inBRL = opt.dest === 'brl', g0 = DB.prices.gbpbrl || 1, sv = neg ? -v : v;
-      const o = { ...x, gbp: inBRL ? Math.round((sv / g0) * 100) / 100 : sv, brl: inBRL ? sv : undefined, gFixed: false, date: $('#ap-d', el).value || today(), dest: opt.dest, note: $('#ap-n', el).value.trim(), at: new Date().toISOString(), g: DB.prices.gbpbrl };
+      const o = { ...x, gbp: inBRL ? Math.round((sv / g0) * 100) / 100 : sv, brl: inBRL ? sv : undefined, gFixed: false, date: $('#ap-d', el).value || today(), dest: opt.dest, note: $('#ap-n', el).value.trim(), at: new Date().toISOString(), g: DB.prices.gbpbrl, u: DB.prices.usdbrl };
       const pl = opt.to; o.to = pl || undefined; o.toAmt = pl ? toPlace(inBRL ? sv : o.gbp, inBRL ? 'BRL' : 'GBP', pl, { g: o.g }) : undefined;
       const cf = !neg && $('#ap-to', el).value === 'cripto' ? readCoin('ap', el) : null; if (cf === false) return;
       o.opId = linkBuy(x.opId, cf, o.date);   // the coins bought with this money go into the crypto log (one step)
@@ -738,7 +741,7 @@ function coinFields(px, o = {}) {
 }
 function readCoin(px, el) {   // null = nothing to log · false = half filled (toast shown)
   const q = parsePT($(`#${px}-qty`, el)?.value || ''), u = parsePT($(`#${px}-usd`, el)?.value || '');
-  if (!q && !u) return null; if (!q || !u) { toast('Para lançar a compra, preencha quantidade e valor pago (ou deixe os dois em branco)'); return false; }
+  if (!q && !u) return null; if (!(q > 0) || !(u > 0)) { toast('Para lançar a compra, preencha quantidade e valor pago (ou deixe os dois em branco)'); return false; }
   return { name: $(`#${px}-who`, el)?.value || DB.crypto.people[0], coin: $(`#${px}-coin`, el).value, qty: q, value: u, price: u / q };
 }
 function linkBuy(opId, cf, date) {   // create / update / remove the Buy row tied to an aporte or a move
@@ -780,7 +783,7 @@ function editMove(id, fromAp, pre) {   // fromAp: an aporte/retirada being turne
     ['#mv-from', '#mv-to'].forEach((k) => ($(k, el).onchange = sync)); $('#mv-v', el).addEventListener('input', sync); sync();
     $('#mv-save', el).onclick = async () => {
       const f = $('#mv-from', el).value, t = $('#mv-to', el).value, v = parsePT($('#mv-v', el).value);
-      if (!v) return toast('Digite o valor'); if (f === t) return toast('Escolha contas diferentes');
+      if (!(v > 0)) return toast('Digite o valor'); if (f === t) return toast('Escolha contas diferentes');
       const cf = t === 'cripto' ? readCoin('mv', el) : null; if (cf === false) return;
       const toAmt = PLACES[t] ? (PLACES[t].cur === PLACES[f].cur ? v : parsePT($('#mv-in', el).value) || toPlace(v, PLACES[f].cur, t, { g: DB.prices.gbpbrl })) : 0;
       const o = { id: x.id, date: $('#mv-d', el).value || today(), from: f, amt: v, to: t, toAmt, note: $('#mv-n', el).value.trim(), at: new Date().toISOString() };
@@ -850,11 +853,11 @@ async function fillMissingFx() {
   }
   for (const e of DB.divLog || []) {   // dividends paid in £/US$/€ on a past day get that day's rate
     if (e.cur === 'BRL' || e.gFixed || e.date >= today()) continue;
-    const g = await fxOn(e.date); if (g) { const k = e.cur === 'GBP' ? null : await fxPair(e.date, e.cur); e.g = g; if (e.cur === 'USD' && k) e.u = k; if (e.cur === 'EUR' && k) e.e = k; e.gFixed = true; changed = true; }
+    const g = await fxOn(e.date); if (g) { const k = e.cur === 'GBP' ? null : await fxPair(e.date, e.cur); e.g = g; if (e.cur === 'USD' && k) e.u = k; if (e.cur === 'EUR' && k) e.e = k; if (e.cur === 'GBP' || k) e.gFixed = true; changed = true; }   // a missing US$/€ rate is tried again next time
   }
   for (const e of DB.apLog || []) {   // aportes logged with a past date get that day's rate
     if (e.gFixed || e.date >= today()) continue;
-    const rate = await fxOn(e.date); if (rate) { e.g = rate; if (typeof e.brl === 'number') e.gbp = Math.round((e.brl / rate) * 100) / 100; e.gFixed = true; changed = true; }
+    const rate = await fxOn(e.date); if (rate) { e.g = rate; if (typeof e.brl === 'number') e.gbp = Math.round((e.brl / rate) * 100) / 100; const u = e.dest === 'usd' ? await fxPair(e.date, 'USD') : null; if (u) e.u = u; if (e.dest !== 'usd' || u) e.gFixed = true; changed = true; }
   }
   for (const h of DB.history.filter((x) => typeof x.pat === 'number' && !x.nat).slice(-4)) {   // recent months: both rates of the month's last day
     if (h.fx && h.usd) continue; const [y, m] = h.month.split('-').map(Number), last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
@@ -900,9 +903,11 @@ const apOptOf = (e) => (e.to && AP_OPTS[e.to] ? e.to : (e.dest || 'gbp') === 'br
 const BLK = { brl: { n: 'Brasil', cur: 'R$' }, gbp: { n: 'Trading 212', cur: '£' }, usd: { n: 'Cripto', cur: 'US$' } };
 const rateOf = (k, g, u) => (k === 'brl' ? 1 : k === 'gbp' ? g : u);
 // new money of a period, split by where it went, in each block's own currency
+// US$→R$ on the aporte's own day: stored rate, else the nearest daily snapshot on/before it, else today's
+const usdOnDay = (e) => { if (num(e.u) > 0) return num(e.u); let u = 0; for (const x of DB.daily || []) { if (x.d > e.date) break; if (num(x.u) > 0) u = num(x.u); } return u || num(DB.prices.usdbrl) || 1; };
 function flowsBetween(d1, d2, mode) {   // mode 'day': (d1, d2]  ·  mode 'month': whole month d1
   const L = (DB.apLog || []).filter((e) => (mode === 'month' ? e.date.slice(0, 7) === d1 : e.date > d1 && e.date <= d2)), f = { brl: 0, gbp: 0, usd: 0 };
-  for (const e of L) { const g = e.g || DB.prices.gbpbrl || 1, k = e.dest || 'gbp'; f[k] += k === 'gbp' ? e.gbp : k === 'brl' ? apBRL(e) : (e.gbp * g) / (DB.prices.usdbrl || 1); }
+  for (const e of L) { const g = e.g || DB.prices.gbpbrl || 1, k = e.dest || 'gbp'; f[k] += k === 'gbp' ? e.gbp : k === 'brl' ? apBRL(e) : (e.gbp * g) / usdOnDay(e); }
   return { f, any: L.length > 0 };
 }
 // return without exchange-rate effect for one period: each block in its own currency, weighted by its size at the start
@@ -1404,7 +1409,7 @@ function editAsset(id, cls) {
     ['#ea-avgcur', '#ea-cur', '#ea-m'].forEach((k) => $(k, el)?.addEventListener('change', avgHint)); setTimeout(avgHint, 0);
     $('#ea-m', el).onchange = () => curRow(true); $('#ea-t', el).addEventListener('change', () => curRow(true)); curRow(false);
     $('#ea-save', el).onclick = async () => {
-      const t = $('#ea-t', el).value.trim().toUpperCase().replace(/\s+/g, ''); if (!t) return toast('Digite o ticker');
+      const t = tickOk($('#ea-t', el).value); if (!t) return toast('Digite o ticker');
       const o = { ...a, name: ($('#ea-name', el).value || '').trim() || undefined, ticker: t, kind: $('#ea-kind', el)?.value || a.kind, market: $('#ea-m', el).value, currency: $('#ea-cur', el).value,
         qty: a.qty, avg: a.avg, avgCur: $('#ea-avgcur', el)?.value || a.avgCur || 'ASSET', manualPrice: parsePT($('#ea-man', el).value) };
       if (o.ticker !== a.ticker || o.market !== a.market) { o.price = null; o.priceAt = null; }
@@ -1427,7 +1432,7 @@ function editAsset(id, cls) {
         <button class="btn primary block" id="b-go">Adicionar</button><button class="btn block" onclick="closeSheet()">Cancelar</button>`, (e2) => {
         $$('input.pt', e2).forEach(liveFormat);
         $('#b-go', e2).onclick = async () => {
-          const q = parsePT($('#b-q', e2).value), p = parsePT($('#b-p', e2).value); if (!q) return toast('Digite a quantidade');
+          const q = parsePT($('#b-q', e2).value), p = parsePT($('#b-p', e2).value); if (!(q > 0) || num(p) < 0) return toast('Digite a quantidade');
           if (p && (a.avg || !a.qty)) a.avg = (num(a.qty) * num(a.avg) + q * p) / (num(a.qty) + q);
           a.qty = num(a.qty) + q; await save(); closeSheet(); render(); doneTick(); toast(`✓ ${a.ticker}: agora ${a.qty.toLocaleString('pt-BR', { maximumFractionDigits: 8 })}`);
         };
@@ -2357,7 +2362,7 @@ function editOpForm(id) {
         qty: parsePT($('#o-qty', el).value), value: parsePT($('#o-val', el).value), price: parsePT($('#o-price', el).value) };
       if (o.op === 'Sold' && $('#o-qty', el).value === fmtN(holding(), 8)) o.qty = holding(); // "Vender tudo": use the exact amount, not the rounded one shown
       if (o.op === 'Sold' && o.qty > holding() * 1.000001 + 1e-12) return toast(`Você só tem ${fmtN(holding(), 8)} ${o.coin}`);
-      if (!o.qty) return toast('Informe a quantidade');
+      if (!(o.qty > 0)) return toast('Informe a quantidade (maior que zero)'); if (num(o.value) < 0 || num(o.price) < 0) return toast('Valor e preço não podem ser negativos');
       if (o.op === 'Received') { o.value = 0; o.price = num(DB.prices[o.coin]) || null; }   // no cost; price kept only as a note of the day
       const i = c.log.findIndex((q) => q.id === o.id); if (i > -1) c.log[i] = o; else c.log.push(o);
       c.log.sort((a, b) => (a.date || '').localeCompare(b.date || '')); await save(); closeSheet(); render();
@@ -2641,7 +2646,7 @@ const payCur = (k) => (k === 'stocks' ? 'GBP' : k === 'cripto' ? 'USD' : 'BRL');
 // new money in / out (an aporte or a retirada), same record the Aporte form makes
 function addAp({ amt, cur, to, date, note, out }) {
   const g0 = num(DB.prices.gbpbrl) || 1, sv = out ? -amt : amt, inBRL = cur === 'BRL';
-  const o = { id: uid(), gbp: inBRL ? Math.round((sv / g0) * 100) / 100 : Math.round(sv * 100) / 100, brl: inBRL ? sv : undefined, gFixed: false, date, dest: inBRL ? 'brl' : 'gbp', note: note || '', at: new Date().toISOString(), g: DB.prices.gbpbrl };
+  const o = { id: uid(), gbp: inBRL ? Math.round((sv / g0) * 100) / 100 : Math.round(sv * 100) / 100, brl: inBRL ? sv : undefined, gFixed: false, date, dest: inBRL ? 'brl' : 'gbp', note: note || '', at: new Date().toISOString(), g: DB.prices.gbpbrl, u: DB.prices.usdbrl };
   if (to) { o.to = to; o.toAmt = toPlace(sv, cur, to, { g: o.g }); }
   const m = date.slice(0, 7), first = !(DB.apLog || []).some((e) => e.date.slice(0, 7) === m), typed = DB.draft.month === m ? DB.draft.aporteGBP : DB.history.find((h) => h.month === m)?.aporteGBP;
   if (first && typed) DB.apLog.push({ id: uid(), gbp: typed, date: m + '-01', note: 'digitado antes', at: new Date(0).toISOString(), g: DB.history.find((h) => h.month === m)?.fx || DB.prices.gbpbrl });
@@ -2716,7 +2721,7 @@ function evNew() {
     const sync = () => { const t = $('#ev-to', el).value, c = ACC[t].cur, v = parsePT($('#ev-v', el).value); $('#ev-v-l', el).textContent = `Valor (${symC(c)})`;
       sumSet(el, v ? [`${ACC[t].n} <b class="pos">+${money(c, v)}</b>`, `Aporte de ${money(c, v)} este mês`] : ['Digite o valor']); };
     $('#ev-to', el).onchange = sync; $('#ev-v', el).addEventListener('input', sync); sync();
-    $('#ev-save', el).onclick = async () => { const t = $('#ev-to', el).value, c = ACC[t].cur, v = parsePT($('#ev-v', el).value), d = $('#ev-d', el).value || today(); if (!v) return toast('Digite o valor');
+    $('#ev-save', el).onclick = async () => { const t = $('#ev-to', el).value, c = ACC[t].cur, v = parsePT($('#ev-v', el).value), d = $('#ev-d', el).value || today(); if (!(v > 0)) return toast('Digite o valor');
       (DB.settings.lastTo ||= {}).ev = t; const apId = addAp({ amt: v, cur: c, to: t, date: d, note: $('#ev-n', el).value.trim() });
       finishEvent({ kind: 'new', date: d, apId, text: `Dinheiro novo ${money(c, v)} → ${ACC[t].n}` }, `Aporte de ${money(c, v)} em ${ACC[t].n}`); };
   });
@@ -2733,7 +2738,7 @@ function evSpend() {
     const sync = () => { const t = $('#ev-to', el).value, c = ACC[t].cur, v = parsePT($('#ev-v', el).value); $('#ev-v-l', el).textContent = `Valor (${symC(c)})`;
       sumSet(el, v ? [`${ACC[t].n} <b class="neg">−${money(c, v)}</b>`, `Retirada de ${money(c, v)} este mês`] : ['Digite o valor']); };
     $('#ev-to', el).onchange = sync; $('#ev-v', el).addEventListener('input', sync); sync();
-    $('#ev-save', el).onclick = async () => { const t = $('#ev-to', el).value, c = ACC[t].cur, v = parsePT($('#ev-v', el).value), d = $('#ev-d', el).value || today(); if (!v) return toast('Digite o valor');
+    $('#ev-save', el).onclick = async () => { const t = $('#ev-to', el).value, c = ACC[t].cur, v = parsePT($('#ev-v', el).value), d = $('#ev-d', el).value || today(); if (!(v > 0)) return toast('Digite o valor');
       const apId = addAp({ amt: v, cur: c, to: t, date: d, note: $('#ev-n', el).value.trim(), out: true });
       finishEvent({ kind: 'spend', date: d, apId, text: `Gasto ${money(c, v)} de ${ACC[t].n}` }, `Retirada de ${money(c, v)} de ${ACC[t].n}`); };
   });
@@ -2749,7 +2754,7 @@ function evInterest() {
     const sync = () => { const t = $('#ev-to', el).value, c = ACC[t].cur, v = parsePT($('#ev-v', el).value), old = num(DB.balances[t]), d = v - old; $('#ev-v-l', el).textContent = `Saldo novo (${symC(c)})`;
       sumSet(el, [`${ACC[t].n}: ${money(c, old)} → <b>${money(c, v || 0)}</b>`, d ? `<b class="${d < 0 ? 'neg' : 'pos'}">${d < 0 ? '−' : '+'}${money(c, Math.abs(d))}</b> conta como ${d < 0 ? 'prejuízo' : 'lucro'}` : 'Sem mudança']); };
     $('#ev-to', el).onchange = fill; $('#ev-v', el).addEventListener('input', sync); fill();
-    $('#ev-save', el).onclick = async () => { const t = $('#ev-to', el).value, c = ACC[t].cur, v = parsePT($('#ev-v', el).value), d = Math.round((v - num(DB.balances[t])) * 100) / 100; if (!d) return closeSheet();
+    $('#ev-save', el).onclick = async () => { const t = $('#ev-to', el).value, c = ACC[t].cur, v = parsePT($('#ev-v', el).value), d = Math.round((v - num(DB.balances[t])) * 100) / 100; if (v === null || !(v >= 0)) return toast('Digite o saldo novo'); if (!d) return closeSheet();
       balAdd(t, d); finishEvent({ kind: 'int', date: today(), bal: [{ p: t, d }], text: `Juros ${d < 0 ? '−' : '+'}${money(c, Math.abs(d))} em ${ACC[t].n}` }, `${ACC[t].n} atualizado`); };
   });
 }
@@ -2796,13 +2801,13 @@ function evTrade(sell, pre) {
     $('#tr-a', el).onchange = () => { if ($('#tr-a', el).value === '__coin') return addCoin((k) => evTrade(false, { coin: k })); sync(); }; ['#tr-q', '#tr-v', '#tr-x', '#tr-new'].forEach((k) => $(k, el).addEventListener('input', sync)); fillA();
     if (pre?.coin) { $('#tr-k', el).value = 'cripto'; fillA(); $('#tr-a', el).value = pre.coin; sync(); }
     $('#tr-save', el).onclick = async () => { const s = S(), d = $('#tr-d', el).value || today();
-      if (!s.name) return toast('Escolha o ativo'); if (!s.q || !s.v) return toast('Digite quantidade e valor');
+      if (!s.name) return toast('Escolha o ativo'); if (!(s.q > 0) || !(s.v > 0)) return toast('Digite quantidade e valor (maiores que zero)');
       const ev = { kind: sell ? 'sell' : 'buy', date: d, bal: [] };
       if (s.k === 'cripto') {
         if (sell) { const have = cryptoSummary().coins.find((c) => c.k === s.aid)?.units || 0; if (s.q > have + 1e-9) return toast(`Você tem ${have.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} ${s.aid}`); }
         const id = uid(); DB.crypto.log.push({ id, date: d, name: $('#tr-who', el)?.value || DB.crypto.people[0], op: sell ? 'Sold' : 'Buy', coin: s.aid, qty: s.q, value: s.v, price: s.v / s.q }); DB.crypto.log.sort((a, b) => (a.date || '').localeCompare(b.date || '')); ev.opId = id;
       } else if (s.isNew) {
-        const cls = s.k, na = { id: uid(), cls, ticker: s.name, kind: cls === 'stocks' ? 'Stock' : '', market: ACLS.find((c) => c.k === cls).market, currency: cls === 'stocks' ? 'USD' : 'BRL', avgCur: cls === 'stocks' ? 'GBP' : 'ASSET', qty: s.q, avg: s.v / s.q, manualPrice: null, priceAt: new Date().toISOString() };
+        const cls = s.k, na = { id: uid(), cls, ticker: tickOk(s.name), kind: cls === 'stocks' ? 'Stock' : '', market: ACLS.find((c) => c.k === cls).market, currency: cls === 'stocks' ? 'USD' : 'BRL', avgCur: cls === 'stocks' ? 'GBP' : 'ASSET', qty: s.q, avg: s.v / s.q, manualPrice: null, priceAt: new Date().toISOString() };
         na.price = conv(s.v / s.q, cls === 'stocks' ? 'GBP' : 'BRL', na.currency);   // worth what you paid until its first real price arrives
         DB.assets.push(na); ev.asset = { id: na.id, dq: s.q, prevAvg: null, created: true };
       } else {
@@ -2850,7 +2855,7 @@ function evGift() {
     $$('input.pt', el).forEach(liveFormat);
     const sync = () => { const c = $('#gf-c', el).value, q = parsePT($('#gf-q', el).value); sumSet(el, q ? [`${c} <b class="pos">+${q.toLocaleString('pt-BR', { maximumFractionDigits: 8 })}</b> sem custo`, `≈ ${usd(q * num(DB.prices[c]), 2)} hoje · conta como lucro`] : ['Digite a quantidade']); };
     $('#gf-c', el).onchange = sync; $('#gf-q', el).addEventListener('input', sync); sync();
-    $('#gf-save', el).onclick = async () => { const c = $('#gf-c', el).value, q = parsePT($('#gf-q', el).value), d = $('#gf-d', el).value || today(); if (!q) return toast('Digite a quantidade');
+    $('#gf-save', el).onclick = async () => { const c = $('#gf-c', el).value, q = parsePT($('#gf-q', el).value), d = $('#gf-d', el).value || today(); if (!(q > 0)) return toast('Digite a quantidade');
       const id = uid(); DB.crypto.log.push({ id, date: d, name: $('#gf-w', el)?.value || DB.crypto.people[0], op: 'Received', coin: c, qty: q, value: 0, price: num(DB.prices[c]) || null }); DB.crypto.log.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
       finishEvent({ kind: 'gift', date: d, opId: id, text: `Recebi ${q.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} ${c} grátis` }, `${c} +${q.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} sem custo`); };
   });
