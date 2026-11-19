@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '8.7';
+const APP_VERSION = '8.8';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -20,7 +20,7 @@ const CLASSES = [
   { k: 'fiis', n: 'FIIs', c: 'var(--c2)', hex: '#0EA5A4' },
   { k: 'rf', n: 'Renda fixa', c: 'var(--c3)', hex: '#F59E0B' },
   { k: 'stocks', n: 'Stocks', c: 'var(--c4)', hex: '#8B5CF6' },
-  { k: 'crypto', n: 'Crypto', c: 'var(--c5)', hex: '#EC4899' },
+  { k: 'crypto', n: 'Cripto', c: 'var(--c5)', hex: '#EC4899' },
 ];
 const MONTHS = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 const MON3 = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
@@ -92,7 +92,8 @@ $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') clos
 
 /* ---------------- crypto (encryption) ---------------- */
 const enc = new TextEncoder(), dec = new TextDecoder();
-const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+// in chunks: one big String.fromCharCode(...bytes) breaks once the data passes ~64 KB (Safari's argument limit)
+const b64 = (buf) => { const u = new Uint8Array(buf); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
 const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 async function deriveKey(secret, salt) {
   const base = await crypto.subtle.importKey('raw', enc.encode(secret), 'PBKDF2', false, ['deriveKey']);
@@ -236,7 +237,7 @@ function histLive() {
   if (!prev) return H;
   const P = portfolio(); if (!(P.total > 0)) return H;
   const saved = H.find((h) => h.month === m) || {}, src = DB.draft.month === m ? DB.draft : saved, a = apSum(m);
-  const row = { ...saved, month: m, pat: P.total, aporteGBP: a !== null ? a : src.aporteGBP ?? null, fx: DB.prices.gbpbrl || saved.fx || null, usd: DB.prices.usdbrl || saved.usd || null, live: true };
+  const row = { ...saved, month: m, pat: P.total, aporteGBP: apOf(m, src.aporteGBP ?? null), fx: DB.prices.gbpbrl || saved.fx || null, usd: DB.prices.usdbrl || saved.usd || null, live: true };
   for (const f of DIV_FIELDS) if ((row[f] === null || row[f] === undefined) && src[f] !== null && src[f] !== undefined) row[f] = src[f];
   return [...H.filter((h) => h.month !== m), row];
 }
@@ -659,6 +660,9 @@ const apMonthB = (m, fx, gbpTot) => (BASE() === 'GBP' ? num(gbpTot) : apMonthBRL
 const apMonthBRL = (m, fx, gbpTot) => { const L = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === m);
   return L.reduce((t, e) => t + apBRL(e), 0) + (num(gbpTot) - L.reduce((t, e) => t + num(e.gbp), 0)) * num(fx); };
 const apTxt = (e) => (typeof e.brl === 'number' ? brl(Math.abs(e.brl)) : gbp(Math.abs(e.gbp), 2));
+// once you log aportes in the app, a month with no entries simply had no new money (0), instead of "não informado"
+const apLogStart = () => { let m = null; for (const e of DB.apLog || []) if (e.note !== 'digitado antes' && (!m || e.date < m)) m = e.date; return m ? m.slice(0, 7) : null; };
+const apOf = (month, typed) => { const a = apSum(month); if (a !== null) return a; if (typed !== null && typed !== undefined) return typed; const st = apLogStart(); return st && month >= st ? 0 : null; };
 function apSum(month) { const L = (DB.apLog || []).filter((e) => e.date.slice(0, 7) === month); return L.length ? Math.round(L.reduce((a, e) => a + e.gbp, 0) * 100) / 100 : null; }
 function applyApLog(month) {
   const v = apSum(month); if (v === null) return;
@@ -989,7 +993,7 @@ async function autoCloseMonth() {
   if (Number(last.d.slice(8)) < endDay - 3) return;   // no record near the end of the month: leave it to you
   const h = DB.history.find((x) => x.month === m); if (h && h.savedAt && h.savedAt.slice(0, 10) >= last.d) return;
   const src = DB.draft.month === m ? DB.draft : h || {};
-  const entry = { month: m, pat: last.v, aporteGBP: src.aporteGBP ?? null, divFII: src.divFII ?? null, divAcoes: src.divAcoes ?? null, divStocks: src.divStocks ?? null, fx: last.g, usd: last.u, cat: last.c, nat: last.n, savedAt: new Date(last.d + 'T22:00:00Z').toISOString(), auto: true };
+  const entry = { month: m, pat: last.v, aporteGBP: apOf(m, src.aporteGBP ?? null), divFII: src.divFII ?? null, divAcoes: src.divAcoes ?? null, divStocks: src.divStocks ?? null, fx: last.g, usd: last.u, cat: last.c, nat: last.n, savedAt: new Date(last.d + 'T22:00:00Z').toISOString(), auto: true };
   if (h?.note) entry.note = h.note;
   const i = DB.history.findIndex((x) => x.month === m); if (i > -1) DB.history[i] = entry; else DB.history.push(entry);
   DB.history.sort((a, b) => a.month.localeCompare(b.month)); applyDivLog(m); applyApLog(m);
@@ -1023,7 +1027,7 @@ async function exportBackup() {
       if (p1.length < 6) return toast('A senha precisa ter pelo menos 6 caracteres');
       if (p1 !== p2) return toast('As senhas não batem');
       const salt = crypto.getRandomValues(new Uint8Array(16));
-      const box = await encryptObj(DB, await deriveKey(p1, salt));
+      const box = await encryptObj({ ...DB, settings: { ...DB.settings, lastBackup: new Date().toISOString() } }, await deriveKey(p1, salt));   // the file knows its own date
       const file = JSON.stringify({ app: APP_ID, format: 1, encrypted: true, salt: b64(salt), ...box, createdAt: new Date().toISOString() });
       const name = 'rumo-backup.json';
       if ($('#bk-rem', el)?.checked) DB.settings.backupPass = p1; else delete DB.settings.backupPass;
@@ -1319,7 +1323,6 @@ function vAtivos() {
     ${!auto || needGS || needB3 || needUS || needEU ? `<div class="gl">
       <label class="toggle"><input type="checkbox" id="at-auto" ${auto ? 'checked' : ''}><span><b>Usar estes ativos no patrimônio</b><br><span class="small muted">${auto ? 'Ligado: o total de ' + info.n + ' é calculado aqui (preços ao vivo).' : 'Desligado: vale o total digitado em Atualizar (<span class="money">' + M(manualTotal) + '</span>).'}</span></span></label>
       <div class="small muted" style="margin-top:8px">Preços: ${DB.prices.assetsAt ? fmtDate(DB.prices.assetsAt) : 'ainda não buscados'} · atualizam sozinhos a cada 5 min</div>
-      <button class="btn block" id="at-refresh"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg> Atualizar preços agora</button>
       ${needGS ? '<div class="banner" style="margin:10px 0 0">Para preços de FIIs, cole o link da sua planilha do Google em ⚙︎ Ajustes → Chaves de preço → Google Sheets.</div>' : ''}
       ${needB3 ? '<div class="banner" style="margin:10px 0 0">Para preços da B3, crie a chave grátis em <b>brapi.dev</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
       ${needUS ? '<div class="banner" style="margin:10px 0 0">Para preços dos EUA, crie a chave grátis em <b>finnhub.io</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
@@ -1366,15 +1369,7 @@ function vAtivos() {
     (DB.settings.auto ||= {})[cls] = e.target.checked; await save(); render();
     toast(e.target.checked ? `Patrimônio agora usa os ativos de ${info.n}` : `Voltou para o total digitado em Atualizar`);
   });
-  $('#at-refresh') && ($('#at-refresh').onclick = async () => { toast('Buscando preços…'); $('#btn-refresh').classList.add('spin'); setTimeout(() => $('#btn-refresh')?.classList.remove('spin'), 1200); const r = await refreshAssetPrices(true); render(); if (r) toast(r.fail.length ? `${r.ok} atualizados · não atualizaram: ${r.fail.join(', ')}` : `✓ ${r.ok} preços em dia`, 4500); else toast('Sem internet ou sem ativos'); });
   $('#at-add').onclick = () => { location.hash = '#atualizar'; setTimeout(() => whatHappened(), 350); };
-  $('#at-all-gs') && ($('#at-all-gs').onclick = async () => {
-    const L = DB.assets.filter((a) => a.cls === 'acoes' && a.market === 'B3');
-    if (!(await ask(`Mudar ${L.length} ações de brapi para Google Sheets?\n\nAntes, confira que estes tickers estão na coluna A da planilha:\n${L.map((a) => a.ticker).join(', ')}`))) return;
-    for (const a of L) { a.market = 'GS'; a.currency = 'BRL'; }
-    await save(); render(); const r = await refreshAssetPrices(true); render();
-    toast(r?.fail.length ? `Não estão na planilha: ${r.fail.join(', ')}` : '✓ Ações agora vêm da planilha', 5000);
-  });
   $$('#view .item').forEach((el) => (el.onclick = () => editAsset(el.dataset.id)));
   $$('#view [data-ar]').forEach((el) => (el.onclick = () => { ATV.open = ATV.open === el.dataset.ar ? null : el.dataset.ar; const y = window.scrollY; render(); window.scrollTo(0, y); }));
   $$('#view [data-ed]').forEach((el) => (el.onclick = (e) => { e.stopPropagation(); editAsset(el.dataset.ed); }));
@@ -1548,9 +1543,10 @@ function returnsData() {
     }
     const lm = localMonth(b.month), rl = lm ? lm.r : null;
     const dm = b.month < ym() ? dailyMonth(b.month) : null; if (dm) { months.push({ ...dm, rl }); continue; }   // daily data covers it → exact
-    if (b.aporteGBP === null || b.aporteGBP === undefined) continue; // aporte unknown → month can't be measured
-    const fx = b.fx || (num(b.aporteGBP) === 0 ? 1 : null); if (!fx) continue;   // rate is fetched in the background for old months
-    const C = apMonthB(b.month, fx, b.aporteGBP), den = pa + 0.5 * C;
+    const apG = b.aporteGBP === null || b.aporteGBP === undefined ? apOf(b.month) : b.aporteGBP;
+    if (apG === null) continue; // aporte unknown → month can't be measured
+    const fx = b.fx || (num(apG) === 0 ? 1 : null); if (!fx) continue;   // rate is fetched in the background for old months
+    const C = apMonthB(b.month, fx, apG), den = pa + 0.5 * C;
     if (den <= 0) continue;
     months.push({ month: b.month, gain: pb - pa - C, r: (pb - pa - C) / den, aporte: C, rl, start: pa, end: pb, method: 'Dietz modificado (valores de fim de mês)' });
   }
@@ -1677,7 +1673,7 @@ function vPainel() {
   // "Este mês": live patrimônio vs the last month saved before this calendar month
   const prevM = DB.history.filter((h) => typeof h.pat === 'number' && h.month < ym()).slice(-1)[0] || null, mChg = prevM ? P.total - prevM.pat : 0;
   // real growth this month (aportes taken out): exact daily chain when possible, otherwise vs last saved month
-  const apNowGBP = (() => { const a = apSum(ym()); if (a !== null) return a; const dv = DB.draft.month === ym() ? DB.draft.aporteGBP : null; if (dv !== null && dv !== undefined) return dv; const h = DB.history.find((x) => x.month === ym()); return h && h.aporteGBP !== undefined ? h.aporteGBP : null; })();
+  const apNowGBP = (() => { const a = apSum(ym()); if (a !== null) return a; const dv = DB.draft.month === ym() ? DB.draft.aporteGBP : null; if (dv !== null && dv !== undefined) return dv; const h = DB.history.find((x) => x.month === ym()); if (h && h.aporteGBP !== null && h.aporteGBP !== undefined) return h.aporteGBP; if (apOf(ym()) === 0) return 0; return h && h.aporteGBP !== undefined ? h.aporteGBP : null; })();
   const prevB = prevM ? inB(prevM.pat, prevM.fx) : null, nowB = inB(P.total, DB.prices.gbpbrl);   // in the base currency, each at its own rate
   const mRealV = prevM && apNowGBP !== null && apNowGBP !== undefined ? nowB - prevB - apMonthB(ym(), DB.prices.gbpbrl, apNowGBP) : null;   // in base
   const mReal = (() => { if (!prevM || !prevB || mRealV === null) return null;   // same method as Histórico: (now − start − aportes) ÷ (start + ½ aportes)
@@ -1744,7 +1740,7 @@ function vPainel() {
      <div class="gl click" onclick="location.hash='#dividendos'"><div class="gll">Dividendos na vida</div><div class="gk money">${CV(st.divLife)}</div><div class="gbar"><i style="width:${(divProg * 100).toFixed(1)}%"></i></div><div class="gll" style="margin-top:5px">faltam ${brl(nextDiv - st.divLife)} p/ ${nf0.format(nextDiv / 1000)} mil</div></div></div>`;
   const divTry = '';
   $('#view').innerHTML = `
-  ${SAVE_ERR ? `<div class="banner" style="border-color:var(--neg)" onclick="location.hash='#ajustes'">⚠ As últimas mudanças não foram salvas no aparelho (${esc(SAVE_ERR)}). Faça um backup agora — toque aqui.</div>` : ''}
+  ${SAVE_ERR ? `<div class="banner" style="border-color:var(--red)" onclick="location.hash='#ajustes'">⚠ As últimas mudanças não foram salvas no aparelho (${esc(SAVE_ERR)}). Faça um backup agora — toque aqui.</div>` : ''}
   ${(() => { const u = storeUse(); return u.p >= 0.7 ? `<div class="banner" onclick="location.hash='#ajustes'">O espaço do app no iPhone está ${Math.round(u.p * 100)}% cheio (${mbTxt(u.b)} de 5 MB). Faça um backup e peça a mudança para o armazenamento maior — toque aqui.</div>` : ''; })()}
   ${backupOld ? `<div class="banner" onclick="location.hash='#ajustes'">Faça um backup — ${s.lastBackup ? 'o último foi há mais de 30 dias' : 'você ainda não fez nenhum'}. Toque aqui.</div>` : ''}
   <div class="gwrap">${divTry}
@@ -1834,7 +1830,6 @@ function vPainel() {
     cs.forEach((c) => (c.onclick = (e) => { e.stopPropagation(); show(c); })); cs.length && show(cs[cs.length - 1]); }
   $('#mchip') && ($('#mchip').onclick = (e) => { e.stopPropagation(); const L = (DB.apLog || []).filter((x) => x.date.slice(0, 7) === ym()), apR = L.reduce((t, x) => t + apBRL(x), 0);
     toast(`${MONTHS[new Date().getMonth()]}: ${signed(CV, mChg)} desde o fim de ${MONTHS[(new Date().getMonth() + 11) % 12].toLowerCase()}${L.length ? ` · inclui ${apR < 0 ? 'retirada' : 'aporte'} de ${CV(Math.abs(apR))}` : ''}${mRealV !== null ? ` · sem aportes ${signed(CV, mRealV)}` : ''}`, 6000); });
-  $('#hero-tap') && ($('#hero-tap').onclick = () => { try { localStorage.setItem('rumo.hero', heroOpen() ? '0' : '1'); } catch {} render(); });
   $('#k-perf').onclick = () => {
     if (!prevM) return;
     const from = { v: prevM.pat, c: prevM.cat || null }, D = DB.daily || [], base = [...D].filter((x) => x.d < ym() + '-01').pop();
@@ -1974,10 +1969,10 @@ function vAtualizar() {
   $('#view').innerHTML = `
   <div class="gwrap au">
    <div data-k="pat" class="gl">
-     <div class="glh"><span class="gll">Patrimônio de ${mN.toLowerCase()}</span><button class="gswap" id="f-month">${ymLabel(d.month)} <span class="gdown"></span></button></div>
+     <div class="glh"><span class="gll">Patrimônio de ${mN.toLowerCase()}</span><span class="gll">${ymLabel(d.month)}</span></div>
      <div class="gtot money" id="f-total" style="font-size:34px">${brl(P.total)}</div>
      <div class="gll" id="f-cats" style="display:none"></div>
-     <div class="au-st">${exists ? `<span class="au-ok">✓</span> salvo no Histórico${exists.savedAt ? ' em ' + new Date(exists.savedAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : ''}${exists.auto ? ' (sozinho)' : ''}` : isNow ? `o app salva sozinho em ${endD}` : 'ainda não salvo'}</div>
+     <div class="au-st">${isNow ? `ao vivo · o app fecha ${mN.toLowerCase()} sozinho no ${endD}` : exists ? `<span class="au-ok">✓</span> salvo no Histórico${exists.savedAt ? ' em ' + new Date(exists.savedAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : ''}${exists.auto ? ' (sozinho)' : ''}` : isNow ? `o app salva sozinho em ${endD}` : 'ainda não salvo'}</div>
    </div>
 
    <div data-k="act"><button class="gl ev-main" id="f-ev"><i><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></i><span><b>Novo registro</b><small>dinheiro novo, compra, venda, dividendo, juros, gasto…</small></span></button>
@@ -1985,7 +1980,7 @@ function vAtualizar() {
 
    <div data-k="mes" class="gl">
      <div class="gll" style="margin-bottom:4px">Em ${mN.toLowerCase()}</div>
-     <div class="au-row click" id="f-ap-all"><span>Aportes</span><b>${apL.length ? `${apSum < 0 ? '−' : ''}${gbp(Math.abs(apSum))}` : d.aporteGBP === 0 ? 'nenhum' : '—'}</b><span class="gll">${apL.length ? `${apL.length}×` : d.aporteGBP === 0 ? '' : '<a href="#" id="f-ap0">não houve</a>'}</span>${apL.length ? '<span class="gch">›</span>' : ''}</div>
+     <div class="au-row click" id="f-ap-all"><span>Aportes</span><b>${apL.length ? `${apSum < 0 ? '−' : ''}${gbp(Math.abs(apSum))}` : apOf(d.month, d.aporteGBP ?? null) === 0 ? 'nenhum' : '—'}</b><span class="gll">${apL.length ? `${apL.length}×` : apOf(d.month, d.aporteGBP ?? null) === 0 ? '' : '<a href="#" id="f-ap0">não houve</a>'}</span>${apL.length ? '<span class="gch">›</span>' : ''}</div>
      <div class="au-row click" onclick="location.hash='#dividendos'"><span>Dividendos</span><b>${dvN || dvR ? brl(dvR) : '—'}</b><span class="gll">${dvN ? dvN + '×' : ''}</span><span class="gch">›</span></div>
    </div>
 
@@ -2002,28 +1997,18 @@ function vAtualizar() {
      <div class="au-row"><span>Dólar <small class="gll">US$1</small></span><b>R$ ${nf2.format(p.usdbrl || 0)}</b><span class="gsp"></span></div>
      <div class="au-row click" onclick="location.hash='#cripto'"><span>Cripto</span><b class="money">${brl(P.v.crypto)}</b><span class="gch">›</span></div>
      <div id="fx-box" class="${FXEDIT ? 'au-fx' : 'hidden'}">${fieldRow('Libra → Real', 'p.gbpbrl', p.gbpbrl)}${fieldRow('Dólar → Real', 'p.usdbrl', p.usdbrl)}${COINS.map((c) => fieldRow(c.k + ' (US$)', 'p.' + c.k, p[c.k])).join('')}</div>
-     <div class="au-two"><button class="gbtn2" id="f-prices"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg> Buscar agora</button><button class="gbtn2" id="f-fxedit">${FXEDIT ? '✓ Pronto' : '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg> Corrigir'}</button></div>
+     <div class="au-two" style="grid-template-columns:1fr"><button class="gbtn2" id="f-fxedit">${FXEDIT ? '✓ Pronto' : '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg> Corrigir à mão'}</button></div>
    </div>
 
-   ${isNow ? `<div class="gll" style="text-align:center;margin-top:4px">${mN} é salvo sozinho no ${endD}.</div>` : `<button class="gbtn2 au-save" id="f-save">Salvar ${mN.toLowerCase()}</button>
+   ${isNow ? '' : `<button class="gbtn2 au-save" id="f-save">Salvar ${mN.toLowerCase()}</button>
    <div class="gll" style="text-align:center;margin-top:-4px">O app não conseguiu fechar ${mN.toLowerCase()} sozinho (não foi aberto nos últimos dias do mês). Salve agora.</div>`}
   </div>`;
 
   const stamp = async (keys) => { const t = new Date().toISOString(); for (const k of keys) balAt[k] = t; await save(); };
-  $('#f-bal-ok') && ($('#f-bal-ok').onclick = async () => { await stamp([...manual, ...nonAuto]); toast('✓ Saldos conferidos'); render(); });
-  $('#f-cls-ok') && ($('#f-cls-ok').onclick = async () => { await stamp(nonAuto); ATU.open = 0; render(); });
   $('#f-ap0') && ($('#f-ap0').onclick = async () => { d.aporteGBP = 0; await save(); ATU.open = 0; render(); });
-  $('#f-div0') && ($('#f-div0').onclick = async () => { d.divOk = true; await save(); ATU.open = 0; render(); });
-  $('#f-div') && ($('#f-div').onclick = (e) => { e.preventDefault(); editDiv(null); });
-  $('#f-ap') && ($('#f-ap').onclick = (e) => { e.preventDefault(); editAp(null); });
   $('#f-ev') && ($('#f-ev').onclick = () => whatHappened());
   $('#f-ap-all') && ($('#f-ap-all').onclick = (e) => { e.preventDefault(); openApList(); });
   $('#f-ap0') && ($('#f-ap0').onclick = async (e) => { e.preventDefault(); e.stopPropagation(); d.aporteGBP = 0; await save(); render(); });
-  $('#f-month').onclick = () => pickMonth(d.month, async (m) => {
-    const h = DB.history.find((x) => x.month === m);
-    DB.draft = { month: m, divFII: h?.divFII ?? null, divAcoes: h?.divAcoes ?? null, divStocks: h?.divStocks ?? null, aporteGBP: h?.aporteGBP ?? null };
-    applyDivLog(m); applyApLog(m); ATU.open = undefined; await save(); render();
-  });
   // live: every key typed updates the value, the totals on this page and is saved a moment later
   let saveT = null;
   const liveTotals = () => { const P3 = portfolio(); $('#f-total') && ($('#f-total').textContent = brl(P3.total));
@@ -2044,7 +2029,6 @@ function vAtualizar() {
       await save(); return; }
     await save(); render();
   }));
-  $('#f-prices') && ($('#f-prices').onclick = () => refreshPrices(false));
   $('#f-fxedit') && ($('#f-fxedit').onclick = () => { FXEDIT = !FXEDIT; render(); if (FXEDIT) setTimeout(() => $('#fx-box input')?.focus(), 50); });
   $('#f-save') && ($('#f-save').onclick = async () => {
     const P2 = portfolio(), d2 = DB.draft;
@@ -2288,17 +2272,19 @@ function vCripto() {
    <div class="gl"><h2>Bitcoin por pessoa</h2>
      ${c.people.map((w) => { const u = cs.coins[0].net[w]; return `<div class="row"><span class="l">${esc(w)} <span class="small">${u.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></span><span class="r money">${CM(u * p.BTC * p.usdbrl, 2)}</span></div>`; }).join('')}
      ${cs.coins[0].fee ? `<div class="row"><span class="l small">Taxas de transferência</span><span class="r small">−${cs.coins[0].fee.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></div>` : ''}</div>
-  <div class="gl"><h2>Registro de operações</h2>
-    <p class="small muted" style="margin:-4px 0 8px">Compras, vendas, recompensas e correções: <a href="#" id="c-add">Registrar → Novo registro</a>.</p>
-    ${log.map((x) => { const imp = x.op === 'Buy' && x.qty && x.price ? x.value / (x.qty * x.price) - 1 : null; const bad = imp !== null && (imp < -0.005 || imp > 0.06);
+  <div class="gl"><div class="ahd"><h2 style="margin:0">Registro de operações</h2><a id="c-add" class="aadd" title="Compras, vendas, recompensas e correções: Registrar → Novo registro">Comprar / vender ›</a></div>
+    ${log.slice(0, CLOG_ALL ? log.length : 10).map((x) => { const imp = x.op === 'Buy' && x.qty && x.price ? x.value / (x.qty * x.price) - 1 : null; const bad = imp !== null && (imp < -0.005 || imp > 0.06);
       return `<div class="item click" data-id="${x.id}"><div><div class="t">${x.op === 'Buy' ? 'Compra' : x.op === 'Sold' ? 'Venda' : 'Recebido'} · ${x.coin}</div><div class="s">${esc(x.name)} · ${x.date ? new Date(x.date + 'T12:00').toLocaleDateString('pt-BR') : ''}${bad ? ' · <span class="neg">⚠ confira os valores</span>' : ''}</div></div>
       <div class="r"><div class="t">${usd(x.value, 2)}</div><div class="s">${num(x.qty).toLocaleString('pt-BR', { maximumFractionDigits: 8 })} @ ${usd(x.price)}</div></div></div>`; }).join('') || '<p class="muted">Nenhuma operação.</p>'}
+    ${!CLOG_ALL && log.length > 10 ? `<button class="gbtn2" id="c-all">Ver todos (${log.length})</button>` : ''}
   </div></div>`;
   wireSeg();
+  $('#c-all') && ($('#c-all').onclick = () => { CLOG_ALL = true; const y = scrollY; render(); scrollTo(0, y); });
   $$('#view [data-coin]').forEach((el) => (el.onclick = () => coinSheet(el.dataset.coin)));
   $('#c-add').onclick = (e) => { e.preventDefault(); location.hash = '#atualizar'; setTimeout(() => whatHappened(), 350); };
   $$('#view .item').forEach((el) => (el.onclick = () => editOp(el.dataset.id, true)));   // view only; changes go through Novo registro
 }
+let CLOG_ALL = false;   // crypto log: last 10 until you tap Ver todos (this session)
 function viewCur() { try { const c = localStorage.getItem('rumo.cur'); return c === 'GBP' || c === 'USD' ? c : 'BRL'; } catch { return 'BRL'; } }
 function CM(vBRL, dec = 2) { const c = viewCur(); return c === 'GBP' ? gbp(vBRL / (DB.prices.gbpbrl || 1), dec) : c === 'USD' ? usd(vBRL / (DB.prices.usdbrl || 1), dec) : brl(vBRL, dec); }
 // profit/loss: the % in a tinted pill, the value beside it in quiet text, so the two never read as one number
@@ -2952,7 +2938,7 @@ const studyOn = () => !!DB && (DB.settings.study ?? PREVIEW);
   // ---- shared pieces of the Painel maths, recomputed the same way the app does it
   const month = () => {
     const P = portfolio(), prevM = DB.history.filter((h) => typeof h.pat === 'number' && h.month < ym()).slice(-1)[0] || null;
-    const a = apSum(ym()), apG = a !== null ? a : (DB.draft.month === ym() ? DB.draft.aporteGBP : null);
+    const apG = apOf(ym(), DB.draft.month === ym() ? DB.draft.aporteGBP : null);
     if (!prevM || apG === null || apG === undefined) return { P, prevM };
     const prevB = inB(prevM.pat, prevM.fx), nowB = inB(P.total, DB.prices.gbpbrl), C = apMonthB(ym(), DB.prices.gbpbrl, apG), gain = nowB - prevB - C;
     return { P, prevM, prevB, nowB, C, gain, r: gain / (prevB + 0.5 * C) };

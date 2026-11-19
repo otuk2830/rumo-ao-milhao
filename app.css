@@ -377,7 +377,7 @@ main{min-height:calc(100vh - 70px); min-height:calc(100dvh - 70px); box-sizing:b
 .mline{font-size:14px;margin:8px 0 0;color:var(--muted)}
 .mline b{font-weight:700}
 .apx{width:30px;height:30px;border-radius:50%;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:18px;line-height:1;display:inline-flex;align-items:center;justify-content:center;padding:0;flex:none}
-.apx:active{background:var(--neg);color:#fff;border-color:var(--neg)}
+.apx:active{background:var(--red);color:#fff;border-color:var(--red)}
 .ap-seg{display:flex}.ap-seg button{flex:1}
 
 /* v4.62 — visual refresh */
@@ -548,7 +548,7 @@ html.dark .gbelow{color:var(--g-acc1)}
 .gvs{font-size:11.5px; color:var(--g-mut); font-variant-numeric:tabular-nums; margin-left:auto; padding-right:8px; white-space:nowrap}
 /* Desempenho: slim rounded bars, month initials (12 months) */
 .pb3{display:grid; grid-template-columns:repeat(12,1fr); gap:6px; margin-top:12px; position:relative}
-.pb3::before{content:""; position:absolute; left:0; right:0; top:32px; border-top:1px dashed var(--g-line, rgba(255,255,255,.12))}
+.pb3::before{content:""; position:absolute; left:0; right:0; top:32px; border-top:1px dashed var(--g-track)}
 .pb3 .c{display:flex; flex-direction:column; align-items:center; cursor:pointer; min-width:0}
 .pb3 .up, .pb3 .dn{height:32px; width:100%; display:flex; justify-content:center}
 .pb3 .up{align-items:flex-end}.pb3 .dn{align-items:flex-start}
@@ -1015,10 +1015,10 @@ html:not(.dark) .cdef{color:var(--g-acct, #8A6D3B) !important}
 .ctile .chave b{font-size:14px; font-weight:600}
 /* Patrimônio card, calmer: % bold, amount small and quiet; Lucro total as one line under the chart */
 .chips2 .dchip small, .chips2 .mchip small{font-weight:500; opacity:.72; margin-left:2px}
-.glife2{display:flex; align-items:baseline; gap:6px; margin-top:10px; font-size:13px; color:var(--g-mute, rgba(255,255,255,.55))}
+.glife2{display:flex; align-items:baseline; gap:6px; margin-top:10px; font-size:13px; color:var(--g-mut)}
 .glife2 b{font-weight:600; font-variant-numeric:tabular-nums} .glife2 .money{opacity:.85}
 html.priv .glife2 .money{filter:blur(6px)}
-.perf2 .gsc{font-size:12px; margin-top:3px; color:var(--g-mute, rgba(255,255,255,.5)); opacity:.75}
+.perf2 .gsc{font-size:12px; margin-top:3px; color:var(--g-mut); opacity:.75}
 .study .perf2 .gsc{text-decoration:underline dotted; text-underline-offset:3px; cursor:help}
 /* "O que aconteceu?" */
 .ev-main{display:flex; align-items:center; gap:14px; width:100%; text-align:left; color:var(--g-ink); font:inherit; cursor:pointer; padding:18px; margin-bottom:12px}
