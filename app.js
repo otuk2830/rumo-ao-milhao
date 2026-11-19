@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '8.8';
+const APP_VERSION = '8.9';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -131,7 +131,7 @@ function normalize(d) {
   d = Object.assign(e, d || {});
   for (const k of ['settings', 'balances', 'prices', 'draft', 'crypto']) d[k] = Object.assign(emptyDB()[k], d[k] || {});
   d.settings.targets = Object.assign(emptyDB().settings.targets, d.settings.targets || {});
-  d.settings.auto = Object.assign({ acoes: false, fiis: false, stocks: false }, d.settings.auto || {});
+  d.settings.auto = { acoes: true, fiis: true, stocks: true };   // classes always come from your assets (the old typed-total switch is gone)
   d.settings.keys = Object.assign({ brapi: '', finnhub: '', alpha: '', sheet: '' }, d.settings.keys || {});
   delete d.settings.keys.hg; if (d.settings.keyStatus) delete d.settings.keyStatus.hg;
   for (const a of d.assets || []) {
@@ -871,7 +871,7 @@ async function fillMissingFx() {
 }
 // ---- daily snapshot: today's patrimônio, saved quietly after prices load (later the same day replaces it)
 const today = () => { const t = new Date(); return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0'); };
-const CAT_N = { acoes: 'Ações', fiis: 'FIIs', rf: 'Renda fixa', stocks: 'Exterior', crypto: 'Cripto', caixa: 'Caixa' };
+const CAT_N = { acoes: 'Ações', fiis: 'FIIs', rf: 'Renda fixa', stocks: 'Stocks', crypto: 'Cripto', caixa: 'Caixa' };
 // three blocks, each in its own currency: Brazil (R$), Trading 212 (£), Cripto (US$)
 const natNow = (P) => { const b = DB.balances, pr = DB.prices, r2 = (v) => Math.round(v * 100) / 100;
   return { brl: r2(P.v.acoes + P.v.fiis + num(b.rfBrasil) + num(b.caixa)), gbp: r2(P.v.stocks / (pr.gbpbrl || 1) + num(b.t212cash)), usd: r2(P.v.crypto / (pr.usdbrl || 1)) }; };
@@ -1069,7 +1069,7 @@ async function pickImport(fromWelcome) {
 const ACLS = [
   { k: 'acoes', n: 'Ações', market: 'B3' },
   { k: 'fiis', n: 'FIIs', market: 'GS' },
-  { k: 'stocks', n: 'Exterior', market: 'US' },
+  { k: 'stocks', n: 'Stocks', market: 'US' },
 ];
 const FXOF = (cur) => (cur === 'BRL' ? 1 : cur === 'USD' ? num(DB.prices.usdbrl) : cur === 'GBP' ? num(DB.prices.gbpbrl) : cur === 'GBX' ? num(DB.prices.gbpbrl) / 100 : cur === 'EUR' ? num(DB.prices.eurbrl) : 1);
 const curOf = (a) => (a.market === 'B3' ? 'BRL' : a.market === 'GS' ? a.currency || 'BRL' : a.market === 'US' ? 'USD' : a.currency || 'BRL');
@@ -1321,7 +1321,6 @@ function vAtivos() {
     <div class="gl cw-hero"><div class="lab">${info.n}</div><div class="val money">${M(total)}</div>
       ${withCost.length ? `<div class="sub cw-pl">${plLine(pl, cost ? pl / cost : 0)}</div>` : ''}</div>
     ${!auto || needGS || needB3 || needUS || needEU ? `<div class="gl">
-      <label class="toggle"><input type="checkbox" id="at-auto" ${auto ? 'checked' : ''}><span><b>Usar estes ativos no patrimônio</b><br><span class="small muted">${auto ? 'Ligado: o total de ' + info.n + ' é calculado aqui (preços ao vivo).' : 'Desligado: vale o total digitado em Atualizar (<span class="money">' + M(manualTotal) + '</span>).'}</span></span></label>
       <div class="small muted" style="margin-top:8px">Preços: ${DB.prices.assetsAt ? fmtDate(DB.prices.assetsAt) : 'ainda não buscados'} · atualizam sozinhos a cada 5 min</div>
       ${needGS ? '<div class="banner" style="margin:10px 0 0">Para preços de FIIs, cole o link da sua planilha do Google em ⚙︎ Ajustes → Chaves de preço → Google Sheets.</div>' : ''}
       ${needB3 ? '<div class="banner" style="margin:10px 0 0">Para preços da B3, crie a chave grátis em <b>brapi.dev</b> e cole em ⚙︎ Ajustes → Chaves de preço.</div>' : ''}
@@ -1364,11 +1363,6 @@ function vAtivos() {
    </div>
   </div>`;
   wireSeg();
-  $('#at-auto') && ($('#at-auto').onchange = async (e) => {
-    if (e.target.checked && !rows.length) { e.target.checked = false; return toast('Adicione os ativos primeiro'); }
-    (DB.settings.auto ||= {})[cls] = e.target.checked; await save(); render();
-    toast(e.target.checked ? `Patrimônio agora usa os ativos de ${info.n}` : `Voltou para o total digitado em Atualizar`);
-  });
   $('#at-add').onclick = () => { location.hash = '#atualizar'; setTimeout(() => whatHappened(), 350); };
   $$('#view .item').forEach((el) => (el.onclick = () => editAsset(el.dataset.id)));
   $$('#view [data-ar]').forEach((el) => (el.onclick = () => { ATV.open = ATV.open === el.dataset.ar ? null : el.dataset.ar; const y = window.scrollY; render(); window.scrollTo(0, y); }));
@@ -1992,7 +1986,7 @@ function vAtualizar() {
 
    <div data-k="auto" class="gl">
      <div class="glh"><span class="gll">Automático</span><span class="gll">${s5 ? 'atualizado ' + (fmtDate(p.updatedAt).split(' ')[1] || '') : '<span class="au-due">preços antigos</span>'}</span></div>
-     ${au.acoes ? autoRow('Ações', 'acoes') : ''}${au.fiis ? autoRow('FIIs', 'fiis') : ''}${au.stocks ? autoRow('Exterior', 'stocks') : ''}
+     ${au.acoes ? autoRow('Ações', 'acoes') : ''}${au.fiis ? autoRow('FIIs', 'fiis') : ''}${au.stocks ? autoRow('Stocks', 'stocks') : ''}
      <div class="au-row"><span>Libra <small class="gll">£1</small></span><b>R$ ${nf2.format(p.gbpbrl || 0)}</b><span class="gsp"></span></div>
      <div class="au-row"><span>Dólar <small class="gll">US$1</small></span><b>R$ ${nf2.format(p.usdbrl || 0)}</b><span class="gsp"></span></div>
      <div class="au-row click" onclick="location.hash='#cripto'"><span>Cripto</span><b class="money">${brl(P.v.crypto)}</b><span class="gch">›</span></div>
@@ -2092,12 +2086,10 @@ function vHistorico() {
      <div class="hpop" id="h-pop" hidden>Rendimento = só o resultado dos investimentos, sem aportes, medido em ${BSYM()} (com o câmbio).${chg !== null ? `<br>O patrimônio total ${chg < 0 ? 'caiu' : 'subiu'} <span class="money">${F(Math.abs(chg))}</span> ${ALL ? 'desde ' + ymLabel(firstP.month) : 'no ano'}, contando os aportes.` : ''}</div>
    </div>
    <div class="gl hlist">${rows}</div>` : '<div class="gl"><div class="gll">Nenhum mês salvo ainda. O app salva cada mês sozinho no dia 1º.</div></div>'}
-   <button class="gbtn2" id="h-add"><svg style="vertical-align:-4px" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> Adicionar mês à mão</button>
   </div>`;
   { const on = $('#view .hy .on'), bar = $('#view .hy'); if (on && bar) bar.scrollLeft = on.offsetLeft - bar.clientWidth / 2 + on.offsetWidth / 2; }   // keep the chosen year in view
   $$('#view .hy button').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.hsel', b.dataset.y); } catch {} render(); }));
   $$('#view .hm').forEach((el) => (el.onclick = () => { if (el.dataset.y) { try { localStorage.setItem('rumo.hsel', el.dataset.y); } catch {} render(); window.scrollTo(0, 0); } else monthCard(el.dataset.m); }));
-  $('#h-add').onclick = () => editMonth(null);
   { const pop = $('#h-pop'), t = $('#h-rend'); if (pop && t) { t.onclick = (e) => { e.stopPropagation(); pop.hidden = !pop.hidden; }; pop.onclick = () => { pop.hidden = true; }; } }
   $('#h-swap') && ($('#h-swap').onclick = () => { const nx = { BRL: 'GBP', GBP: 'USD', USD: 'BRL' }[hc]; try { localStorage.setItem('rumo.cur', nx); } catch {} render(); });
 }
@@ -2482,7 +2474,6 @@ function vAjustes() {
    </div>
    <div class="ssec">Preços</div><div class="sgrp">
      ${srow('a-keys', 'plug', '#0284C7', 'Fontes de preço', ks.length ? ks.map((k) => ({ sheet: 'Google Sheets', brapi: 'brapi', finnhub: 'Finnhub', alpha: 'Alpha Vantage' })[k]).join(' · ') : 'nenhuma configurada', ks.length ? `<span class="sbad ${kBad ? 'w' : 'ok'}">${kBad ? kBad + ' com erro' : kOk + ' ✓'}</span>` : '')}
-     ${srow('a-auto', 'pie', '#0EA5A4', 'Patrimônio pelos ativos', ACLS.filter((k) => DB.settings.auto?.[k.k]).map((k) => k.n).join(' · ') || 'desligado')}
      ${srow('a-crypto', 'coin', '#F97316', 'Cripto', 'pessoas e saldos de antes do registro')}
    </div>
    <div class="ssec">Segurança</div><div class="sgrp">
@@ -2505,14 +2496,6 @@ function vAjustes() {
   $('#a-tgt').onclick = () => { const draw = () => openSheet(`<h3>Alocação alvo (%)</h3>${CLASSES.map((k) => fieldRow(k.n, 't.' + k.k, Math.round(num(DB.settings.targets[k.k]) * 1000) / 10)).join('')}
       <div class="small" id="t-sum" style="margin:8px 0"></div><button class="btn primary block" onclick="closeSheet()">Pronto</button>`, (el) => { const upd = () => { const t = CLASSES.reduce((a, k) => a + num(DB.settings.targets[k.k]), 0); $('#t-sum', el).innerHTML = `<span class="${Math.abs(t - 1) > 1e-6 ? 'neg' : 'pos'}">Soma: ${pct(t)} ${Math.abs(t - 1) > 1e-6 ? '— precisa somar 100%' : '✓'}</span>`; }; upd(); bindSettingInputs(el, () => { upd(); render(); }); }); draw(); };
   $('#a-keys').onclick = keysSheet;
-  $('#a-auto').onclick = () => openSheet(`<h3>Patrimônio pelos ativos</h3>
-      <div class="small muted" style="margin-bottom:8px">Ligado: o total da classe vem dos ativos (preços ao vivo). Desligado: vale o total digitado em Atualizar.</div>
-      ${ACLS.map((k) => { const n = (DB.assets || []).filter((a) => a.cls === k.k).length; return `<label class="toggle" style="margin:10px 0"><input type="checkbox" data-auto="${k.k}" ${DB.settings.auto?.[k.k] ? 'checked' : ''}><span><b>${k.n}</b><br><span class="small muted">${n} ${n === 1 ? 'ativo' : 'ativos'}</span></span></label>`; }).join('')}
-      <button class="btn primary block" onclick="closeSheet()" style="margin-top:10px">Pronto</button>`, (el) => {
-    $$('[data-auto]', el).forEach((cb) => (cb.onchange = async () => { const k = cb.dataset.auto;
-      if (cb.checked && !(DB.assets || []).some((a) => a.cls === k)) { cb.checked = false; return toast('Adicione os ativos primeiro'); }
-      (DB.settings.auto ||= {})[k] = cb.checked; await save(); render(); }));
-  });
   $('#a-crypto').onclick = () => openSheet(`<h3>Cripto — saldos de antes do registro</h3>
       <div class="field"><label>Pessoas<small>separe por vírgula</small></label><input id="a-people" value="${esc(c.people.join(', '))}" style="text-align:left"></div>
       ${COINS.map((co) => c.people.map((w) => fieldRow(`${co.k} — ${esc(w)}`, `pre.${co.k}.${w}`, c.pre?.[co.k]?.[w] ?? 0)).join('') + fieldRow(`${co.k} — taxas de transferência`, `fee.${co.k}`, c.fees?.[co.k] ?? 0)).join('')}
@@ -2650,7 +2633,7 @@ const accOpts = (sel, extra = []) => [...extra, ...Object.entries(ACC).map(([k, 
 const money = (cur, v) => (cur === 'GBP' ? gbp(v, 2) : cur === 'USD' ? usd(v, 2) : brl(v, 2));
 const symC = (cur) => (cur === 'GBP' ? '£' : cur === 'USD' ? 'US$' : 'R$');
 const conv = (v, from, to) => (from === to ? v : (v * FXOF(from)) / (FXOF(to) || 1));   // at today's rates
-const KINDS = [['acoes', 'Ação (B3)'], ['fiis', 'FII'], ['stocks', 'Exterior (T212)'], ['cripto', 'Cripto']];
+const KINDS = [['acoes', 'Ação (B3)'], ['fiis', 'FII'], ['stocks', 'Stocks (T212)'], ['cripto', 'Cripto']];
 const payCur = (k) => (k === 'stocks' ? 'GBP' : k === 'cripto' ? 'USD' : 'BRL');   // the currency you pay in for each kind
 
 // new money in / out (an aporte or a retirada), same record the Aporte form makes
@@ -2964,7 +2947,7 @@ const studyOn = () => !!DB && (DB.settings.study ?? PREVIEW);
     },
     life() {
       let cost = 0, pl = 0; const rows = [];
-      for (const [k, n] of [['acoes', 'Ações'], ['fiis', 'FIIs'], ['stocks', 'Exterior']]) { let c = 0, p = 0; for (const r of assetRows(k)) if (r.cost !== null) { c += r.cost; p += r.pl; } cost += c; pl += p; if (c) rows.push(step(n, `${S(R2, p)} <small>of ${R2(c)} paid</small>`)); }
+      for (const [k, n] of [['acoes', 'Ações'], ['fiis', 'FIIs'], ['stocks', 'Stocks']]) { let c = 0, p = 0; for (const r of assetRows(k)) if (r.cost !== null) { c += r.cost; p += r.pl; } cost += c; pl += p; if (c) rows.push(step(n, `${S(R2, p)} <small>of ${R2(c)} paid</small>`)); }
       const cs = cryptoSummary(), u = num(DB.prices.usdbrl); if (cs.plTot) { cost += cs.plTot.cost * u; pl += cs.plTot.pl * u; rows.push(step('Cripto', `${S(R2, cs.plTot.pl * u)} <small>of ${R2(cs.plTot.cost * u)} paid</small>`)); }
       sheet('Lucro total',
         'Everything you hold today that has an average price, compared with what it cost you. Like the profit/loss in your broker, but for all brokers together.',
@@ -3034,7 +3017,7 @@ const studyOn = () => !!DB && (DB.settings.study ?? PREVIEW);
       const gbpAvg = r.a.cls === 'stocks' && r.a.avgCur !== 'ASSET';
       sheet(r.a.ticker, 'Today\'s price against your average price — the same as your broker shows.', box('profit = (price now − average price) × quantity') + box('% = profit ÷ (average price × quantity)'),
         step('Quantity', r.a.qty.toLocaleString('pt-BR', { maximumFractionDigits: 8 })) + step('Price now', fmtPx(r.cur, r.pr)) + step('Average price', gbpAvg ? '£ ' + nf2.format(r.a.avg) : fmtPx(r.cur, r.a.avg)) + step('Profit', `${S(R2, r.pl)} · ${S(P2, r.plPct)}`),
-        gbpAvg ? 'Exterior: your average is in pounds (as Trading 212 shows it), so the move of the dollar or euro against the pound is part of the result — same as in Trading 212.' : '');
+        gbpAvg ? 'Stocks: your average is in pounds (as Trading 212 shows it), so the move of the dollar or euro against the pound is part of the result — same as in Trading 212.' : '');
     },
     coin(el) {
       const k = el.closest('[data-coin]')?.dataset.coin || el.closest('.ps')?.querySelector('h3')?.textContent; const cs = cryptoSummary(), b = cs.coins.find((x) => x.k === k || (COINMETA[x.k] || [])[0] === k); if (!b || !b.pl) return X.cryptoTot();
