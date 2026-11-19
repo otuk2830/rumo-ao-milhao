@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '8.1';
+const APP_VERSION = '8.2';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -678,7 +678,7 @@ function editAp(id) {
     ${id ? '<button class="btn danger block" id="ap-del">Apagar</button>' : ''}
     <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
     $$('input.pt', el).forEach(liveFormat); if (!id) setTimeout(() => $('#ap-v', el).focus(), 250);
-    const mode = () => { $$('.ap-seg button', el).forEach((b) => b.classList.toggle('on', (b.dataset.k === 'out') === out));
+    const mode = () => { $$('.ap-seg button', el).forEach((b) => b.classList.toggle('on', b.dataset.k === (out ? 'out' : 'in')));   // Mover opens its own form, so it is never 'on' here
       $('#ap-hint', el).textContent = out ? 'Dinheiro que você TIROU dos investimentos. Depois atualize o saldo de onde saiu.' : 'Dinheiro NOVO que entrou nos investimentos.';
       $('#ap-to-l', el).textContent = out ? 'De onde saiu' : 'Para onde foi'; if (!id) $('#ap-h', el).textContent = out ? 'Fiz uma retirada' : 'Fiz um aporte';
       const hint = $('#ap-to-h', el); if (hint) hint.textContent = AP_OPTS[$('#ap-to', el).value].to ? (out ? 'sai do saldo sozinho' : 'soma no saldo sozinho') : (out ? '' : 'atualize a quantidade'); };
