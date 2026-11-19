@@ -1047,11 +1047,11 @@ html:not(.dark) .ev-btn{border-color:rgba(0,0,0,.08); background:rgba(0,0,0,.03)
 .dyl i{display:inline-block; width:10px; height:10px; border-radius:3px; background:var(--g-acc2); margin-right:5px; vertical-align:-1px}
 .dyl s{display:inline-block; width:10px; height:10px; border-radius:3px; background:color-mix(in srgb, var(--g-mut) 32%, transparent); margin-right:5px; vertical-align:-1px}
 html.priv .dym .money, html.priv .dys .money{filter:blur(6px)}
-/* 9.9 — milestone rows: the app moves the track itself (smooth, never flips the Painel cards) */
-.gms.scr{display:block; overflow:hidden; touch-action:pan-y;
-  -webkit-mask-image:linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%); mask-image:linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%)}
-.gms.scr .gmt{display:flex; will-change:transform; transform:translate3d(0,0,0)}
-.gms.scr .gmt > div{flex:0 0 20%; text-align:center; font-size:11.5px; color:var(--g-mut)} .gms.scr.s4 .gmt > div{flex-basis:25%}
+/* 10.0 — milestone rows: the phone's own scrolling (smoothest); the Painel cards ignore swipes that start here */
+.gms.scr{display:block; overflow-x:auto; overflow-y:hidden; -webkit-overflow-scrolling:touch; overscroll-behavior-x:contain; scrollbar-width:none; scroll-snap-type:x proximity}
+.gms.scr::-webkit-scrollbar{display:none}
+.gms.scr .gmt{display:flex}
+.gms.scr .gmt > div{flex:0 0 20%; scroll-snap-align:start; text-align:center; font-size:11.5px; color:var(--g-mut)} .gms.scr.s4 .gmt > div{flex-basis:25%}
 .gms.scr .gmt > .ok{color:var(--g-ink)} .gms.scr .gmt > .goal{color:var(--g-acc2); font-weight:600}
 .gms.scr small{display:block; margin-top:2px}
 /* 9.6 — the goal dot in the 100 mil row */

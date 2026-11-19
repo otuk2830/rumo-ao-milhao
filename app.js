@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '9.9';
+const APP_VERSION = '10.0';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -268,40 +268,6 @@ function marcos() {
 }
 // Fixed R$ 100 mil steps that keep going past the goal: every one you reached keeps its date forever.
 // The goal itself is one of the dots (added if it isn't a round 100 mil) and is marked; changing it only moves that mark.
-// Milestone dots inside the swipeable cards: we move the row ourselves (GPU transform, one update per frame),
-// so a sideways swipe on the dots never flips the card. Vertical swipes are left alone. On release it glides with
-// your flick and settles on a dot; past the ends it stretches a little and springs back.
-function dotsTo(r, x, ms = 0) {   // x = how far the row is moved left, in px
-  const t = r.firstElementChild, max = Math.max(0, t.scrollWidth - r.clientWidth);
-  x = Math.max(0, Math.min(max, x)); cancelAnimationFrame(r._raf);
-  if (!ms) { r._x = x; t.style.transform = `translate3d(${-x}px,0,0)`; return; }
-  const a = r._x || 0, t0 = performance.now(), ease = (k) => 1 - Math.pow(1 - k, 3);
-  const step = (now) => { const k = Math.min(1, (now - t0) / ms); r._x = a + (x - a) * ease(k); t.style.transform = `translate3d(${-r._x}px,0,0)`; if (k < 1) r._raf = requestAnimationFrame(step); };
-  r._raf = requestAnimationFrame(step);
-}
-function dragDots(root = document) {
-  $$('.gms.scr', root).forEach((r) => {
-    if (r.dataset.drag) return; r.dataset.drag = '1'; r._x = r._x || 0;
-    const t = r.firstElementChild; let x0 = 0, y0 = 0, s0 = 0, dir = null, want = 0, pend = 0, hist = [];
-    const max = () => Math.max(0, t.scrollWidth - r.clientWidth);
-    const paint = () => { pend = 0; t.style.transform = `translate3d(${-want}px,0,0)`; };
-    r.addEventListener('touchstart', (e) => { const p = e.touches[0]; cancelAnimationFrame(r._raf); x0 = p.clientX; y0 = p.clientY; s0 = r._x || 0; dir = null; hist = [[performance.now(), p.clientX]]; }, { passive: true });
-    r.addEventListener('touchmove', (e) => {
-      const p = e.touches[0], dx = p.clientX - x0, dy = p.clientY - y0;
-      if (!dir) { if (!dx && !dy) return; dir = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y'; }   // decide on the very first move: iPhone only lets us take over the swipe then
-      if (dir !== 'x') return;
-      e.preventDefault(); e.stopPropagation();
-      let x = s0 - dx; const m = max(); if (x < 0) x /= 3; else if (x > m) x = m + (x - m) / 3;   // stretch past the ends
-      r._x = want = x; hist.push([performance.now(), p.clientX]); if (hist.length > 6) hist.shift();
-      if (!pend) pend = requestAnimationFrame(paint);
-    }, { passive: false });
-    const end = () => { if (dir !== 'x') return; dir = null;
-      const now = performance.now(), h = hist.filter((q) => now - q[0] < 100), v = h.length > 1 ? (h[h.length - 1][1] - h[0][1]) / Math.max(1, h[h.length - 1][0] - h[0][0]) : 0;   // px per ms
-      const w = t.firstElementChild?.offsetWidth || 1, goal = Math.round(((r._x || 0) - v * 260) / w) * w;
-      dotsTo(r, goal, Math.min(650, 300 + Math.abs(v) * 120)); };
-    r.addEventListener('touchend', end, { passive: true }); r.addEventListener('touchcancel', end, { passive: true });
-  });
-}
 function milestones() {
   const meta = num(DB.settings.meta), step = 100000, H = histLive().filter((h) => typeof h.pat === 'number');
   const top = H.reduce((m, h) => Math.max(m, h.pat), 0), end = Math.max(meta, (Math.floor(top / step) + 3) * step);   // 2 more past the next one
@@ -1846,7 +1812,7 @@ function vPainel() {
    </div>
 
   </div>`;
-  dragDots(); requestAnimationFrame(() => { const r = $('#mrow'), nx = r?.querySelector('.nx'); if (nx) dotsTo(r, nx.offsetLeft - nx.parentElement.firstElementChild.offsetLeft - nx.offsetWidth * 2); });   // after the cards are put in your order (moving a card resets its scroll)   // last 2 reached + the next one; swipe left for older ones
+  requestAnimationFrame(() => { const r = $('#mrow'), nx = r?.querySelector('.nx'); if (nx) r.scrollLeft = nx.offsetLeft - nx.parentElement.firstElementChild.offsetLeft - nx.offsetWidth * 2; });   // after the cards are put in your order (moving a card resets its scroll)   // last 2 reached + the next one; swipe left for older ones
   $$('[data-do]').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.divopt', b.dataset.do); } catch {} render(); }));
   $('#cur-swap').onclick = (e) => { e.stopPropagation(); const nx = { BRL: 'GBP', GBP: 'USD', USD: 'BRL' }[heroCur]; try { localStorage.setItem('rumo.cur', nx); } catch {} render(); };
   $('#p-eye') && ($('#p-eye').onclick = (e) => { e.stopPropagation(); $('#btn-eye').click(); });
@@ -1862,6 +1828,11 @@ function vPainel() {
     const settle = () => { const i = Math.round(g.scrollLeft / W()); if (i === 0) jump(N); else if (i === N + 1) jump(1); PG_I = real(i); mark(PG_I); };
     let t = null; g.addEventListener('scroll', () => { mark(real(Math.round(g.scrollLeft / W()))); clearTimeout(t); t = setTimeout(settle, 140); }, { passive: true });
     if ('onscrollend' in window) g.addEventListener('scrollend', () => { clearTimeout(t); settle(); });
+    // the dots scroll natively (smooth); if a swipe that started on them spills over to the cards, the cards are put straight back
+    let hold = null, ht = 0;
+    g.addEventListener('touchstart', (e) => { clearTimeout(ht); hold = e.target.closest('.gms.scr') ? g.scrollLeft : null; }, { passive: true, capture: true });
+    g.addEventListener('touchend', () => { clearTimeout(ht); ht = setTimeout(() => { hold = null; }, 900); }, { passive: true, capture: true });
+    g.addEventListener('scroll', () => { if (hold !== null && Math.abs(g.scrollLeft - hold) > 0.5) g.scrollLeft = hold; }, { passive: true });
     dots.forEach((d) => (d.onclick = () => g.scrollTo({ left: (Number(d.dataset.i) + 1) * W(), behavior: 'smooth' }))); } }
   $('#spark-tap') && ($('#spark-tap').onclick = (e) => { e.stopPropagation(); patSheet(); });
   $('.dchip') && ($('.dchip').onclick = (e) => { e.stopPropagation(); todaySheet(CV); });
@@ -2257,7 +2228,7 @@ function vDividendos() {
   { const sel = $('#dv-sel'), show = (i) => { $$('.dvb2 .c').forEach((c) => c.classList.toggle('sel', Number(c.dataset.dm) === i)); sel.innerHTML = `${MONTHS[i]}: <b class="money">${brl(ty[i])}</b>${ly[i] ? ` <span class="money">· ${brl(ly[i])}</span>` : ''}`; };
     $$('.dvb2 .c').forEach((c) => (c.onclick = () => show(Number(c.dataset.dm)))); show(Math.max(0, upTo - 1)); }
   $$('#view [data-dy]').forEach((b) => (b.onclick = () => { DYEAR = b.dataset.dy; const y0 = scrollY; render(); scrollTo(0, y0); }));
-  dragDots(); requestAnimationFrame(() => { const dm = $('#dmrow'); if (dm) dotsTo(dm, 1e9); });   // newest at the right; swipe for older ones
+  requestAnimationFrame(() => { const dm = $('#dmrow'); if (dm) dm.scrollLeft = dm.scrollWidth; });   // newest at the right; swipe for older ones
   $('#dv-add').onclick = () => editDiv(null); wireDivList();
   $$('#view [data-rk]').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.rk', b.dataset.rk); } catch {} render(); }));
   $('#tbl-tog').onclick = () => { try { localStorage.setItem('rumo.dtbl', tblOpen ? '0' : '1'); } catch {} render(); };
