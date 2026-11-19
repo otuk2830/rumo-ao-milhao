@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '7.6';
+const APP_VERSION = '7.7';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1744,7 +1744,9 @@ function vPainel() {
    <div class="gl">
      <div class="glh"><span class="gll">Patrimônio <button class="geye" id="p-eye" aria-label="Esconder valores"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span><button class="gswap" id="cur-swap" aria-label="Trocar moeda"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M7 4L3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/></svg> ${heroCur === 'BRL' ? 'R$' : heroCur === 'GBP' ? '£' : 'US$'}</button></div>
      <div class="gtot money">${HM[heroCur](P.total)}</div>
-     <div class="chips2">${dLoc ? `<span class="dchip ${dChg < 0 ? 'neg' : 'pos'}">${dChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(dChg))}</span> <small>hoje</small> ${signed(pctS, dLoc.r)}</span>` : ''}${prevM ? `<span class="mchip ${mChg < 0 ? 'neg' : 'pos'}" id="mchip">${mChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(mChg))}</span> <small>no mês</small></span>` : ''}</div>
+     <div class="chips2">${dLoc ? `<span class="dchip ${dChg < 0 ? 'neg' : 'pos'}">${dChg < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(dChg))}</span> <small>hoje</small> ${signed(pctS, dLoc.r)}</span>` : ''}${prevM ? (() => { // the month's real result: aportes and withdrawals taken out, in the base currency, exchange rate included (same as Desempenho)
+       const real = mRealV !== null && mReal !== null, v = real ? fromB(mRealV) : mChg;
+       return `<span class="mchip ${v < 0 ? 'neg' : 'pos'}" id="mchip">${v < 0 ? '▼' : '▲'} <span class="money">${CV(Math.abs(v))}</span> <small>no mês</small>${real ? ' ' + signed(pctS, mReal) : ''}</span>`; })() : ''}</div>
      ${DO === '2' || DO === '3' ? divLine : ''}
      <div class="gll gsub">${['BRL', 'GBP', 'USD'].filter((c) => c !== heroCur).map((c) => `<span class="money">${HM[c](P.total)}</span>`).join('&nbsp;&nbsp;')}</div>
      ${(() => { // lifetime profit/loss of what you hold: every asset and coin with an average price, against what it cost
