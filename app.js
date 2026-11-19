@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '7.5';
+const APP_VERSION = '7.6';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -142,6 +142,7 @@ function normalize(d) {
   d.history = (d.history || []).filter((h) => h && h.month).sort((a, b) => a.month.localeCompare(b.month));
   d.apLog = (d.apLog || []).filter((x) => x && x.date && typeof x.gbp === 'number');
   d.divLog = (d.divLog || []).filter((x) => x && x.date && typeof x.amount === 'number');
+  d.mvLog = (d.mvLog || []).filter((x) => x && x.date && typeof x.amt === 'number');
   d.daily = (d.daily || []).filter((x) => x && x.d && typeof x.v === 'number').sort((a, b) => a.d.localeCompare(b.d));
   d.crypto.log = (d.crypto.log || []).map((x) => ({ id: x.id || uid(), ...x })).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   return d;
@@ -666,11 +667,12 @@ function editAp(id) {
   const x = id ? DB.apLog.find((e) => e.id === id) : { id: uid(), gbp: null, date: today(), note: '' };
   let out = num(x.gbp) < 0;
   openSheet(`<h3 id="ap-h">${id ? (out ? 'Editar retirada' : 'Editar aporte') : 'Fiz um aporte'}</h3>
-    <div class="seg ap-seg" style="margin:4px 0 10px"><button data-k="in" class="${out ? '' : 'on'}">Aporte</button><button data-k="out" class="${out ? 'on' : ''}">Retirada</button></div>
+    <div class="seg ap-seg" style="margin:4px 0 10px"><button data-k="in" class="${out ? '' : 'on'}">Aporte</button><button data-k="out" class="${out ? 'on' : ''}">Retirada</button><button data-k="mv">Mover</button></div>
     <div class="small muted" style="margin-bottom:8px" id="ap-hint"></div>
     <div class="field"><label id="ap-v-l">Valor (£)</label><input id="ap-v" class="pt" inputmode="decimal" value="${x.gbp === null || x.gbp === undefined ? '' : fmtN(Math.abs(typeof x.brl === 'number' ? x.brl : x.gbp), 2)}"></div>
     <div class="field"><label>Data</label><input type="date" id="ap-d" value="${x.date}"></div>
     <div class="field"><label><span id="ap-to-l">Para onde foi</span><small id="ap-to-h"></small></label><select id="ap-to">${(() => { const sel = id ? apOptOf(x) : (DB.settings.lastTo || {}).ap2 || 't212cash'; return Object.entries(AP_OPTS).map(([k, v]) => `<option value="${k}" ${sel === k ? 'selected' : ''}>${v.n} (${v.cur})</option>`).join(''); })()}</select></div>
+    <div id="ap-coinbox" class="hidden">${coinFields('ap', x.opId ? (DB.crypto.log.find((o) => o.id === x.opId) || {}) : {})}</div>
     <div class="field"><label>Nota<small>opcional</small></label><input id="ap-n" value="${esc(x.note || '')}" style="text-align:left" placeholder="ex.: salário"></div>
     <button class="btn primary block" id="ap-save">Salvar</button>
     ${id ? '<button class="btn danger block" id="ap-del">Apagar</button>' : ''}
@@ -680,8 +682,8 @@ function editAp(id) {
       $('#ap-hint', el).textContent = out ? 'Dinheiro que você TIROU dos investimentos. Depois atualize o saldo de onde saiu.' : 'Dinheiro NOVO que entrou nos investimentos.';
       $('#ap-to-l', el).textContent = out ? 'De onde saiu' : 'Para onde foi'; if (!id) $('#ap-h', el).textContent = out ? 'Fiz uma retirada' : 'Fiz um aporte';
       const hint = $('#ap-to-h', el); if (hint) hint.textContent = AP_OPTS[$('#ap-to', el).value].to ? (out ? 'sai do saldo sozinho' : 'soma no saldo sozinho') : (out ? '' : 'atualize a quantidade'); };
-    $$('.ap-seg button', el).forEach((b) => (b.onclick = () => { out = b.dataset.k === 'out'; mode(); })); mode();
-    const curL = () => { $('#ap-v-l', el).textContent = AP_OPTS[$('#ap-to', el).value].dest === 'brl' ? 'Valor (R$)' : 'Valor (£)'; mode(); };
+    $$('.ap-seg button', el).forEach((b) => (b.onclick = () => { if (b.dataset.k === 'mv') return editMove(null, id ? x : null); out = b.dataset.k === 'out'; mode(); curL(); })); mode();
+    const curL = () => { $('#ap-v-l', el).textContent = AP_OPTS[$('#ap-to', el).value].dest === 'brl' ? 'Valor (R$)' : 'Valor (£)'; $('#ap-coinbox', el).classList.toggle('hidden', out || $('#ap-to', el).value !== 'cripto'); mode(); };
     $('#ap-to', el).addEventListener('change', curL); curL();
     $('#ap-save', el).onclick = async () => {
       const raw = $('#ap-v', el).value.trim(), neg = out || raw.startsWith('-'), v = parsePT(raw.replace(/^-/, ''));
@@ -689,6 +691,8 @@ function editAp(id) {
       const opt = AP_OPTS[$('#ap-to', el).value], inBRL = opt.dest === 'brl', g0 = DB.prices.gbpbrl || 1, sv = neg ? -v : v;
       const o = { ...x, gbp: inBRL ? Math.round((sv / g0) * 100) / 100 : sv, brl: inBRL ? sv : undefined, gFixed: false, date: $('#ap-d', el).value || today(), dest: opt.dest, note: $('#ap-n', el).value.trim(), at: new Date().toISOString(), g: DB.prices.gbpbrl };
       const pl = opt.to; o.to = pl || undefined; o.toAmt = pl ? toPlace(inBRL ? sv : o.gbp, inBRL ? 'BRL' : 'GBP', pl, { g: o.g }) : undefined;
+      const cf = !neg && $('#ap-to', el).value === 'cripto' ? readCoin('ap', el) : null; if (cf === false) return;
+      o.opId = linkBuy(x.opId, cf, o.date);   // the coins bought with this money go into the crypto log (one step)
       const m = o.date.slice(0, 7), first = !(DB.apLog || []).some((e) => e.id !== o.id && e.date.slice(0, 7) === m);
       const typed = DB.draft.month === m ? DB.draft.aporteGBP : DB.history.find((h) => h.month === m)?.aporteGBP;
       if (first && typed) {
@@ -708,13 +712,87 @@ function editAp(id) {
 async function delAp(id) {
   const x = DB.apLog.find((e) => e.id === id); if (!x) return false;
   if (!(await ask(`Apagar ${x.gbp < 0 ? 'esta retirada' : 'este aporte'} de ${apTxt(x)} (${new Date(x.date + 'T12:00').toLocaleDateString('pt-BR')})?`, { yes: 'Sim, apagar', danger: true }))) return false;
-  const m = x.date.slice(0, 7); placeApply(x, -1); DB.apLog = DB.apLog.filter((e) => e.id !== id);
+  const m = x.date.slice(0, 7); placeApply(x, -1); linkBuy(x.opId, null); DB.apLog = DB.apLog.filter((e) => e.id !== id);
   if (apSum(m) === null) { if (DB.draft.month === m) DB.draft.aporteGBP = 0; const h = DB.history.find((q) => q.month === m); if (h) h.aporteGBP = 0; } else applyApLog(m);   // no entries left = £0 that month
   await save(); return true;
 }
+// coin details (crypto bought with this money): optional — blank = nothing logged in the crypto register
+function coinFields(px, o = {}) {
+  const c = DB.crypto;
+  return `<div class="small muted" style="margin:2px 0 6px">Compra de cripto <small>(deixe em branco se já lançou em Cripto)</small></div>
+    ${c.people.length > 1 ? `<div class="field"><label>Quem</label><select id="${px}-who">${c.people.map((w) => `<option ${w === (o.name || c.people[0]) ? 'selected' : ''}>${esc(w)}</option>`).join('')}</select></div>` : ''}
+    <div class="field"><label>Moeda</label><select id="${px}-coin">${COINS.map((co) => `<option ${co.k === (o.coin || 'BTC') ? 'selected' : ''}>${co.k}</option>`).join('')}</select></div>
+    <div class="field"><label>Quantidade</label><input id="${px}-qty" class="pt" inputmode="decimal" value="${o.qty ? fmtN(o.qty, 8) : ''}"></div>
+    <div class="field"><label>Valor pago (US$)<small>com taxas</small></label><input id="${px}-usd" class="pt" inputmode="decimal" value="${o.value ? fmtN(o.value, 2) : ''}"></div>`;
+}
+function readCoin(px, el) {   // null = nothing to log · false = half filled (toast shown)
+  const q = parsePT($(`#${px}-qty`, el)?.value || ''), u = parsePT($(`#${px}-usd`, el)?.value || '');
+  if (!q && !u) return null; if (!q || !u) { toast('Para lançar a compra, preencha quantidade e valor pago (ou deixe os dois em branco)'); return false; }
+  return { name: $(`#${px}-who`, el)?.value || DB.crypto.people[0], coin: $(`#${px}-coin`, el).value, qty: q, value: u, price: u / q };
+}
+function linkBuy(opId, cf, date) {   // create / update / remove the Buy row tied to an aporte or a move
+  const c = DB.crypto; c.log = c.log.filter((o) => o.id !== opId);
+  if (!cf) return undefined; const id = opId || uid();
+  c.log.push({ id, date, op: 'Buy', ...cf }); c.log.sort((a, b) => (a.date || '').localeCompare(b.date || '')); return id;
+}
+// ---- moving money between your own accounts: balances change, results don't (not an aporte, not a retirada)
+const MV_FROM = { t212cash: 'T212 caixa', caixa: 'Caixa', rfBrasil: 'Renda fixa' };
+const MV_TO = { ...MV_FROM, cripto: 'Cripto' };
+function mvApply(e, sign) {
+  const b = DB.balances, at = new Date().toISOString(); (DB.settings.balAt ||= {});
+  if (PLACES[e.from]) { b[e.from] = Math.round((num(b[e.from]) - sign * num(e.amt)) * 100) / 100; DB.settings.balAt[e.from] = at; }
+  if (PLACES[e.to] && e.toAmt) { b[e.to] = Math.round((num(b[e.to]) + sign * num(e.toAmt)) * 100) / 100; DB.settings.balAt[e.to] = at; }
+}
+const mvTxt = (e) => `${PLACES[e.from]?.cur === 'GBP' ? gbp(e.amt, 2) : brl(e.amt, 2)} · ${MV_FROM[e.from] || e.from} → ${MV_TO[e.to] || e.to}`;
+function editMove(id, fromAp) {   // fromAp: an aporte/retirada being turned into a move (keeps its date, amount and note)
+  const x = id ? (DB.mvLog || []).find((e) => e.id === id) : { id: uid(), date: fromAp?.date || today(), from: fromAp && fromAp.gbp < 0 && MV_FROM[fromAp.to] ? fromAp.to : 't212cash', amt: fromAp ? Math.abs(typeof fromAp.brl === 'number' ? fromAp.brl : fromAp.gbp) : null, to: 'cripto', note: fromAp?.note || '' };
+  const op = x.opId ? DB.crypto.log.find((o) => o.id === x.opId) || {} : {};
+  openSheet(`<h3>${id ? 'Editar movimentação' : 'Mover entre contas'}</h3>
+    <div class="small muted" style="margin:-2px 0 10px">Dinheiro que mudou de lugar entre suas contas. Não é aporte nem retirada: os saldos mudam, seus resultados não.${fromAp ? '<br><b>Este lançamento vai virar uma movimentação.</b>' : ''}</div>
+    <div class="field"><label>De</label><select id="mv-from">${Object.entries(MV_FROM).map(([k, n]) => `<option value="${k}" ${k === x.from ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+    <div class="field"><label id="mv-v-l">Valor</label><input id="mv-v" class="pt" inputmode="decimal" value="${x.amt ? fmtN(x.amt, 2) : ''}"></div>
+    <div class="field"><label>Para</label><select id="mv-to">${Object.entries(MV_TO).map(([k, n]) => `<option value="${k}" ${k === x.to ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+    <div class="field hidden" id="mv-in-f"><label id="mv-in-l">Chegou</label><input id="mv-in" class="pt" inputmode="decimal" value="${x.toAmt ? fmtN(x.toAmt, 2) : ''}"></div>
+    <div id="mv-coinbox" class="hidden">${coinFields('mv', op)}</div>
+    <div class="field"><label>Data</label><input type="date" id="mv-d" value="${x.date}"></div>
+    <div class="field"><label>Nota<small>opcional</small></label><input id="mv-n" value="${esc(x.note || '')}" style="text-align:left" placeholder="ex.: comprar bitcoin"></div>
+    <button class="btn primary block" id="mv-save">Salvar</button>
+    ${id ? '<button class="btn danger block" id="mv-del">Apagar</button>' : ''}
+    <button class="btn block" onclick="closeSheet()">Cancelar</button>`, (el) => {
+    $$('input.pt', el).forEach(liveFormat);
+    const sym = (k) => (PLACES[k]?.cur === 'GBP' ? '£' : 'R$');
+    let typedIn = !!x.toAmt; $('#mv-in', el).addEventListener('input', () => (typedIn = true));
+    const sync = () => { const f = $('#mv-from', el).value, t = $('#mv-to', el).value, v = parsePT($('#mv-v', el).value);
+      $('#mv-v-l', el).textContent = `Valor (${sym(f)})`; $('#mv-coinbox', el).classList.toggle('hidden', t !== 'cripto');
+      const cross = PLACES[t] && PLACES[t].cur !== PLACES[f].cur; $('#mv-in-f', el).classList.toggle('hidden', !cross);
+      if (cross) { $('#mv-in-l', el).textContent = `Chegou (${sym(t)})`; if (!typedIn && v) $('#mv-in', el).value = fmtN(toPlace(v, PLACES[f].cur, t, { g: DB.prices.gbpbrl }), 2); } };
+    ['#mv-from', '#mv-to'].forEach((k) => ($(k, el).onchange = sync)); $('#mv-v', el).addEventListener('input', sync); sync();
+    $('#mv-save', el).onclick = async () => {
+      const f = $('#mv-from', el).value, t = $('#mv-to', el).value, v = parsePT($('#mv-v', el).value);
+      if (!v) return toast('Digite o valor'); if (f === t) return toast('Escolha contas diferentes');
+      const cf = t === 'cripto' ? readCoin('mv', el) : null; if (cf === false) return;
+      const toAmt = PLACES[t] ? (PLACES[t].cur === PLACES[f].cur ? v : parsePT($('#mv-in', el).value) || toPlace(v, PLACES[f].cur, t, { g: DB.prices.gbpbrl })) : 0;
+      const o = { id: x.id, date: $('#mv-d', el).value || today(), from: f, amt: v, to: t, toAmt, note: $('#mv-n', el).value.trim(), at: new Date().toISOString() };
+      DB.mvLog ||= []; const i = DB.mvLog.findIndex((e) => e.id === o.id); if (i > -1) mvApply(DB.mvLog[i], -1);
+      o.opId = linkBuy(x.opId, cf, o.date);
+      if (fromAp) {   // the old aporte/retirada stops counting as new money; its balance change is undone and replaced by this move
+        placeApply(fromAp, -1); linkBuy(fromAp.opId, null); DB.apLog = DB.apLog.filter((e) => e.id !== fromAp.id); const m = fromAp.date.slice(0, 7);
+        if (apSum(m) === null) { if (DB.draft.month === m) DB.draft.aporteGBP = 0; const h = DB.history.find((q) => q.month === m); if (h) h.aporteGBP = 0; } else applyApLog(m);
+      }
+      mvApply(o, 1); if (i > -1) DB.mvLog[i] = o; else DB.mvLog.push(o);
+      await save(); closeSheet(); render(); doneTick(); toast(`✓ Movido: ${mvTxt(o)}${o.opId ? ' · compra lançada em Cripto' : ''}`, 5000);
+    };
+    if (id) $('#mv-del', el).onclick = async () => { if (!(await ask('Apagar esta movimentação? Os saldos voltam ao que eram.', { yes: 'Sim, apagar', danger: true }))) return;
+      mvApply(x, -1); linkBuy(x.opId, null); DB.mvLog = DB.mvLog.filter((e) => e.id !== id); await save(); closeSheet(); render(); };
+  });
+}
 function openApList() {
-  openSheet(`<h3>Aportes e retiradas</h3><div class="small muted" style="margin-bottom:6px">Toque para editar · × para apagar</div>${apList()}<button class="btn block" onclick="closeSheet()" style="margin-top:10px">Fechar</button>`, (el) => {
+  const MV = [...(DB.mvLog || [])].sort((a, b) => b.date.localeCompare(a.date));
+  openSheet(`<h3>Aportes e retiradas</h3><div class="small muted" style="margin-bottom:6px">Toque para editar · × para apagar</div>${apList()}
+    ${MV.length ? `<div class="ps-h">Movimentações entre contas</div>${MV.map((e) => `<div class="item click" data-mv="${e.id}"><div><div class="t">${new Date(e.date + 'T12:00').toLocaleDateString('pt-BR')}</div><div class="s">${e.note ? esc(e.note) + ' · ' : ''}${MV_FROM[e.from]} → ${MV_TO[e.to]}</div></div><div class="r"><div class="t">↔ ${PLACES[e.from]?.cur === 'GBP' ? gbp(e.amt, 2) : brl(e.amt, 2)}</div></div></div>`).join('')}` : ''}
+    <button class="btn block" onclick="closeSheet()" style="margin-top:10px">Fechar</button>`, (el) => {
     $$('[data-ap]', el).forEach((x) => (x.onclick = () => editAp(x.dataset.ap)));
+    $$('[data-mv]', el).forEach((x) => (x.onclick = () => editMove(x.dataset.mv)));
     $$('[data-apx]', el).forEach((b) => (b.onclick = async (e) => { e.stopPropagation(); if (await delAp(b.dataset.apx)) { render(); openApList(); } }));
   });
 }
