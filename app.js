@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '8.0';
+const APP_VERSION = '8.1';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1796,10 +1796,10 @@ function vPainel() {
      <div class="glh"><span class="gll">Desempenho · sem aportes · em ${BSYM()}</span><span class="gll">ⓘ</span></div>
      <div class="perf2">
        <div><div class="gll">${MONTHS[new Date().getMonth()]}</div>
-         ${prevM && mReal !== null ? `<div class="pv ${mReal < 0 ? 'neg' : 'pos'}">${signed(pct, mReal)}</div><div class="gll"><span class="money">${signed(CV, fromB(mRealV ?? 0))}</span>${mLoc ? ` · sem câmbio ${signed(pct, mLoc.r)}` : ''}</div>`
+         ${prevM && mReal !== null ? `<div class="pv ${mReal < 0 ? 'neg' : 'pos'}">${signed(pct, mReal)}</div><div class="gll"><span class="money">${signed(CV, fromB(mRealV ?? 0))}</span></div>`
            : `<div class="pv">–</div><div class="gll">${prevM ? 'informe o aporte do mês' : 'precisa de um mês salvo'}</div>`}</div>
        <div><div class="gll">${st.year}</div>
-         ${Ry ? `<div class="pv ${Ry.r < 0 ? 'neg' : 'pos'}">${signed(pct, Ry.r)}</div><div class="gll">${Ry.n} ${Ry.n === 1 ? 'mês' : 'meses'}${Ry.full && Ry.rl !== null ? ` · sem câmbio ${signed(pct, Ry.rl)}` : ''}</div>`
+         ${Ry ? `<div class="pv ${Ry.r < 0 ? 'neg' : 'pos'}">${signed(pct, Ry.r)}</div><div class="gll">${Ry.n} ${Ry.n === 1 ? 'mês' : 'meses'}</div>`
            : '<div class="pv">–</div><div class="gll">começa com os aportes</div>'}</div>
      </div>
      ${bars}<div class="pb3sel" id="pb3sel"></div>
@@ -2767,8 +2767,8 @@ const studyOn = () => !!DB && (DB.settings.study ?? PREVIEW);
   // which element → which explanation (most specific first)
   const MAP = [
     ['.chips2 .dchip', 'hoje'], ['.chips2 .mchip', 'mes'], ['.glife2', 'life'], ['.gmeta', 'meta'], ['.grow .gpb', 'alloc'],
-    ['#k-perf .perf2 > div:first-child .gll', 'semcambio'], ['#k-perf .perf2 > div:first-child', 'perfMonth'],
-    ['#k-perf .perf2 > div:nth-child(2) .gll', 'semcambio'], ['#k-perf .perf2 > div:nth-child(2)', 'perfYear'],
+    ['#k-perf .perf2 > div:first-child .gsc', 'semcambio'], ['#k-perf .perf2 > div:first-child', 'perfMonth'],
+    ['#k-perf .perf2 > div:nth-child(2) .gsc', 'semcambio'], ['#k-perf .perf2 > div:nth-child(2)', 'perfYear'],
     ['#h-rend', 'histYear'], ['.hm[data-y] .hm-r small', 'histYear'], ['.hm[data-m] .hm-r small', 'histMonth'],
     ['.dv .dchip', 'divYoY'], ['.cw-hero .plx', 'cwHero'], ['.arow .plx', 'asset'], ['.pie-h .plx', 'cwHero'],
     ['.ctile .cchip', 'coin'], ['.ps-sub .plx', 'coin'], ['.gcpage .gc24', 'c24'], ['.gcrows span.pos, .gcrows span.neg', 'c24'],

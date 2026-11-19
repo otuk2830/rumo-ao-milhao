@@ -1018,3 +1018,5 @@ html:not(.dark) .cdef{color:var(--g-acct, #8A6D3B) !important}
 .glife2{display:flex; align-items:baseline; gap:6px; margin-top:10px; font-size:13px; color:var(--g-mute, rgba(255,255,255,.55))}
 .glife2 b{font-weight:600; font-variant-numeric:tabular-nums} .glife2 .money{opacity:.85}
 html.priv .glife2 .money{filter:blur(6px)}
+.perf2 .gsc{font-size:12px; margin-top:3px; color:var(--g-mute, rgba(255,255,255,.5)); opacity:.75}
+.study .perf2 .gsc{text-decoration:underline dotted; text-underline-offset:3px; cursor:help}
