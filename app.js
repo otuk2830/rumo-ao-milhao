@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '8.3';
+const APP_VERSION = '8.4';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -794,7 +794,9 @@ function openApList() {
   const MV = [...(DB.mvLog || [])].sort((a, b) => b.date.localeCompare(a.date));
   openSheet(`<h3>Aportes e retiradas</h3><div class="small muted" style="margin-bottom:6px">Toque para editar · × para apagar</div>${apList()}
     ${MV.length ? `<div class="ps-h">Movimentações entre contas</div>${MV.map((e) => `<div class="item click" data-mv="${e.id}"><div><div class="t">${new Date(e.date + 'T12:00').toLocaleDateString('pt-BR')}</div><div class="s">${e.note ? esc(e.note) + ' · ' : ''}${MV_FROM[e.from]} → ${MV_TO[e.to]}</div></div><div class="r"><div class="t">↔ ${PLACES[e.from]?.cur === 'GBP' ? gbp(e.amt, 2) : brl(e.amt, 2)}</div></div></div>`).join('')}` : ''}
-    <button class="btn block" onclick="closeSheet()" style="margin-top:10px">Fechar</button>`, (el) => {
+    <button class="btn block" id="ap-manual" style="margin-top:10px">+ Adicionar à mão <small class="muted">— só o aporte, sem mexer em saldos</small></button>
+    <button class="btn block" onclick="closeSheet()">Fechar</button>`, (el) => {
+    $('#ap-manual', el).onclick = () => editAp(null);
     $$('[data-ap]', el).forEach((x) => (x.onclick = () => editAp(x.dataset.ap)));
     $$('[data-mv]', el).forEach((x) => (x.onclick = () => editMove(x.dataset.mv)));
     $$('[data-apx]', el).forEach((b) => (b.onclick = async (e) => { e.stopPropagation(); if (await delAp(b.dataset.apx)) { render(); openApList(); } }));
@@ -1976,11 +1978,11 @@ function vAtualizar() {
    </div>
 
    <div data-k="act"><button class="gl ev-main" id="f-ev"><i><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></i><span><b>Novo registro</b><small>dinheiro novo, compra, venda, dividendo, juros, gasto…</small></span></button>
-   <div class="ev-alt">Formulários completos: <a href="#" id="f-ap">Aporte / retirada</a> · <a href="#" id="f-div">Dividendo</a></div></div>
+   </div>
 
    <div data-k="mes" class="gl">
      <div class="gll" style="margin-bottom:4px">Em ${mN.toLowerCase()}</div>
-     <div class="au-row ${apL.length ? 'click' : ''}" id="f-ap-all"><span>Aportes</span><b>${apL.length ? `${apSum < 0 ? '−' : ''}${gbp(Math.abs(apSum))}` : d.aporteGBP === 0 ? 'nenhum' : '—'}</b><span class="gll">${apL.length ? `${apL.length}×` : d.aporteGBP === 0 ? '' : '<a href="#" id="f-ap0">não houve</a>'}</span>${apL.length ? '<span class="gch">›</span>' : ''}</div>
+     <div class="au-row click" id="f-ap-all"><span>Aportes</span><b>${apL.length ? `${apSum < 0 ? '−' : ''}${gbp(Math.abs(apSum))}` : d.aporteGBP === 0 ? 'nenhum' : '—'}</b><span class="gll">${apL.length ? `${apL.length}×` : d.aporteGBP === 0 ? '' : '<a href="#" id="f-ap0">não houve</a>'}</span>${apL.length ? '<span class="gch">›</span>' : ''}</div>
      <div class="au-row click" onclick="location.hash='#dividendos'"><span>Dividendos</span><b>${dvN || dvR ? brl(dvR) : '—'}</b><span class="gll">${dvN ? dvN + '×' : ''}</span><span class="gch">›</span></div>
    </div>
 
@@ -2003,7 +2005,7 @@ function vAtualizar() {
    ${isNow ? `<div class="gll" style="text-align:center;margin-top:4px">${mN} é salvo sozinho no ${endD}.</div>` : `<button class="gbtn2 au-save" id="f-save">Salvar ${mN.toLowerCase()}</button>
    <div class="gll" style="text-align:center;margin-top:-4px">O app não conseguiu fechar ${mN.toLowerCase()} sozinho (não foi aberto nos últimos dias do mês). Salve agora.</div>`}
   </div>`;
-  if (!apL.length && $('#f-ap-all')) $('#f-ap-all').id = '';
+
   const stamp = async (keys) => { const t = new Date().toISOString(); for (const k of keys) balAt[k] = t; await save(); };
   $('#f-bal-ok') && ($('#f-bal-ok').onclick = async () => { await stamp([...manual, ...nonAuto]); toast('✓ Saldos conferidos'); render(); });
   $('#f-cls-ok') && ($('#f-cls-ok').onclick = async () => { await stamp(nonAuto); ATU.open = 0; render(); });
