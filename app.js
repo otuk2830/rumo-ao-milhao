@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '9.6';
+const APP_VERSION = '9.7';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1828,6 +1828,9 @@ function vPainel() {
     const settle = () => { const i = Math.round(g.scrollLeft / W()); if (i === 0) jump(N); else if (i === N + 1) jump(1); PG_I = real(i); mark(PG_I); };
     let t = null; g.addEventListener('scroll', () => { mark(real(Math.round(g.scrollLeft / W()))); clearTimeout(t); t = setTimeout(settle, 140); }, { passive: true });
     if ('onscrollend' in window) g.addEventListener('scrollend', () => { clearTimeout(t); settle(); });
+    // a swipe that starts on the milestone dots scrolls only the dots: the cards are held still until you lift your finger
+    g.addEventListener('touchstart', (e) => { if (e.target.closest('.gms.scr')) g.style.overflowX = 'hidden'; }, { passive: true });
+    const free = () => { g.style.overflowX = ''; }; g.addEventListener('touchend', free, { passive: true }); g.addEventListener('touchcancel', free, { passive: true });
     dots.forEach((d) => (d.onclick = () => g.scrollTo({ left: (Number(d.dataset.i) + 1) * W(), behavior: 'smooth' }))); } }
   $('#spark-tap') && ($('#spark-tap').onclick = (e) => { e.stopPropagation(); patSheet(); });
   $('.dchip') && ($('.dchip').onclick = (e) => { e.stopPropagation(); todaySheet(CV); });
