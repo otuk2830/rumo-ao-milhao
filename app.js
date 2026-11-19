@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '9.3';
+const APP_VERSION = '9.4';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -87,7 +87,8 @@ function ask(msg, { yes = 'Sim', no = 'Não', danger = false } = {}) {
   });
 }
 let SHEET_T = null;
-function closeSheet() { const md = $('#modal'); md.classList.remove('show'); unlockPage(); clearTimeout(SHEET_T);
+function closeSheet() { const md = $('#modal'); const fe = document.activeElement; if (fe && $('#sheet').contains(fe)) fe.blur();   // iPhone: the box keeps focus when you tap Pronto, so commit it before the sheet goes
+  md.classList.remove('show'); unlockPage(); clearTimeout(SHEET_T);
   SHEET_T = setTimeout(() => { md.classList.add('hidden'); $('#sheet').innerHTML = ''; }, 260); }
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeSheet(); });
 
@@ -1472,7 +1473,8 @@ function editAsset(id, cls) {
 /* ---------------- rendering ---------------- */
 const TITLES = { painel: 'Painel', atualizar: 'Registrar', historico: 'Histórico', dividendos: 'Dividendos', cripto: 'Cripto', ativos: 'Carteira', ajustes: 'Ajustes' };
 function route() { return (location.hash || '#painel').slice(1); }
-window.addEventListener('hashchange', () => { if (DB) render(); window.scrollTo(0, 0); });
+window.addEventListener('hashchange', () => { const fe = document.activeElement; if (fe && fe.blur && fe !== document.body) fe.blur();   // commit a box you were typing in before the tab changes (iPhone keeps focus)
+  if (DB) render(); window.scrollTo(0, 0); });
 // header line: how long ago the prices were fetched
 function topSub() {
   const el = document.getElementById('top-sub'); if (!el || !DB) return; const u = DB.prices.updatedAt;
@@ -2444,14 +2446,17 @@ const stog = (id, ico, bg, title, on, sub = '') => `<div class="srow click" id="
   <span class="srt"><b>${title}</b>${sub ? `<span>${sub}</span>` : ''}</span><span class="stog ${on ? 'on' : ''}"></span></div>`;
 function bindSettingInputs(root, after) {   // numbers typed in a settings sheet
   const c = DB.crypto;
-  $$('input[data-k]', root).forEach((inp) => { liveFormat(inp); inp.addEventListener('change', async () => {
+  $$('input[data-k]', root).forEach((inp) => { liveFormat(inp); let last = inp.value, tm = 0;
+    const commit = async () => { clearTimeout(tm); if (inp.value === last) return; last = inp.value;
     const parts = inp.dataset.k.split('.'); const v = parsePT(inp.value) ?? 0;
     if (parts[0] === 's') DB.settings[parts[1]] = parts[1] === 'retornoAnual' ? v / 100 : v;
     else if (parts[0] === 't') DB.settings.targets[parts[1]] = v / 100;
     else if (parts[0] === 'pre') { (c.pre[parts[1]] ||= {})[parts.slice(2).join('.')] = v; }
     else if (parts[0] === 'fee') c.fees[parts[1]] = v;
-    await save(); after && after();
-  }); });
+    await save(); after && after(); };
+    inp.addEventListener('change', commit); inp.addEventListener('blur', commit);
+    inp.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(commit, 600); });   // also saves while you type, so nothing is lost
+  });
 }
 function keysSheet() {
   const s = DB.settings;
