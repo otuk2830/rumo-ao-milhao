@@ -1012,3 +1012,4 @@ html:not(.dark) .cdef{color:var(--g-acct, #8A6D3B) !important}
 .arow .ar .s .plv, .pie-h .r .plv{min-width:8.4em}
 .arow .ar .s .plp, .pie-h .r .plp{min-width:6.6em}
 .glife{display:flex; align-items:center; gap:10px; margin-top:8px} .glife .plp{font-size:12px; padding:2px 8px} .glife .plv{font-size:13px}
+.ctile .chave b{font-size:14px; font-weight:600}

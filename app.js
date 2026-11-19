@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '7.7';
+const APP_VERSION = '7.8';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1533,8 +1533,8 @@ function returnsData() {
     if (pa === null || pb === null) continue;   // £ base: a month with no rate can't be measured
     if (b.live) {   // this month so far: same figure as the Painel
       if (b.aporteGBP === null || b.aporteGBP === undefined) continue;
-      const C = apMonthB(b.month, b.fx, b.aporteGBP), dm = dailyMonth(b.month), ll = liveLocal(portfolio());
-      months.push({ month: b.month, gain: pb - pa - C, r: dm ? dm.r : (pb - pa - C) / pa, aporte: C, rl: ll ? ll.r : null, live: true }); continue;
+      const C = apMonthB(b.month, b.fx, b.aporteGBP), ll = liveLocal(portfolio()), den = pa + 0.5 * C;   // % and value from the same two numbers (end of last month → now)
+      if (den > 0) months.push({ month: b.month, gain: pb - pa - C, r: (pb - pa - C) / den, aporte: C, rl: ll ? ll.r : null, live: true }); continue;
     }
     const lm = localMonth(b.month), rl = lm ? lm.r : null;
     const dm = b.month < ym() ? dailyMonth(b.month) : null; if (dm) { months.push({ ...dm, rl }); continue; }   // daily data covers it → exact
@@ -1670,9 +1670,8 @@ function vPainel() {
   const apNowGBP = (() => { const a = apSum(ym()); if (a !== null) return a; const dv = DB.draft.month === ym() ? DB.draft.aporteGBP : null; if (dv !== null && dv !== undefined) return dv; const h = DB.history.find((x) => x.month === ym()); return h && h.aporteGBP !== undefined ? h.aporteGBP : null; })();
   const prevB = prevM ? inB(prevM.pat, prevM.fx) : null, nowB = inB(P.total, DB.prices.gbpbrl);   // in the base currency, each at its own rate
   const mRealV = prevM && apNowGBP !== null && apNowGBP !== undefined ? nowB - prevB - apMonthB(ym(), DB.prices.gbpbrl, apNowGBP) : null;   // in base
-  const mReal = (() => { const dm = dailyMonth(ym()); if (dm) return dm.r; if (!prevM || !prevB) return null;
-    const apNow = apNowGBP; if (apNow === null || apNow === undefined) return null;
-    return mRealV / prevB; })();
+  const mReal = (() => { if (!prevM || !prevB || mRealV === null) return null;   // same method as Histórico: (now − start − aportes) ÷ (start + ½ aportes)
+    const C = apMonthB(ym(), DB.prices.gbpbrl, apNowGBP), den = prevB + 0.5 * C; return den > 0 ? mRealV / den : null; })();
   // crypto 24h move, weighted by what you hold of each coin
   const c24 = (() => { let now = 0, before = 0, any = false; for (const x of cs.coins) { const ch = DB.prices[x.k + '_24h']; if (typeof ch !== 'number' || !x.valUSD) continue; any = true; now += x.valUSD; before += x.valUSD / (1 + ch / 100); } return any && before ? now / before - 1 : null; })();
   const aportesYearGBP = DB.history.filter((h) => h.month.startsWith(st.year) && h.aporteGBP).reduce((a, h) => a + h.aporteGBP, 0);
