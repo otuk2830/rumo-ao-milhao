@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '8.9';
+const APP_VERSION = '9.0';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -2149,9 +2149,6 @@ function vDividendos() {
   const monthDiv = (m) => { const h = H.find((x) => x.month === m); if (h) return divTotal(h);
     if (DB.draft.month === m) return divTotal({ ...DB.draft, month: m, fx: DB.prices.gbpbrl }); return 0; };
   const cell = (y, mi) => monthDiv(`${y}-${String(mi + 1).padStart(2, '0')}`);
-  let max = 0; yrs.forEach((y) => { for (let i = 0; i < 12; i++) max = Math.max(max, cell(y, i)); });
-  const tot = yrs.map((y) => Array.from({ length: 12 }, (_, i) => cell(y, i)).reduce((a, b) => a + b, 0));
-  const cnt = yrs.map((y) => Array.from({ length: 12 }, (_, i) => cell(y, i)).filter((v) => v > 0).length);
   const st = historyStats(), life = st.divLife, step = 10000;
   const mile = []; let acc = 0, k = 1, prevM = H[0]?.month;
   for (const h of H) { acc += divTotal(h); while (acc >= k * step) { mile.push({ v: k * step, m: h.month, n: ymDiff(prevM, h.month) }); prevM = h.month; k++; } }
@@ -2199,19 +2196,23 @@ function vDividendos() {
    </div>
 
    <div data-k="tabela" class="gl">
-     <div class="au-row click" id="tbl-tog" style="border:0;padding:2px 0"><span>Tabela por ano <small class="gll">${yrs[0]}–${yrs[yrs.length - 1]}</small></span><span class="gch">${tblOpen ? '⌄' : '›'}</span></div>
-     ${tblOpen ? `<div class="tbl-wrap dvt" style="margin-top:10px"><table>
-     <tr><th></th>${yrs.map((y) => `<th>${y}</th>`).join('')}</tr>
-     ${MONTHS.map((mn, i) => `<tr><td>${MON3[i]}</td>${yrs.map((y) => { const v = cell(y, i); return `<td class="${v > 0 && v === max ? 'max' : ''}">${v ? nf0.format(v) : ''}</td>`; }).join('')}</tr>`).join('')}
-     <tr class="tot"><td>Total</td>${tot.map((v) => `<td>${nf0.format(v)}</td>`).join('')}</tr>
-     <tr><td>Média</td>${tot.map((v, i) => `<td>${cnt[i] ? nf0.format(v / cnt[i]) : ''}</td>`).join('')}</tr>
-     <tr><td>Cresc.</td>${tot.map((v, i) => { const g = i && tot[i - 1] && cnt[i] === 12 ? v / tot[i - 1] - 1 : null; return `<td class="${g > 0 ? 'pos' : g < 0 ? 'neg' : ''}">${g === null ? '' : pct(g)}</td>`; }).join('')}</tr>
-     </table></div><div class="gll" style="margin-top:6px;font-size:11.5px">Em destaque: o maior mês de todos. Crescimento só para anos completos.</div>` : ''}
+     <div class="au-row click" id="tbl-tog" style="border:0;padding:2px 0"><span>Por ano <small class="gll">${yrs[0]}–${yrs[yrs.length - 1]}</small></span><span class="gch">${tblOpen ? '⌄' : '›'}</span></div>
+     ${tblOpen ? (() => {   // one year at a time: a bar per month, with a tick at the same month of the year before
+       const y = yrs.includes(DYEAR) ? DYEAR : yrs[yrs.length - 1], yi = yrs.indexOf(y), py = yi > 0 ? yrs[yi - 1] : null;
+       const val = (yy, i) => (`${yy}-${String(i + 1).padStart(2, '0')}` > ym() ? null : cell(yy, i));
+       const vs = MONTHS.map((_, i) => val(y, i)), ps = MONTHS.map((_, i) => (py ? cell(py, i) : 0)), done = vs.filter((v) => v !== null).length;
+       const t = vs.reduce((a, b) => a + (b || 0), 0), pt = ps.slice(0, done).reduce((a, b) => a + b, 0), n = vs.filter((v) => v > 0).length;
+       const g = py && pt ? t / pt - 1 : null, mx = Math.max(1, ...vs.map((v) => v || 0), ...ps), bi = vs.reduce((b2, v, i) => ((v || 0) > (vs[b2] || 0) ? i : b2), 0);
+       return `<div class="hy dv-rk dyc" style="margin-top:10px">${[...yrs].reverse().map((x) => `<button class="${x === y ? 'on' : ''}" data-dy="${x}">${x}</button>`).join('')}</div>
+       <div class="dyt"><span class="money">${brl(t)}</span>${g !== null ? `<small class="${g < 0 ? 'neg' : 'pos'}">${g < 0 ? '▼' : '▲'} ${pct(Math.abs(g))} vs ${py}${done < 12 ? ' (mesmos meses)' : ''}</small>` : ''}</div>
+       <div class="dys"><span><b class="money">${n ? brl(t / n) : '—'}</b>média/mês</span><span><b>${t ? MON3[bi] : '—'}</b>melhor mês</span><span><b>${n}</b>${n === 1 ? 'mês com dividendo' : 'meses com dividendo'}</span></div>
+       ${MONTHS.map((_, i) => `<div class="dym"><span class="gll">${MON3[i]}</span><div class="dyb">${vs[i] ? `<i style="width:${(vs[i] / mx) * 100}%"></i>` : ''}${ps[i] ? `<s style="width:${(ps[i] / mx) * 100}%"></s>` : ''}</div><span class="money">${vs[i] === null ? '—' : vs[i] ? brl(vs[i]) : '0'}</span></div>`).join('')}
+       ${py ? `<div class="dyl"><span><i></i>${y}</span><span><s></s>${py}</span></div>` : ''}`; })() : ''}
    </div>
   </div>`;
   { const sel = $('#dv-sel'), show = (i) => { $$('.dvb2 .c').forEach((c) => c.classList.toggle('sel', Number(c.dataset.dm) === i)); sel.innerHTML = `${MONTHS[i]}: <b class="money">${brl(ty[i])}</b>${ly[i] ? ` <span class="money">· ${brl(ly[i])}</span>` : ''}`; };
     $$('.dvb2 .c').forEach((c) => (c.onclick = () => show(Number(c.dataset.dm)))); show(Math.max(0, upTo - 1)); }
-  const tw = $('#view .tbl-wrap'); if (tw) tw.scrollLeft = tw.scrollWidth;
+  $$('#view [data-dy]').forEach((b) => (b.onclick = () => { DYEAR = b.dataset.dy; const y0 = scrollY; render(); scrollTo(0, y0); }));
   const dm = $('#dmrow'); if (dm) dm.scrollLeft = dm.scrollWidth;
   $('#dv-add').onclick = () => editDiv(null); wireDivList();
   $$('#view [data-rk]').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.rk', b.dataset.rk); } catch {} render(); }));
@@ -2276,6 +2277,7 @@ function vCripto() {
   $('#c-add').onclick = (e) => { e.preventDefault(); location.hash = '#atualizar'; setTimeout(() => whatHappened(), 350); };
   $$('#view .item').forEach((el) => (el.onclick = () => editOp(el.dataset.id, true)));   // view only; changes go through Novo registro
 }
+let DYEAR = null;   // Dividendos → Por ano: the year being shown (this session)
 let CLOG_ALL = false;   // crypto log: last 10 until you tap Ver todos (this session)
 function viewCur() { try { const c = localStorage.getItem('rumo.cur'); return c === 'GBP' || c === 'USD' ? c : 'BRL'; } catch { return 'BRL'; } }
 function CM(vBRL, dec = 2) { const c = viewCur(); return c === 'GBP' ? gbp(vBRL / (DB.prices.gbpbrl || 1), dec) : c === 'USD' ? usd(vBRL / (DB.prices.usdbrl || 1), dec) : brl(vBRL, dec); }
