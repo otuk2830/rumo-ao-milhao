@@ -24,7 +24,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-rumo-180.png">
 <link rel="icon" href="icon-rumo-192.png">
-<link rel="stylesheet" href="app.css?v=8.5">
+<link rel="stylesheet" href="app.css?v=8.6">
 <script>/* theme before paint (not sensitive, kept outside the encrypted data) */
 (function(){var t='auto';try{t=localStorage.getItem('rumo.theme')||'auto'}catch(e){}
 var d=t==='dark'||(t==='auto'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);try{var mt=document.getElementById('m-theme');if(mt)mt.setAttribute('content',d?'#0A0A0B':'#EFECE6');if(!d){var sb=document.querySelector('meta[name=apple-mobile-web-app-status-bar-style]');if(sb)sb.setAttribute('content','default')}}catch(e){}try{if(localStorage.getItem('rumo.hide')==='1')document.documentElement.classList.add('priv')}catch(e){}})();</script>
@@ -83,6 +83,6 @@ var d=t==='dark'||(t==='auto'&&matchMedia('(prefers-color-scheme: dark)').matche
 <div id="toast" class="toast hidden"></div>
 <input type="file" id="file-in" accept=".json,application/json" class="hidden">
 
-<script src="app.js?v=8.5"></script>
+<script src="app.js?v=8.6"></script>
 </body>
 </html>

@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '8.5';
+const APP_VERSION = '8.6';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -138,6 +138,9 @@ function normalize(d) {
     if (!a.avgCur) a.avgCur = a.cls === 'stocks' ? 'GBP' : 'ASSET'; // Exterior: average price in £, as Trading 212 shows it
   }
   d.settings.keyStatus = d.settings.keyStatus || {};
+  // coins you added yourself (Novo registro → Comprei → + Moeda nova): join the built-in list, prices come from CoinGecko like the others
+  d.settings.coins = (d.settings.coins || []).filter((c) => c && c.k && c.id);
+  for (const c of d.settings.coins) { if (!COINS.some((x) => x.k === c.k)) COINS.push({ k: c.k, id: c.id, dec: c.dec || 6 }); if (!COINMETA[c.k]) COINMETA[c.k] = [c.name || c.k, c.k[0], '#334155']; }
   d.assets = (d.assets || []).map((a) => ({ id: a.id || uid(), ...a }));
   d.history = (d.history || []).filter((h) => h && h.month).sort((a, b) => a.month.localeCompare(b.month));
   d.apLog = (d.apLog || []).filter((x) => x && x.date && typeof x.gbp === 'number');
@@ -2781,7 +2784,7 @@ function evInterest() {
 }
 
 // buy or sell: one form, the app updates the asset (quantity + average), the account, and logs an aporte only for new money
-function evTrade(sell) {
+function evTrade(sell, pre) {
   const kinds = KINDS.map(([k, n]) => `<option value="${k}">${n}</option>`).join('');
   const people = DB.crypto.people || [];
   openSheet(`<h3>${sell ? 'Vendi um investimento' : 'Comprei um investimento'}</h3>
@@ -2800,7 +2803,7 @@ function evTrade(sell) {
     const coins = () => cryptoSummary().coins.map((c) => c.k);
     const fillA = () => { const k = $('#tr-k', el).value;
       const opts = k === 'cripto' ? (sell ? coins() : COINS.map((c) => c.k)).map((c) => [c, c]) : DB.assets.filter((a) => a.cls === k).sort((a, b) => a.ticker.localeCompare(b.ticker)).map((a) => [a.id, a.ticker]);
-      $('#tr-a', el).innerHTML = opts.map(([v, n]) => `<option value="${v}">${esc(n)}</option>`).join('') + (!sell && k !== 'cripto' ? '<option value="__new">+ Ativo novo…</option>' : '');
+      $('#tr-a', el).innerHTML = opts.map(([v, n]) => `<option value="${v}">${esc(n)}</option>`).join('') + (!sell ? (k !== 'cripto' ? '<option value="__new">+ Ativo novo…</option>' : '<option value="__coin">+ Moeda nova…</option>') : '');
       $('#tr-who-f', el)?.classList.toggle('hidden', k !== 'cripto'); sync(); };
     const S = () => { const k = $('#tr-k', el).value, aid = $('#tr-a', el).value, isNew = aid === '__new', a = k !== 'cripto' && !isNew ? DB.assets.find((x) => x.id === aid) : null;
       const q = parsePT($('#tr-q', el).value), v = parsePT($('#tr-v', el).value), p = $('#tr-p', el).value, vc = payCur(k), pc = ACC[p]?.cur || vc;
@@ -2818,7 +2821,9 @@ function evTrade(sell) {
       if (!sell && s.a && num(s.a.qty) > 0 && s.a.avg) { const na = newAvg(s.a, s.q, s.v); if (na) lines.push(`Preço médio ${fmtAvg(s.a, s.a.avg)} → <b>${fmtAvg(s.a, na)}</b>`); }
       sumSet(el, lines);
     };
-    $('#tr-k', el).onchange = fillA; ['#tr-a', '#tr-p'].forEach((k) => ($(k, el).onchange = sync)); ['#tr-q', '#tr-v', '#tr-x', '#tr-new'].forEach((k) => $(k, el).addEventListener('input', sync)); fillA();
+    $('#tr-k', el).onchange = fillA; $('#tr-p', el).onchange = sync;
+    $('#tr-a', el).onchange = () => { if ($('#tr-a', el).value === '__coin') return addCoin((k) => evTrade(false, { coin: k })); sync(); }; ['#tr-q', '#tr-v', '#tr-x', '#tr-new'].forEach((k) => $(k, el).addEventListener('input', sync)); fillA();
+    if (pre?.coin) { $('#tr-k', el).value = 'cripto'; fillA(); $('#tr-a', el).value = pre.coin; sync(); }
     $('#tr-save', el).onclick = async () => { const s = S(), d = $('#tr-d', el).value || today();
       if (!s.name) return toast('Escolha o ativo'); if (!s.q || !s.v) return toast('Digite quantidade e valor');
       const ev = { kind: sell ? 'sell' : 'buy', date: d, bal: [] };
@@ -2844,6 +2849,24 @@ function evTrade(sell) {
   });
 }
 const evBuy = () => evTrade(false), evSell = () => evTrade(true);
+
+// a coin the app doesn't have yet: search CoinGecko (where all crypto prices come from) and add it
+function addCoin(done) {
+  openSheet(`<h3>Moeda nova</h3><p class="small muted" style="margin:-4px 0 10px">Digite o nome ou a sigla (ex.: Cardano, ADA, DOGE). O preço vem do CoinGecko, como as outras moedas.</p>
+    <div class="field"><label>Buscar</label><input id="nc-q" autocapitalize="characters" style="text-align:left" placeholder="ex.: ADA"></div>
+    <button class="btn primary block" id="nc-go">Buscar</button><div id="nc-res" style="margin-top:10px"></div>
+    <button class="btn block" onclick="evBuy()" style="margin-top:6px">Voltar</button>`, (el) => {
+    const go = async () => { const q = $('#nc-q', el).value.trim(); if (!q) return; $('#nc-res', el).innerHTML = '<p class="small muted">Buscando…</p>';
+      let L = []; try { const j = await fetchJSON('https://api.coingecko.com/api/v3/search?query=' + encodeURIComponent(q)); L = (j.coins || []).slice(0, 6); } catch { $('#nc-res', el).innerHTML = '<p class="small muted">Sem conexão com o CoinGecko. Tente de novo em instantes.</p>'; return; }
+      if (!L.length) { $('#nc-res', el).innerHTML = '<p class="small muted">Nada encontrado.</p>'; return; }
+      $('#nc-res', el).innerHTML = L.map((c) => `<button class="ev-btn" data-cid="${esc(c.id)}" data-sym="${esc(String(c.symbol || '').toUpperCase())}" data-nm="${esc(c.name || '')}" style="margin-bottom:8px"><b>${esc(c.name)} · ${esc(String(c.symbol || '').toUpperCase())}</b><small>${c.market_cap_rank ? 'nº ' + c.market_cap_rank + ' em valor de mercado' : 'sem ranking'}</small></button>`).join('');
+      $$('[data-cid]', el).forEach((b) => (b.onclick = async () => { const k = b.dataset.sym, id = b.dataset.cid;
+        const same = COINS.find((x) => x.k === k); if (same && same.id !== id) return toast(`Já existe uma moeda ${k} no app (${same.id}).`, 4000);
+        if (!same) { (DB.settings.coins ||= []).push({ k, id, dec: 6, name: b.dataset.nm }); COINS.push({ k, id, dec: 6 }); COINMETA[k] ||= [b.dataset.nm || k, k[0], '#334155']; await save(); refreshPrices(true); }
+        toast(`${b.dataset.nm} adicionada — o preço chega em alguns segundos`, 4000); done(k); })); };
+    $('#nc-go', el).onclick = go; $('#nc-q', el).addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  });
+}
 
 function evGift() {
   const people = DB.crypto.people || [];
