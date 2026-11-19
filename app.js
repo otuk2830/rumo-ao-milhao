@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '9.5';
+const APP_VERSION = '9.6';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -266,13 +266,14 @@ function marcos() {
   for (const h of H) { acc += divTotal(h); while (acc >= k * step) { div.push({ v: k * step, m: h.month }); k++; } }
   return { div };
 }
+// Fixed R$ 100 mil steps that keep going past the goal: every one you reached keeps its date forever.
+// The goal itself is one of the dots (added if it isn't a round 100 mil) and is marked; changing it only moves that mark.
 function milestones() {
-  const meta = num(DB.settings.meta), step = meta / 10, H = histLive().filter((h) => typeof h.pat === 'number');
-  return Array.from({ length: 10 }, (_, i) => {
-    const v = step * (i + 1);
-    const h = H.find((x) => x.pat >= v);   // first month-end at or above it (same rule as Conquistas)
-    return { v, hit: h ? h.month : null };
-  });
+  const meta = num(DB.settings.meta), step = 100000, H = histLive().filter((h) => typeof h.pat === 'number');
+  const top = H.reduce((m, h) => Math.max(m, h.pat), 0), end = Math.max(meta, (Math.floor(top / step) + 3) * step);   // 2 more past the next one
+  const vs = []; for (let v = step; v <= end + 1e-6; v += step) vs.push(v);
+  if (meta > 0 && !vs.some((v) => Math.abs(v - meta) < 1)) vs.push(meta);
+  return vs.sort((a, b) => a - b).map((v) => { const h = H.find((x) => x.pat >= v); return { v, hit: h ? h.month : null, goal: Math.abs(v - meta) < 1 }; });
 }
 function projections(total) {
   const st = historyStats(), s = DB.settings, meta = num(s.meta), base = ym();   // total is today's live value, so count from this month
@@ -1729,7 +1730,7 @@ function vPainel() {
   const GO = { acoes: "ATV.seg='acoes';location.hash='#ativos'", fiis: "ATV.seg='fiis';location.hash='#ativos'", stocks: "ATV.seg='stocks';location.hash='#ativos'", crypto: "location.hash='#cripto'", rf: "location.hash='#atualizar'", caixa: "location.hash='#atualizar'" };
   const cats = [...P.alloc.map((a) => ({ k: a.k, n: a.k === 'crypto' ? 'Cripto' : a.n, v: a.v, cur: a.cur, tgt: a.tgt })), { k: 'caixa', n: 'Caixa', v: num(DB.balances.caixa), cur: null, tgt: null }].sort((x, y) => y.v - x.v);
   const nx = P.alloc.find((a) => a.n === P.next.n);
-  const msL = (v) => (v >= 1e6 ? nf0.format(v / 1e6) + ' mi' : nf0.format(v / 1000) + ' mil');
+  const msL = (v) => (v >= 1e6 ? (v / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + ' mi' : nf0.format(v / 1000) + ' mil');
   const R0 = 44, C0 = 2 * Math.PI * R0;
   const DO = '1';
   const divM = `<div class="gll">${lastD ? `${nLogM.length} ${nLogM.length === 1 ? 'pagamento' : 'pagamentos'} · último ${dmy(lastD.date)}` : 'nenhum ainda'}</div>`;
@@ -1776,7 +1777,7 @@ function vPainel() {
        <div style="min-width:0;flex:1"><div class="gll">Rumo a ${brl(meta)}</div><div class="gfalta">faltam <span class="money">${CV(pr.falta)}</span></div>
        <div class="gpred">${pr.ritmo ? `<div><b>${ymLabel(pr.ritmo)}</b><span>no ritmo atual</span></div>` : ''}${pr.cenario ? `<div><b>${ymLabel(pr.cenario)}</b><span>no plano<em class="money">${gbp(s.aportePlanGBP)} por mês</em></span></div>` : ''}${!pr.ritmo && !pr.cenario ? '<div><b>—</b><span>precisa de 12 meses salvos</span></div>' : ''}</div></div>
      </div>
-     <div class="gms scr" id="mrow">${ms.map((m) => `<div class="${m.hit ? 'ok' : m === nextMs ? 'nx' : ''}"><b></b>${msL(m.v)}<small>${m.hit ? ymLabel(m.hit) : m === nextMs && etaMs ? ymLabel(etaMs) : '&nbsp;'}</small></div>`).join('')}</div>
+     <div class="gms scr" id="mrow">${ms.map((m) => `<div class="${m.hit ? 'ok' : m === nextMs ? 'nx' : ''}${m.goal ? ' goal' : ''}"><b></b>${msL(m.v)}<small>${m.hit ? ymLabel(m.hit) : m === nextMs && etaMs ? ymLabel(etaMs) : m.goal ? 'meta' : '&nbsp;'}</small></div>`).join('')}</div>
    </div>
 
 

@@ -1053,3 +1053,6 @@ html.priv .dym .money, html.priv .dys .money{filter:blur(6px)}
 .gms.scr::-webkit-scrollbar{display:none}
 .gms.scr > div{flex:0 0 20%; scroll-snap-align:start} .gms.scr.s4 > div{flex-basis:25%}
 .gms.scr small{display:block; margin-top:2px}
+/* 9.6 — the goal dot in the 100 mil row */
+.gms .goal b{width:14px; height:14px; margin-top:-1px; margin-bottom:4px; border-width:2px; border-color:var(--g-acc2)}
+.gms .goal{color:var(--g-acc2); font-weight:600} .gms .goal.ok b{background:var(--g-acc2)}
