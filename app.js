@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '9.7';
+const APP_VERSION = '9.8';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -268,6 +268,26 @@ function marcos() {
 }
 // Fixed R$ 100 mil steps that keep going past the goal: every one you reached keeps its date forever.
 // The goal itself is one of the dots (added if it isn't a round 100 mil) and is marked; changing it only moves that mark.
+// Milestone dots inside the swipeable cards: we move them ourselves, so a sideways swipe on the dots never flips the card.
+// Vertical swipes are left alone (the page still scrolls); on release it glides on a little and settles on a dot.
+function dragDots(root = document) {
+  $$('.gms.scr', root).forEach((r) => {
+    if (r.dataset.drag) return; r.dataset.drag = '1';
+    let x0 = 0, y0 = 0, s0 = 0, dir = null, lx = 0, lt = 0, v = 0;
+    r.addEventListener('touchstart', (e) => { const t = e.touches[0]; x0 = lx = t.clientX; y0 = t.clientY; s0 = r.scrollLeft; dir = null; v = 0; lt = performance.now(); }, { passive: true });
+    r.addEventListener('touchmove', (e) => {
+      const t = e.touches[0], dx = t.clientX - x0, dy = t.clientY - y0;
+      if (!dir) { if (!dx && !dy) return; dir = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y'; }   // decide on the very first move: iPhone only lets us take over the swipe then
+      if (dir !== 'x') return;
+      e.preventDefault(); e.stopPropagation(); r.style.scrollSnapType = 'none'; r.scrollLeft = s0 - dx;
+      const now = performance.now(); v = (t.clientX - lx) / Math.max(1, now - lt); lx = t.clientX; lt = now;
+    }, { passive: false });
+    const end = () => { if (dir !== 'x') return; dir = null; const w = r.firstElementChild?.offsetWidth || 1;
+      const goal = Math.max(0, Math.min(r.scrollWidth - r.clientWidth, Math.round((r.scrollLeft - v * 180) / w) * w));
+      r.scrollTo({ left: goal, behavior: 'smooth' }); setTimeout(() => { r.style.scrollSnapType = ''; }, 400); };
+    r.addEventListener('touchend', end, { passive: true }); r.addEventListener('touchcancel', end, { passive: true });
+  });
+}
 function milestones() {
   const meta = num(DB.settings.meta), step = 100000, H = histLive().filter((h) => typeof h.pat === 'number');
   const top = H.reduce((m, h) => Math.max(m, h.pat), 0), end = Math.max(meta, (Math.floor(top / step) + 3) * step);   // 2 more past the next one
@@ -1812,7 +1832,7 @@ function vPainel() {
    </div>
 
   </div>`;
-  requestAnimationFrame(() => { const r = $('#mrow'), nx = r?.querySelector('.nx'); if (nx) r.scrollLeft = Math.max(0, nx.getBoundingClientRect().left - r.getBoundingClientRect().left + r.scrollLeft - nx.offsetWidth * 2); });   // after the cards are put in your order (moving a card resets its scroll)   // last 2 reached + the next one; swipe left for older ones
+  dragDots(); requestAnimationFrame(() => { const r = $('#mrow'), nx = r?.querySelector('.nx'); if (nx) r.scrollLeft = Math.max(0, nx.getBoundingClientRect().left - r.getBoundingClientRect().left + r.scrollLeft - nx.offsetWidth * 2); });   // after the cards are put in your order (moving a card resets its scroll)   // last 2 reached + the next one; swipe left for older ones
   $$('[data-do]').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.divopt', b.dataset.do); } catch {} render(); }));
   $('#cur-swap').onclick = (e) => { e.stopPropagation(); const nx = { BRL: 'GBP', GBP: 'USD', USD: 'BRL' }[heroCur]; try { localStorage.setItem('rumo.cur', nx); } catch {} render(); };
   $('#p-eye') && ($('#p-eye').onclick = (e) => { e.stopPropagation(); $('#btn-eye').click(); });
@@ -1828,9 +1848,6 @@ function vPainel() {
     const settle = () => { const i = Math.round(g.scrollLeft / W()); if (i === 0) jump(N); else if (i === N + 1) jump(1); PG_I = real(i); mark(PG_I); };
     let t = null; g.addEventListener('scroll', () => { mark(real(Math.round(g.scrollLeft / W()))); clearTimeout(t); t = setTimeout(settle, 140); }, { passive: true });
     if ('onscrollend' in window) g.addEventListener('scrollend', () => { clearTimeout(t); settle(); });
-    // a swipe that starts on the milestone dots scrolls only the dots: the cards are held still until you lift your finger
-    g.addEventListener('touchstart', (e) => { if (e.target.closest('.gms.scr')) g.style.overflowX = 'hidden'; }, { passive: true });
-    const free = () => { g.style.overflowX = ''; }; g.addEventListener('touchend', free, { passive: true }); g.addEventListener('touchcancel', free, { passive: true });
     dots.forEach((d) => (d.onclick = () => g.scrollTo({ left: (Number(d.dataset.i) + 1) * W(), behavior: 'smooth' }))); } }
   $('#spark-tap') && ($('#spark-tap').onclick = (e) => { e.stopPropagation(); patSheet(); });
   $('.dchip') && ($('.dchip').onclick = (e) => { e.stopPropagation(); todaySheet(CV); });
@@ -2226,7 +2243,7 @@ function vDividendos() {
   { const sel = $('#dv-sel'), show = (i) => { $$('.dvb2 .c').forEach((c) => c.classList.toggle('sel', Number(c.dataset.dm) === i)); sel.innerHTML = `${MONTHS[i]}: <b class="money">${brl(ty[i])}</b>${ly[i] ? ` <span class="money">· ${brl(ly[i])}</span>` : ''}`; };
     $$('.dvb2 .c').forEach((c) => (c.onclick = () => show(Number(c.dataset.dm)))); show(Math.max(0, upTo - 1)); }
   $$('#view [data-dy]').forEach((b) => (b.onclick = () => { DYEAR = b.dataset.dy; const y0 = scrollY; render(); scrollTo(0, y0); }));
-  requestAnimationFrame(() => { const dm = $('#dmrow'); if (dm) dm.scrollLeft = dm.scrollWidth; });   // newest at the right; swipe for older ones
+  dragDots(); requestAnimationFrame(() => { const dm = $('#dmrow'); if (dm) dm.scrollLeft = dm.scrollWidth; });   // newest at the right; swipe for older ones
   $('#dv-add').onclick = () => editDiv(null); wireDivList();
   $$('#view [data-rk]').forEach((b) => (b.onclick = () => { try { localStorage.setItem('rumo.rk', b.dataset.rk); } catch {} render(); }));
   $('#tbl-tog').onclick = () => { try { localStorage.setItem('rumo.dtbl', tblOpen ? '0' : '1'); } catch {} render(); };
