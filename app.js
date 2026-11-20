@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '10.0';
+const APP_VERSION = '10.1';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -395,6 +395,7 @@ async function faceGetSecret(credId, salt) {
   return r;
 }
 async function enableFaceID() {
+  if (!DKRAW) throw new Error('locked');   // only while unlocked
   if (!window.PublicKeyCredential || !navigator.credentials?.create) throw new Error('unsupported');
   const prfSalt = rnd(32);
   const cred = await navigator.credentials.create({ publicKey: {
@@ -484,7 +485,7 @@ function showLock(mode) {
     msg.textContent = 'Abrindo…';
     try {
       const m = getMeta();
-      if (m && m.v === 2) { await openWithRaw(await unwrapWithSecret(pin, m.pin)); enterApp(); }
+      if (m && m.v === 2) { await openWithRaw(await unwrapWithSecret(pin, m.pin)); try { localStorage.removeItem('rumo.legacy.bak'); } catch {} enterApp(); }   // the old-format safety copy isn't needed once the new one opens
       else {
         // version 1 (data encrypted directly with the PIN): open, then upgrade to the new key system
         const key = await deriveKey(pin, unb64(m.salt));
@@ -1081,7 +1082,9 @@ const ACLS = [
   { k: 'fiis', n: 'FIIs', market: 'GS' },
   { k: 'stocks', n: 'Stocks', market: 'US' },
 ];
-const FXOF = (cur) => (cur === 'BRL' ? 1 : cur === 'USD' ? num(DB.prices.usdbrl) : cur === 'GBP' ? num(DB.prices.gbpbrl) : cur === 'GBX' ? num(DB.prices.gbpbrl) / 100 : cur === 'EUR' ? num(DB.prices.eurbrl) : 1);
+// today's rate; if it hasn't loaded yet (first ever open, offline), the last one saved in a daily snapshot — never 0
+const lastRate = (live, k) => { if (num(live) > 0) return num(live); const x = [...(DB.daily || [])].reverse().find((y) => num(y[k]) > 0); return x ? num(x[k]) : 0; };
+const FXOF = (cur) => (cur === 'BRL' ? 1 : cur === 'USD' ? lastRate(DB.prices.usdbrl, 'u') : cur === 'GBP' ? lastRate(DB.prices.gbpbrl, 'g') : cur === 'GBX' ? lastRate(DB.prices.gbpbrl, 'g') / 100 : cur === 'EUR' ? lastRate(DB.prices.eurbrl, 'eu') : 1);
 const curOf = (a) => (a.market === 'B3' ? 'BRL' : a.market === 'GS' ? a.currency || 'BRL' : a.market === 'US' ? 'USD' : a.currency || 'BRL');
 const priceOf = (a) => (a.market === 'MANUAL' ? num(a.manualPrice) : (typeof a.price === 'number' && a.price > 0 ? a.price : num(a.manualPrice)));
 const STALE_MS = 4 * 864e5;
@@ -2015,10 +2018,9 @@ function vAtualizar() {
   </div>`;
 
   const stamp = async (keys) => { const t = new Date().toISOString(); for (const k of keys) balAt[k] = t; await save(); };
-  $('#f-ap0') && ($('#f-ap0').onclick = async () => { d.aporteGBP = 0; await save(); ATU.open = 0; render(); });
   $('#f-ev') && ($('#f-ev').onclick = () => whatHappened());
   $('#f-ap-all') && ($('#f-ap-all').onclick = (e) => { e.preventDefault(); openApList(); });
-  $('#f-ap0') && ($('#f-ap0').onclick = async (e) => { e.preventDefault(); e.stopPropagation(); d.aporteGBP = 0; await save(); render(); });
+  $('#f-ap0') && ($('#f-ap0').onclick = async (e) => { e.preventDefault(); e.stopPropagation(); d.aporteGBP = 0; ATU.open = 0; await save(); render(); });
   // live: every key typed updates the value, the totals on this page and is saved a moment later
   let saveT = null;
   const liveTotals = () => { const P3 = portfolio(); $('#f-total') && ($('#f-total').textContent = brl(P3.total));
@@ -2381,7 +2383,7 @@ function editOpForm(id) {
       // a purchase made through Mover / Aporte / "O que aconteceu?" also moved money: delete the whole thing, so the account gets its money back
       const mv = (DB.mvLog || []).find((e) => e.opId === id), ap = (DB.apLog || []).find((e) => e.opId === id), ev = (DB.evLog || []).find((e) => e.opId === id);
       if (mv || ap || ev) {
-        const what = mv ? `a movimentação ${mvTxt(mv)}` : ap ? `o aporte de ${apTxt(ap)}` : `"${ev.text}"`;
+        const what = mv ? `a movimentação ${mvTxt(mv)}` : ap ? `o aporte de ${apTxt(ap)}` : `"${ev.text}"`;   // plain text: ask() shows it as text
         if (!(await ask(`Esta compra foi registrada junto com ${what}.\n\nApagar tudo? O dinheiro volta para a conta de onde saiu.`, { yes: 'Sim, apagar tudo', danger: true }))) return;
         if (mv) { mvApply(mv, -1); DB.mvLog = DB.mvLog.filter((e) => e.id !== mv.id); }
         if (ap) dropAp(ap.id);
