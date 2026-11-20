@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '10.1';
+const APP_VERSION = '10.2';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1861,7 +1861,7 @@ async function patSheet() {
     ...D.map((x) => ({ x: ts(x.d), y: conv(x.v, x.g, x.u) }))];
   const build = (rg) => { const pts = rg === 'all' ? all : all.filter((q) => q.x >= Date.now() - Number(rg) * 864e5); const span = pts.length > 1 ? pts[pts.length - 1].x - pts[0].x : 0;
     return { pts, dl: (v) => { const d = new Date(v); return span > 200 * 864e5 ? MON3[d.getMonth()] + '/' + String(d.getFullYear()).slice(2) : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }); } }; };
-  const stats = (pts) => { if (!pts.length) return ''; const mx = pts.reduce((a, q) => (q.y > a.y ? q : a), pts[0]), d = (x) => new Date(x).toLocaleDateString('pt-BR', { month: '2-digit', year: '2-digit' });
+  const stats = (pts) => { if (!pts.length) return ''; const mx = pts.reduce((a, q) => (q.y > a.y ? q : a), pts[0]), short = pts[pts.length - 1].x - pts[0].x <= 200 * 864e5, d = (x) => { const t = new Date(x); return (short ? t.getDate() + ' ' : '') + MON3[t.getMonth()] + '/' + t.getFullYear(); };   // Jan/2020 (with the day on 30d/90d)
     return [['início', pts[0]], ['agora', pts[pts.length - 1]], ['máximo', mx]].map(([l, q]) => `<div><span class="small muted">${l}</span><b class="money">${fmt(q.y)}</b><span class="small muted">${d(q.x)}</span></div>`).join(''); };
   const rg0 = patRange(), b0 = build(rg0);
   openSheet(`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h3 style="margin:0">Patrimônio</h3>
