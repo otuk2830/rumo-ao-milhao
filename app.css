@@ -1057,3 +1057,27 @@ html.priv .dym .money, html.priv .dys .money{filter:blur(6px)}
 /* 9.6 — the goal dot in the 100 mil row */
 .gms .goal b{width:14px; height:14px; margin-top:-1px; margin-bottom:4px; border-width:2px; border-color:var(--g-acc2)}
 .gms .goal{color:var(--g-acc2); font-weight:600} .gms .goal.ok b{background:var(--g-acc2)}
+/* 10.4 — E se…? (price simulation; nothing saved) */
+.sim-go{display:flex; align-items:baseline; gap:8px; margin-top:12px; background:none; border:1px solid var(--g-track); border-radius:999px; padding:7px 14px; color:var(--g-ink, inherit); font:inherit; font-size:13.5px; font-weight:600; cursor:pointer}
+.sim-go span{font-weight:400; color:var(--g-mut); font-size:12.5px}
+.sim-h{display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px}
+.sim-tag{font-size:11.5px; color:var(--g-acc2); border:1px solid var(--g-acc2); border-radius:999px; padding:3px 10px; white-space:nowrap}
+.sim-out{margin-top:12px; border-top:1px solid var(--g-track)}
+.sim-row{display:grid; grid-template-columns:1fr auto; grid-template-rows:auto auto; column-gap:12px; padding:9px 0; border-bottom:1px solid var(--g-track); align-items:baseline}
+.sim-row .gll{grid-row:1/3; display:flex; flex-direction:column; font-size:13.5px} .sim-row .gll small{font-size:11.5px; margin-top:1px}
+.sim-row b{text-align:right; font-size:15px; font-variant-numeric:tabular-nums} .sim-d{text-align:right; font-size:12px; color:var(--g-mut); font-variant-numeric:tabular-nums}
+.sim-d.pos{color:var(--green)} .sim-d.neg{color:var(--red)}
+/* 10.4 — E se…? link */
+.sim-lk{margin-left:auto; color:var(--g-acc2); font-size:12.5px; font-weight:600; cursor:pointer; padding:2px 0 2px 10px}
+.sim .sim-out{margin:6px 0 6px} .sim-btc label small{display:block; color:var(--g-mut); font-weight:400; font-size:11.5px}
+/* 10.4 — E se…? layout */
+.sim .sim-out{margin:0; border-top:0}
+.sim-btc{margin-bottom:0; padding-bottom:14px; border-bottom:1px solid var(--g-track)}
+.sim-hero{padding:16px 0 14px; border-bottom:1px solid var(--g-track)} .sim-hero .gll{font-size:13px}
+.sim-hero > b{display:block; font-size:34px; font-weight:300; letter-spacing:-.01em; line-height:1.15; margin:2px 0 4px; font-variant-numeric:tabular-nums}
+.sim-hero .sim-d{text-align:left; font-size:14px} .sim-hero .sim-d .gll{font-size:13px}
+.sim .ps-acts{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+.sim-hh{display:flex; justify-content:space-between; align-items:center}
+.sim-cur{display:inline-flex; border:1px solid var(--g-track); border-radius:999px; padding:2px}
+.sim-cur button{background:none; border:0; color:var(--g-mut); font:inherit; font-size:12.5px; padding:4px 11px; border-radius:999px}
+.sim-cur button.on{background:var(--g-acc2); color:var(--g-bg); font-weight:600}

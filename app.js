@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '10.3';
+const APP_VERSION = '10.4';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1763,10 +1763,9 @@ function vPainel() {
      ${DO === '2' || DO === '3' ? divLine : ''}
      <div id="spark-tap" class="gspark">${spark}</div>
      ${(() => { // lifetime profit/loss of what you hold: every asset and coin with an average price, against what it cost
-       let cost = 0, pl = 0; for (const k of ['acoes', 'fiis', 'stocks']) for (const r of assetRows(k)) if (r.cost !== null) { cost += r.cost; pl += r.pl; }
-       const u = num(DB.prices.usdbrl); if (cs.plTot) { cost += cs.plTot.cost * u; pl += cs.plTot.pl * u; }
+       const { cost, pl } = lifePL(cs);
        if (!cost) return '';
-       return `<div class="glife2"><span>Lucro total</span><b class="${pl < 0 ? 'neg' : 'pos'}">${signed(pct, pl / cost)}</b><span class="money">· ${signed(CV, pl)}</span></div>`; })()}
+       return `<div class="glife2"><span>Lucro total</span><b class="${pl < 0 ? 'neg' : 'pos'}">${signed(pct, pl / cost)}</b><span class="money">· ${signed(CV, pl)}</span><a class="sim-lk" id="p-sim">E se…?</a></div>`; })()}
    </div>
 
     </div>
@@ -1838,6 +1837,7 @@ function vPainel() {
     g.addEventListener('scroll', () => { if (hold !== null && Math.abs(g.scrollLeft - hold) > 0.5) g.scrollLeft = hold; }, { passive: true });
     dots.forEach((d) => (d.onclick = () => g.scrollTo({ left: (Number(d.dataset.i) + 1) * W(), behavior: 'smooth' }))); } }
   $('#spark-tap') && ($('#spark-tap').onclick = (e) => { e.stopPropagation(); patSheet(); });
+  $$('#p-sim').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); simSheet(); }));
   $('.dchip') && ($('.dchip').onclick = (e) => { e.stopPropagation(); todaySheet(CV); });
   { const sel = $('#pb3sel'), cs = $$('.pb3 .c'), show = (c) => { cs.forEach((x) => x.classList.toggle('sel', x === c)); const r = c.dataset.br; sel.innerHTML = `${ymLong(c.dataset.bm)}${c.dataset.bm === ym() ? ' · em andamento' : ''} <b class="${r === '' ? '' : Number(r) < 0 ? 'neg' : 'pos'}">${r === '' ? 'sem dados' : signed(pct, Number(r))}</b>`; };
     cs.forEach((c) => (c.onclick = (e) => { e.stopPropagation(); show(c); })); cs.length && show(cs[cs.length - 1]); }
@@ -2277,7 +2277,8 @@ function vCripto() {
   
   
    <div class="gl cw-hero"><div class="lab">Cripto</div><div class="val money">${CM(cs.totalBRL, 2)}</div>
-     ${cs.plTot ? `<div class="sub cw-pl">${plLine(cs.plTot.pl * num(p.usdbrl), cs.plTot.plPct)}</div>` : ''}</div>
+     ${cs.plTot ? `<div class="sub cw-pl">${plLine(cs.plTot.pl * num(p.usdbrl), cs.plTot.plPct)}</div>` : ''}
+     <button class="sim-go" id="c-sim">E se…? <span>simular preços</span></button></div>
    <div class="gl"><h2>Por moeda</h2>${coinCards(cs, p)}</div>
    <div class="gl"><h2>Bitcoin por pessoa</h2>
      ${c.people.map((w) => { const u = cs.coins[0].net[w]; return `<div class="row"><span class="l">${esc(w)} <span class="small">${u.toLocaleString('pt-BR', { maximumFractionDigits: 8 })} BTC</span></span><span class="r money">${CM(u * p.BTC * p.usdbrl, 2)}</span></div>`; }).join('')}
@@ -2289,6 +2290,7 @@ function vCripto() {
     ${!CLOG_ALL && log.length > 10 ? `<button class="gbtn2" id="c-all">Ver todos (${log.length})</button>` : ''}
   </div></div>`;
   wireSeg();
+  $('#c-sim') && ($('#c-sim').onclick = () => simSheet());
   $('#c-all') && ($('#c-all').onclick = () => { CLOG_ALL = true; const y = scrollY; render(); scrollTo(0, y); });
   $$('#view [data-coin]').forEach((el) => (el.onclick = () => coinSheet(el.dataset.coin)));
   $('#c-add').onclick = (e) => { e.preventDefault(); location.hash = '#atualizar'; setTimeout(() => whatHappened(), 350); };
@@ -2296,6 +2298,51 @@ function vCripto() {
 }
 let DYEAR = null;   // Dividendos → Por ano: the year being shown (this session)
 let CLOG_ALL = false;   // crypto log: last 10 until you tap Ver todos (this session)
+// Lucro total: every asset and coin with an average price, against what it cost (the line under the Painel chart)
+function lifePL(cs = cryptoSummary()) {
+  let cost = 0, pl = 0; for (const k of ['acoes', 'fiis', 'stocks']) for (const r of assetRows(k)) if (r.cost !== null) { cost += r.cost; pl += r.pl; }
+  const u = num(DB.prices.usdbrl); if (cs.plTot) { cost += cs.plTot.cost * u; pl += cs.plTot.pl * u; }
+  return { cost, pl };
+}
+// "E se…?": move whole classes by a % (and the dollar/pound) without saving anything. The real prices and assets are
+// swapped for copies for one calculation and put straight back (no await in between, nothing written), so the rest
+// of the app never sees the simulated numbers.
+function simCalc(o) {
+  const realP = DB.prices, realA = DB.assets, f = (k) => 1 + (num(o[k]) || 0) / 100;
+  try {
+    DB.prices = { ...realP }; for (const c of COINS) if (num(DB.prices[c.k])) DB.prices[c.k] = num(DB.prices[c.k]) * f('crypto');
+    if (num(o.BTC) > 0) DB.prices.BTC = num(o.BTC);   // a Bitcoin price you typed wins over the Cripto %
+    if (num(o.usdbrl) > 0) DB.prices.usdbrl = num(o.usdbrl); if (num(o.gbpbrl) > 0) DB.prices.gbpbrl = num(o.gbpbrl);
+    DB.assets = realA.map((a) => (o[a.cls] ? { ...a, price: typeof a.price === 'number' ? a.price * f(a.cls) : a.price, manualPrice: a.manualPrice ? num(a.manualPrice) * f(a.cls) : a.manualPrice } : a));
+    const P = portfolio(), L = lifePL(P.cs), btc = P.cs.coins.find((c) => c.k === 'BTC');
+    return { total: P.total, v: { ...P.v }, btc: btc ? btc.units * num(DB.prices.BTC) * num(DB.prices.usdbrl) : 0, btcUnits: btc ? btc.units : 0, pl: L.pl, plPct: L.cost ? L.pl / L.cost : null, meta: num(DB.settings.meta) ? P.total / num(DB.settings.meta) : null };
+  } finally { DB.prices = realP; DB.assets = realA; }
+}
+function simSheet() {   // for now: Bitcoin price only (simCalc can also move whole classes and the dollar/pound)
+  const p = DB.prices, base = simCalc({});
+  openSheet(`<div class="sim"><div class="sim-h"><h3 style="margin:0">E se…?</h3><span class="sim-tag">simulação · nada é salvo</span></div>
+    <div class="field sim-btc"><label>Preço do Bitcoin (US$)<small>hoje ${usd(p.BTC, 0)}</small></label><input id="sim-btc" class="pt" inputmode="decimal" placeholder="${fmtN(p.BTC, 0)}"></div>
+    <div class="sim-out" id="sim-out"></div>
+    <div class="ps-acts" style="margin-top:12px"><button class="btn" id="sim-reset">Voltar a hoje</button><button class="btn primary" id="sim-close">Fechar</button></div></div>`);
+  const el = $('#sheet'), bi = $('#sim-btc', el); liveFormat(bi);
+  let cur = viewCur();   // shown in R$, £ or US$ at today's live rates (same as the Painel ⇄)
+  const M = (v, d = 0) => (cur === 'GBP' ? gbp(v / (num(p.gbpbrl) || 1), d) : cur === 'USD' ? usd(v / (num(p.usdbrl) || 1), d) : brl(v, d));
+  const row = (lab, v, b, sub = '', sg = false) => { const d = v - b, same = Math.abs(d) < 0.5;
+    return `<div class="sim-row"><span class="gll">${lab}${sub ? `<small>${sub}</small>` : ''}</span><b class="money ${sg ? (v < 0 ? 'neg' : 'pos') : ''}">${sg ? signed((x) => M(x), v) : M(v)}</b><span class="sim-d ${same ? '' : d < 0 ? 'neg' : 'pos'}">${same ? '—' : signed((x) => M(x), d)}</span></div>`; };
+  const draw = () => {
+    const v = parsePT(bi.value), r = simCalc(v > 0 ? { BTC: v } : {});
+    const d = r.total - base.total;
+    $('#sim-out', el).innerHTML = `<div class="sim-hero"><div class="sim-hh"><span class="gll">Patrimônio</span><span class="sim-cur">${[['BRL', 'R$'], ['GBP', '£'], ['USD', 'US$']].map(([k, l]) => `<button data-cur="${k}" class="${k === cur ? 'on' : ''}">${l}</button>`).join('')}</span></div><b class="money">${M(r.total)}</b>
+      <span class="sim-d ${Math.abs(d) < 0.5 ? '' : d < 0 ? 'neg' : 'pos'}">${Math.abs(d) < 0.5 ? 'igual a hoje' : signed((x) => M(x), d)}${r.meta !== null ? ` <span class="gll">· ${pct(r.meta)} da meta</span>` : ''}</span></div>`
+      + row('Seu Bitcoin', r.btc, base.btc)
+      + (r.plPct !== null ? row('Lucro total', r.pl, base.pl, signed(pct, r.plPct), true) : '');
+    $$('.sim-cur button', el).forEach((b) => (b.onclick = () => { cur = b.dataset.cur; draw(); }));
+  };
+  bi.addEventListener('input', draw);
+  $('#sim-reset', el).onclick = () => { bi.value = ''; draw(); };
+  $('#sim-close', el).onclick = closeSheet;
+  draw();
+}
 function viewCur() { try { const c = localStorage.getItem('rumo.cur'); return c === 'GBP' || c === 'USD' ? c : 'BRL'; } catch { return 'BRL'; } }
 function CM(vBRL, dec = 2) { const c = viewCur(); return c === 'GBP' ? gbp(vBRL / (DB.prices.gbpbrl || 1), dec) : c === 'USD' ? usd(vBRL / (DB.prices.usdbrl || 1), dec) : brl(vBRL, dec); }
 // profit/loss: the % in a tinted pill, the value beside it in quiet text, so the two never read as one number
