@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '10.4';
+const APP_VERSION = '10.5';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -513,6 +513,12 @@ function forgotPin() {
   });
 }
 function lockNow() { DB = null; KEY = null; DKRAW = null; charts.forEach((c) => c.destroy()); charts = []; $('#view').innerHTML = ''; showLock.auto = true; showLock('unlock'); }
+// Tap anywhere on a form row (the label too) to type in its box: easier than hitting the small box after coming back from another app
+document.addEventListener('click', (e) => {
+  if (e.target.closest('input, select, textarea, button, a, label input')) return;
+  const f = e.target.closest('#sheet .field, #view .field'); if (!f) return;
+  const i = f.querySelector('input:not([type=checkbox]):not([type=range]):not([type=date]), textarea'); if (i && document.activeElement !== i) { i.focus(); try { const n = i.value.length; i.setSelectionRange(n, n); } catch {} }
+});
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { hiddenAt = Date.now(); return; }
   if (DB && hiddenAt && Date.now() - hiddenAt > AUTOLOCK_MS && !getMeta()?.open) lockNow();
@@ -1927,7 +1933,20 @@ function parsePT(s) {
   s = String(s ?? '').replace(/\s|R\$|£|US\$/g, ''); if (!s) return null;
   const v = Number(s.replace(/\./g, '').replace(',', '.')); return isFinite(v) ? v : null;
 }
+// Pasted numbers come from apps in English (0.1234567, 1,234.56) or Portuguese (1.234,56): read them right either way.
+function pastedNum(t) {
+  t = String(t).replace(/[^\d.,-]/g, ''); if (!t) return '';
+  const neg = t.startsWith('-'); t = t.replace(/-/g, '');
+  const lc = t.lastIndexOf(','), ld = t.lastIndexOf('.'); let int = t, dec = '';
+  if (lc >= 0 && ld >= 0) { const k = Math.max(lc, ld); int = t.slice(0, k); dec = t.slice(k + 1); }              // both: the last one is the decimal point
+  else { const sep = lc >= 0 ? ',' : ld >= 0 ? '.' : null;
+    if (sep) { const grp = new RegExp('^\\d{1,3}(\\' + sep + '\\d{3}){2,}$'); if (!grp.test(t)) { const k = t.lastIndexOf(sep); int = t.slice(0, k); dec = t.slice(k + 1); } } }   // 1.234.567 = thousands; 0.1234 or 12.5 = decimal
+  int = int.replace(/\D/g, '') || '0'; dec = dec.replace(/\D/g, '');
+  return (neg ? '-' : '') + int + (dec ? ',' + dec : '');
+}
 function liveFormat(inp) {
+  inp.addEventListener('paste', (e) => { const t = (e.clipboardData || window.clipboardData)?.getData('text'); if (!t) return;
+    e.preventDefault(); inp.value = pastedNum(t); inp.dispatchEvent(new Event('input', { bubbles: true })); });
   inp.addEventListener('input', (e) => {
     let v = inp.value;
     if (e.data === '.' || e.data === ',') { const pos = inp.selectionStart; v = v.slice(0, pos - 1).replace(/,/g, '') + ',' + v.slice(pos).replace(/,/g, ''); }
