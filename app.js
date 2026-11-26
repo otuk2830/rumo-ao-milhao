@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '10.6';
+const APP_VERSION = '10.7';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -1005,37 +1005,51 @@ async function closeFx(d) {   // closing rates of a past day (last quote of that
   return out;
 }
 async function closeYesterday() {
+  // tries again on every refresh for whatever it couldn't get yet (each price / rate is applied once, then marked done);
+  // when everything is in, the snapshot is marked closed and it stops trying
   if (!DB) return false; const Y = [...(DB.daily || [])].filter((x) => x.d < today()).pop();
   if (!Y || Y.cl || !Y.a || !(Y.v > 0)) return false;
   for (let d = dayShift(Y.d, 1); d < today(); d = dayShift(d, 1)) { const w = new Date(d + 'T12:00:00').getDay(); if (w !== 0 && w !== 6) { Y.cl = 'skip'; await save(); return false; } }   // a weekday was missed: its close isn't the one we have
-  const fxY = { BRL: 1, GBP: num(Y.g), GBX: num(Y.g) / 100, USD: num(Y.u), EUR: num(Y.eu) }, fc = { GBP: 0, USD: 0, EUR: 0 }, dc = {}; let dv = 0, changed = 0;
+  const done = (Y.cd ||= { a: {}, k: {}, fx: {}, cash: Math.max(0, num(Y.n?.gbp) - num(Y.c?.stocks) / (num(Y.g) || 1)) }), rate = () => ({ BRL: 1, GBP: num(Y.g), GBX: num(Y.g) / 100, USD: num(Y.u), EUR: num(Y.eu) });
+  let dv = 0, todo = 0; const dc = {};
   for (const a of DB.assets || []) {
-    const s0 = Y.a[a.id]; if (!s0 || !(s0[0] > 0) || !(s0[1] > 0)) continue;
-    const cur = curOf(a), fx = fxY[cur]; let px = s0[0];
-    if (a.market !== 'MANUAL' && sameDayLocal(a.priceAt)) { const c = tradedToday(a) ? (a.pc > 0 && a.pcAt === today() ? a.pc : null) : priceOf(a); if (c > 0 && Math.abs(c / s0[0] - 1) < 0.5) px = c; }   // before today's open, the price shown IS yesterday's close
-    if (fx > 0 && px !== s0[0]) { const d = s0[1] * (px - s0[0]) * fx; dv += d; dc[a.cls] = (dc[a.cls] || 0) + d; s0[0] = px; changed++; }
-    if (cur === 'GBP' || cur === 'GBX') fc.GBP += s0[1] * px * (cur === 'GBX' ? 0.01 : 1); else if (cur === 'USD') fc.USD += s0[1] * px; else if (cur === 'EUR') fc.EUR += s0[1] * px;
+    const s0 = Y.a[a.id]; if (!s0 || !(s0[0] > 0) || !(s0[1] > 0) || done.a[a.id]) continue;
+    if (a.market === 'MANUAL') { done.a[a.id] = 1; continue; }
+    const fx = rate()[curOf(a)]; let c = null;
+    if (sameDayLocal(a.priceAt)) c = tradedToday(a) ? (a.pc > 0 && a.pcAt === today() ? a.pc : null) : priceOf(a);   // before today's open, the price shown IS yesterday's close
+    if (!(c > 0) || !(fx > 0)) { todo++; continue; }
+    if (Math.abs(c / s0[0] - 1) < 0.5) { const d = s0[1] * (c - s0[0]) * fx; dv += d; dc[a.cls] = (dc[a.cls] || 0) + d; s0[0] = c; }
+    done.a[a.id] = 1;
   }
-  const mid = DB.prices.cmid?.d === today() ? DB.prices.cmid : null;
-  for (const k in Y.k || {}) { const s0 = Y.k[k]; let px = num(s0[0]);
-    if (mid && Y.d === dayShift(today(), -1) && num(mid[k]) > 0 && px > 0 && Math.abs(num(mid[k]) / px - 1) < 0.5 && fxY.USD > 0) { const d = num(s0[1]) * (num(mid[k]) - px) * fxY.USD; dv += d; dc.crypto = (dc.crypto || 0) + d; px = s0[0] = num(mid[k]); changed++; }
-    fc.USD += num(s0[1]) * px; }
-  const cashGBP = Math.max(0, num(Y.n?.gbp) - num(Y.c?.stocks) / (fxY.GBP || 1));   // T212 cash at your last check-in (it sits in Renda fixa)
-  const r = await closeFx(Y.d), dFx = (k, val, cls) => { if (!(r[k] > 0) || !(num(Y[k]) > 0) || Math.abs(r[k] / num(Y[k]) - 1) > 0.1) return 0; const d = val * (r[k] - num(Y[k])); if (cls) dc[cls] = (dc[cls] || 0) + d; return d; };
-  if (r.g || r.u || r.eu) {
-    const sGBP = fc.GBP, sUSD = fc.USD - Object.values(Y.k || {}).reduce((t, s0) => t + num(s0[1]) * num(s0[0]), 0), cUSD = fc.USD - sUSD;
-    const d = dFx('g', sGBP, 'stocks') + dFx('g', cashGBP, 'rf') + dFx('u', sUSD, 'stocks') + dFx('u', cUSD, 'crypto') + dFx('eu', fc.EUR, 'stocks');
-    if (d) { dv += d; changed++; } for (const k of ['g', 'u', 'eu']) if (r[k] > 0 && num(Y[k]) > 0 && Math.abs(r[k] / num(Y[k]) - 1) <= 0.1) Y[k] = r[k];
+  const mid = DB.prices.cmid?.d === today() ? DB.prices.cmid : null, ok1 = Y.d === dayShift(today(), -1);
+  for (const k in Y.k || {}) { if (done.k[k]) continue; const s0 = Y.k[k], px = num(s0[0]), m = mid ? num(mid[k]) : 0;
+    if (!ok1 || !(px > 0)) { done.k[k] = 1; continue; }   // only last night's midnight price fits; otherwise leave it
+    if (!(m > 0) || !(num(Y.u) > 0)) { todo++; continue; }
+    if (Math.abs(m / px - 1) < 0.5) { const d = num(s0[1]) * (m - px) * num(Y.u); dv += d; dc.crypto = (dc.crypto || 0) + d; s0[0] = m; }
+    done.k[k] = 1; }
+  const need = ['g', 'u', 'eu'].filter((k) => num(Y[k]) > 0 && !done.fx[k]);
+  if (need.length) {
+    const r = await closeFx(Y.d), R = rate();
+    let fGBP = 0, fUSDs = 0, fEUR = 0, fUSDc = 0;   // what you held in each currency, at the snapshot's (now closing) prices
+    for (const a of DB.assets || []) { const s0 = Y.a[a.id]; if (!s0) continue; const c = curOf(a), v = num(s0[0]) * num(s0[1]);
+      if (c === 'GBP') fGBP += v; else if (c === 'GBX') fGBP += v / 100; else if (c === 'USD') fUSDs += v; else if (c === 'EUR') fEUR += v; }
+    for (const k in Y.k || {}) fUSDc += num(Y.k[k][0]) * num(Y.k[k][1]);
+    const cashGBP = num(done.cash);   // T212 cash at your last check-in (it sits in Renda fixa)
+    for (const k of need) { const nv = num(r[k]), ov = num(Y[k]);
+      if (!(nv > 0)) { todo++; continue; }
+      if (Math.abs(nv / ov - 1) <= 0.1) { const parts = k === 'g' ? [[fGBP, 'stocks'], [cashGBP, 'rf']] : k === 'u' ? [[fUSDs, 'stocks'], [fUSDc, 'crypto']] : [[fEUR, 'stocks']];
+        for (const [val, cls] of parts) { const d = val * (nv - ov); dv += d; dc[cls] = (dc[cls] || 0) + d; } Y[k] = nv; }
+      done.fx[k] = 1; }
   }
-  Y.cl = today();
-  if (changed && Math.abs(dv) >= 0.005) {
+  if (Math.abs(dv) >= 0.005) {
     Y.v = Math.round((Y.v + dv) * 100) / 100;
     if (Y.c) for (const k in dc) Y.c[k] = Math.round((num(Y.c[k]) + dc[k]) * 100) / 100;
-    if (Y.n) { Y.n.brl = Math.round((num(Y.n.brl) + (dc.acoes || 0) + (dc.fiis || 0)) * 100) / 100; if (Y.c) { Y.n.gbp = Math.round((num(Y.c.stocks) / (num(Y.g) || 1) + cashGBP) * 100) / 100; Y.n.usd = Math.round((num(Y.c.crypto) / (num(Y.u) || 1)) * 100) / 100; } }
+    if (Y.n) { Y.n.brl = Math.round((num(Y.n.brl) + (dc.acoes || 0) + (dc.fiis || 0)) * 100) / 100; if (Y.c) { Y.n.usd = Math.round((num(Y.c.crypto) / (num(Y.u) || 1)) * 100) / 100; Y.n.gbp = Math.round((num(Y.c.stocks) / (num(Y.g) || 1) + num(done.cash)) * 100) / 100; } }
     const h = DB.history.find((x) => x.month === Y.d.slice(0, 7));   // a month already closed from this snapshot gets the closing values too
     if (h && h.auto && h.savedAt && h.savedAt.slice(0, 10) === Y.d) Object.assign(h, { pat: Y.v, fx: Y.g, usd: Y.u, cat: Y.c, nat: Y.n });
   }
-  await save(); return true;
+  if (!todo) { Y.cl = today(); delete Y.cd; }   // everything is in: stop trying
+  await save(); return Math.abs(dv) >= 0.005 || !todo;
 }
 async function dailySnap() {
   if (!DB || !DB.prices.updatedAt || Date.now() - new Date(DB.prices.updatedAt) > 2 * 3600 * 1000) return;   // only with fresh prices
