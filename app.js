@@ -4,7 +4,7 @@
 'use strict';
 
 const APP_ID = 'rumo-ao-milhao';
-const APP_VERSION = '10.5';
+const APP_VERSION = '10.6';
 document.addEventListener('touchstart', () => {}, { passive: true }); // lets iPhone show the pressed state
 const K_META = 'rumo.meta.v1';   // { salt }
 const K_DATA = 'rumo.data.v1';   // { iv, ct }  (encrypted app data)
@@ -353,7 +353,7 @@ async function refreshPricesNow(silent) {
     if (sf.e && near(sf.e, p.eurbrl)) p.eurbrl = sf.e; p.fxSrc = 'planilha'; p.fxAt = sf.at; fx = true;
   } else if (fx) p.fxSrc = 'BCE';
   if (ok || fx || ar?.ok) {   // something really came back (an all-failed share refresh doesn't count)
-    p.updatedAt = new Date().toISOString(); await save(); render(); dailySnap();
+    p.updatedAt = new Date().toISOString(); await save(); if (await closeYesterday().catch((e) => (console.warn('close day', e), false))) render(); render(); dailySnap();
     const miss = [ok < COINS.length ? 'cripto' : '', fx ? '' : 'câmbio', ...(ar?.fail || [])].filter(Boolean);
     if (miss.length) retrySoon(); else RETRY.n = 0;
     if (!silent) toast(miss.length ? `Não atualizou: ${miss.slice(0, 6).join(', ')}${miss.length > 6 ? '…' : ''} — tento de novo em 20 s` : 'Preços atualizados', miss.length ? 4500 : 2200);
@@ -991,6 +991,52 @@ function breakHtml(B, title, sub) {   // plain-language: what changed, how much 
     ${B.rl !== null && Math.abs(B.pct - B.rl) >= 0.0005 ? `<div class="ps-note">Sem câmbio (como se a libra e o dólar não tivessem mudado): ${signed(pct, B.rl)}.</div>` : ''}
     <button class="btn block" onclick="closeSheet()" style="margin-top:16px">Fechar</button></div>`;
 }
+// Yesterday's snapshot is the last moment you had the app open; prices kept moving until the markets closed.
+// The first refresh of a new day brings those closing prices, so the snapshot is completed with them (and with the
+// day's closing exchange rate and the crypto price at midnight) before "hoje" is worked out. Only prices and rates
+// change: quantities and balances stay as they were at your last check-in. Anything it can't get stays as it was.
+const dayShift = (d, n) => { const t = new Date(d + 'T12:00:00'); t.setDate(t.getDate() + n); return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0'); };
+const sameDayLocal = (iso) => { if (!iso) return false; const t = new Date(iso); return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0') === today(); };
+async function closeFx(d) {   // closing rates of a past day (last quote of that day), from AwesomeAPI; null if not available
+  const k = d.replace(/-/g, ''), out = {};
+  for (const [c, key] of [['GBP', 'g'], ['USD', 'u'], ['EUR', 'eu']]) {
+    try { const j = await fetchJSON1(`https://economia.awesomeapi.com.br/json/daily/${c}-BRL/?start_date=${k}&end_date=${k}`); const b = Array.isArray(j) && j[0] ? parseFloat(j[0].bid) || 0 : 0; /* AwesomeAPI sends numbers as text */ if (b > 0) out[key] = b; } catch (e) { console.warn('close fx', c, e); }
+  }
+  return out;
+}
+async function closeYesterday() {
+  if (!DB) return false; const Y = [...(DB.daily || [])].filter((x) => x.d < today()).pop();
+  if (!Y || Y.cl || !Y.a || !(Y.v > 0)) return false;
+  for (let d = dayShift(Y.d, 1); d < today(); d = dayShift(d, 1)) { const w = new Date(d + 'T12:00:00').getDay(); if (w !== 0 && w !== 6) { Y.cl = 'skip'; await save(); return false; } }   // a weekday was missed: its close isn't the one we have
+  const fxY = { BRL: 1, GBP: num(Y.g), GBX: num(Y.g) / 100, USD: num(Y.u), EUR: num(Y.eu) }, fc = { GBP: 0, USD: 0, EUR: 0 }, dc = {}; let dv = 0, changed = 0;
+  for (const a of DB.assets || []) {
+    const s0 = Y.a[a.id]; if (!s0 || !(s0[0] > 0) || !(s0[1] > 0)) continue;
+    const cur = curOf(a), fx = fxY[cur]; let px = s0[0];
+    if (a.market !== 'MANUAL' && sameDayLocal(a.priceAt)) { const c = tradedToday(a) ? (a.pc > 0 && a.pcAt === today() ? a.pc : null) : priceOf(a); if (c > 0 && Math.abs(c / s0[0] - 1) < 0.5) px = c; }   // before today's open, the price shown IS yesterday's close
+    if (fx > 0 && px !== s0[0]) { const d = s0[1] * (px - s0[0]) * fx; dv += d; dc[a.cls] = (dc[a.cls] || 0) + d; s0[0] = px; changed++; }
+    if (cur === 'GBP' || cur === 'GBX') fc.GBP += s0[1] * px * (cur === 'GBX' ? 0.01 : 1); else if (cur === 'USD') fc.USD += s0[1] * px; else if (cur === 'EUR') fc.EUR += s0[1] * px;
+  }
+  const mid = DB.prices.cmid?.d === today() ? DB.prices.cmid : null;
+  for (const k in Y.k || {}) { const s0 = Y.k[k]; let px = num(s0[0]);
+    if (mid && Y.d === dayShift(today(), -1) && num(mid[k]) > 0 && px > 0 && Math.abs(num(mid[k]) / px - 1) < 0.5 && fxY.USD > 0) { const d = num(s0[1]) * (num(mid[k]) - px) * fxY.USD; dv += d; dc.crypto = (dc.crypto || 0) + d; px = s0[0] = num(mid[k]); changed++; }
+    fc.USD += num(s0[1]) * px; }
+  const cashGBP = Math.max(0, num(Y.n?.gbp) - num(Y.c?.stocks) / (fxY.GBP || 1));   // T212 cash at your last check-in (it sits in Renda fixa)
+  const r = await closeFx(Y.d), dFx = (k, val, cls) => { if (!(r[k] > 0) || !(num(Y[k]) > 0) || Math.abs(r[k] / num(Y[k]) - 1) > 0.1) return 0; const d = val * (r[k] - num(Y[k])); if (cls) dc[cls] = (dc[cls] || 0) + d; return d; };
+  if (r.g || r.u || r.eu) {
+    const sGBP = fc.GBP, sUSD = fc.USD - Object.values(Y.k || {}).reduce((t, s0) => t + num(s0[1]) * num(s0[0]), 0), cUSD = fc.USD - sUSD;
+    const d = dFx('g', sGBP, 'stocks') + dFx('g', cashGBP, 'rf') + dFx('u', sUSD, 'stocks') + dFx('u', cUSD, 'crypto') + dFx('eu', fc.EUR, 'stocks');
+    if (d) { dv += d; changed++; } for (const k of ['g', 'u', 'eu']) if (r[k] > 0 && num(Y[k]) > 0 && Math.abs(r[k] / num(Y[k]) - 1) <= 0.1) Y[k] = r[k];
+  }
+  Y.cl = today();
+  if (changed && Math.abs(dv) >= 0.005) {
+    Y.v = Math.round((Y.v + dv) * 100) / 100;
+    if (Y.c) for (const k in dc) Y.c[k] = Math.round((num(Y.c[k]) + dc[k]) * 100) / 100;
+    if (Y.n) { Y.n.brl = Math.round((num(Y.n.brl) + (dc.acoes || 0) + (dc.fiis || 0)) * 100) / 100; if (Y.c) { Y.n.gbp = Math.round((num(Y.c.stocks) / (num(Y.g) || 1) + cashGBP) * 100) / 100; Y.n.usd = Math.round((num(Y.c.crypto) / (num(Y.u) || 1)) * 100) / 100; } }
+    const h = DB.history.find((x) => x.month === Y.d.slice(0, 7));   // a month already closed from this snapshot gets the closing values too
+    if (h && h.auto && h.savedAt && h.savedAt.slice(0, 10) === Y.d) Object.assign(h, { pat: Y.v, fx: Y.g, usd: Y.u, cat: Y.c, nat: Y.n });
+  }
+  await save(); return true;
+}
 async function dailySnap() {
   if (!DB || !DB.prices.updatedAt || Date.now() - new Date(DB.prices.updatedAt) > 2 * 3600 * 1000) return;   // only with fresh prices
   const P = portfolio(); if (!(P.total > 0)) return;
@@ -1602,7 +1648,7 @@ function dayMove(P) {
 function dayTotal(P) {
   const y = [...(DB.daily || [])].filter((x) => x.d < today() && x.v > 0).pop(); if (!y) return null;
   const yB = inB(y.v, y.g), nowB = inB(P.total, DB.prices.gbpbrl), fl = (DB.apLog || []).filter((e) => e.date > y.d && e.date <= today()).reduce((t, e) => t + apB(e), 0);
-  const chB = nowB - yB - fl; return { r: yB ? chB / yB : 0, v: fromB(chB), from: y.d };
+  const chB = nowB - yB - fl; return { r: yB ? chB / yB : 0, v: fromB(chB), from: y.d, closed: !!y.cl && y.cl !== 'skip' };
 }
 const exchOpenedLbl = () => { try { const d = new Date(); const ny = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' })), here = new Date(d.toLocaleString('en-US')); const diff = Math.round((here - ny) / 36e5); return String(9 + diff).padStart(2, '0') + ':30'; } catch { return '14:30'; } };
 function todaySheet(CV) {
@@ -1612,7 +1658,7 @@ function todaySheet(CV) {
   const catRow = (g) => `<div class="tc click" data-c="${g.k}"><div class="mc-row" style="border:0"><span><span class="tc-ch">▸</span> ${g.n}</span><span style="text-align:right">${g.base ? `<span class="${g.v < 0 ? 'neg' : g.v > 0 ? 'pos' : ''}">${signed(pctS, g.v / g.base)}</span> · ` : ''}${amt(g.v)}</span></div>
       <div class="tc-items hidden">${g.items.sort((a, b) => a.v - b.v).map((m) => `<div class="tc-i"><span>${esc(m.t)}</span><span><span class="${m.r < 0 ? 'neg' : 'pos'}">${signed(pctS, m.r)}</span> · ${amt(m.v)}</span></div>`).join('') || '<div class="tc-i muted">sem variação</div>'}</div></div>`;
   const T = dt || { v: dm.v, r: dm.r }, other = dt ? dt.v - dm.v : null;
-  openSheet(`<div class="mc"><div class="mc-top"><div class="small muted">${dt ? 'desde o último registro (' + dmy(dt.from).slice(0, 5) + ') · em ' + BSYM() + ', com câmbio · sem aportes' : 'só mercado · sem câmbio'}</div><h3 style="margin:2px 0 0">Hoje</h3>
+  openSheet(`<div class="mc"><div class="mc-top"><div class="small muted">${dt ? (dt.closed ? 'desde o fechamento de ' : 'desde o último registro (') + dmy(dt.from).slice(0, 5) + (dt.closed ? '' : ')') + ' · em ' + BSYM() + ', com câmbio · sem aportes' : 'só mercado · sem câmbio'}</div><h3 style="margin:2px 0 0">Hoje</h3>
       <div class="mc-big ${T.v < 0 ? 'neg' : 'pos'} money">${signed(CV, T.v)}</div><div style="font-weight:700" class="${T.r < 0 ? 'neg' : 'pos'}">${signed(pctS, T.r)}</div></div>
       ${dt && dm.any ? `<div class="ps-card" style="margin:10px 0"><div class="ps-step"><span>Mercado (preços)</span><b class="money ${dm.v < 0 ? 'neg' : 'pos'}">${signed(CV, dm.v)}</b></div><div class="ps-step"><span>Câmbio e saldos digitados</span><b class="money ${other < 0 ? 'neg' : 'pos'}">${signed(CV, other)}</b></div></div><div class="small muted" style="margin:0 0 6px">Mercado por categoria (sem câmbio):</div>` : ''}
     <div class="small muted" style="margin:10px 0 2px;font-weight:700;letter-spacing:.03em">POR CATEGORIA <span style="font-weight:500;letter-spacing:0">· toque para ver os ativos</span></div>
