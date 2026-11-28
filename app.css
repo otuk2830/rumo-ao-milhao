@@ -1081,3 +1081,5 @@ html.priv .dym .money, html.priv .dys .money{filter:blur(6px)}
 .sim-cur{display:inline-flex; border:1px solid var(--g-track); border-radius:999px; padding:2px}
 .sim-cur button{background:none; border:0; color:var(--g-mut); font:inherit; font-size:12.5px; padding:4px 11px; border-radius:999px}
 .sim-cur button.on{background:var(--g-acc2); color:var(--g-bg); font-weight:600}
+/* 10.8 — title a little lower, clear of the blur-and-darken fade iOS draws under the status bar */
+body.glassy .top, body.glassy .top.small{padding-top:calc(var(--safe-t) + 22px)}
